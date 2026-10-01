@@ -57,8 +57,8 @@ enum LocalPlaylistSyncPolicy {
     ) -> Bool {
         guard let current, current.isLocalCopy == true else { return false }
         guard incomingLocalCopyFlag == true else { return true }
-        guard let localUpdatedAt = current.updatedAt ?? current.createdAt,
-              let incomingUpdateTime,
+        let localUpdatedAt = current.updatedAt ?? current.createdAt
+        guard let incomingUpdateTime,
               incomingUpdateTime > 0 else { return true }
         let incomingUpdatedAt = Date(timeIntervalSince1970: TimeInterval(incomingUpdateTime) / 1_000)
         return incomingUpdatedAt <= localUpdatedAt
