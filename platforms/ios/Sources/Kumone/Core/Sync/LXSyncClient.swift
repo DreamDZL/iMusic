@@ -474,7 +474,7 @@ final class LXSyncService: ObservableObject {
     }
 
     private func waitUntilReady(generation: Int) async throws {
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             guard isCurrentConnection(generation) else {
                 continuation.resume(throwing: LXSyncError.disconnected)
                 return
@@ -511,7 +511,7 @@ final class LXSyncService: ObservableObject {
             } catch {
                 guard !Task.isCancelled else { return }
                 let statusCode = (task.response as? HTTPURLResponse)?.statusCode
-                await self.socketDidClose(
+                self.socketDidClose(
                     error,
                     closeCode: task.closeCode,
                     responseStatusCode: statusCode,
