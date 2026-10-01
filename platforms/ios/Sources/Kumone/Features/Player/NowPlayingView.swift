@@ -26,9 +26,6 @@ struct NowPlayingView: View {
     @State private var showQualityPicker = false
     @State private var showComments = false
     #if os(iOS)
-    @State private var showDownloadOptions = false
-    #endif
-    #if os(iOS)
     @State private var showQueueOnMobile = false
     #endif
 
@@ -137,13 +134,6 @@ struct NowPlayingView: View {
                 SongCommentsSheet(track: track)
             }
         }
-        #if os(iOS)
-        .sheet(isPresented: $showDownloadOptions) {
-            if let track = player.currentTrack {
-                DownloadOptionsSheet(tracks: [track])
-            }
-        }
-        #endif
     }
 
     private var hasLyricsColumn: Bool {
@@ -1418,9 +1408,6 @@ private struct CompactTrackHeader: View {
     @EnvironmentObject private var settings: SettingsManager
     @State private var showAddToPlaylist = false
     @State private var showComments = false
-    #if os(iOS)
-    @State private var showDownloadOptions = false
-    #endif
 
     let showsExpandedArtwork: Bool
 
@@ -1494,14 +1481,6 @@ private struct CompactTrackHeader: View {
                             Label("查看评论", systemImage: "text.bubble")
                         }
 
-#if os(iOS)
-                        Button {
-                            showDownloadOptions = true
-                        } label: {
-                            Label("下载", systemImage: "arrow.down.circle")
-                        }
-#endif
-
                         SleepTimerMenu(player: player)
 
                         Divider()
@@ -1546,13 +1525,6 @@ private struct CompactTrackHeader: View {
                 SongCommentsSheet(track: track)
             }
         }
-        #if os(iOS)
-        .sheet(isPresented: $showDownloadOptions) {
-            if let track = player.currentTrack {
-                DownloadOptionsSheet(tracks: [track])
-            }
-        }
-        #endif
     }
 }
 

@@ -92,14 +92,8 @@ jobs:
 
           app_bundle_id='com.jiajia2222.imusic.ios'
           widget_bundle_id='com.jiajia2222.imusic.ios.widget'
-          app_group='group.com.jiajia2222.imusic'
-
           if ! profile_allows_bundle "$application_id" "$app_bundle_id"; then
             echo "The app profile does not match $app_bundle_id (profile: $application_id)." >&2
-            exit 1
-          fi
-          if ! plutil -p "$app_profile_plist" | grep -Fq "$app_group"; then
-            echo "The app profile does not contain the required App Group: $app_group" >&2
             exit 1
           fi
 
@@ -112,10 +106,6 @@ jobs:
             widget_application_id="$(profile_value Entitlements:application-identifier "$widget_profile_plist")"
             if [[ "$widget_team_id" != "$team_id" ]] || ! profile_allows_bundle "$widget_application_id" "$widget_bundle_id"; then
               echo "The widget profile does not match $widget_bundle_id." >&2
-              exit 1
-            fi
-            if ! plutil -p "$widget_profile_plist" | grep -Fq "$app_group"; then
-              echo "The widget profile does not contain the required App Group: $app_group" >&2
               exit 1
             fi
           elif ! profile_allows_bundle "$application_id" "$widget_bundle_id"; then

@@ -11,9 +11,9 @@
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>CFBundleDisplayName</key>
-    <string>iMusic 歌词</string>
+    <string>iMusic</string>
     <key>CFBundleName</key>
-    <string>iMusic 歌词</string>
+    <string>iMusic</string>
     <key>CFBundlePackageType</key>
     <string>XPC!</string>
     <key>NSExtension</key>

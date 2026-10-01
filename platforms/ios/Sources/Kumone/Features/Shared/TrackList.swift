@@ -33,7 +33,6 @@ struct TrackRow: View {
     @State private var isHovering = false
     @State private var showAddToPlaylist = false
     #if os(iOS)
-    @State private var showDownloadOptions = false
     @ObservedObject private var lxStore = LXSourceStore.shared
     #endif
 
@@ -157,11 +156,6 @@ struct TrackRow: View {
         .sheet(isPresented: $showAddToPlaylist) {
             AddToPlaylistSheet(track: track)
         }
-        #if os(iOS)
-        .sheet(isPresented: $showDownloadOptions) {
-            DownloadOptionsSheet(tracks: [track])
-        }
-        #endif
     }
 
     @ViewBuilder
@@ -262,11 +256,6 @@ struct TrackRow: View {
         Button(localLibrary.isFavorite(track) ? "取消收藏" : "加入我喜欢的音乐") {
             localLibrary.toggleFavorite(track)
         }
-#if os(iOS)
-        Button("下载") {
-            showDownloadOptions = true
-        }
-#endif
         Divider()
         Button("收藏到歌单…") {
             showAddToPlaylist = true
@@ -484,10 +473,6 @@ struct TrackListView: View {
     /// Existing callers stay in the normal, non-selectable mode.
     var selectedTrackKeys: Binding<Set<String>>? = nil
 
-    #if os(iOS)
-    @State private var showBatchDownload = false
-    #endif
-
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
     #if os(iOS)
@@ -498,21 +483,12 @@ struct TrackListView: View {
         VStack(spacing: 4) {
             #if os(iOS)
             if tracks.count > 1 {
-                HStack {
-                    Text("\(tracks.count) 首歌曲")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        showBatchDownload = true
-                    } label: {
-                        Label("批量下载", systemImage: "arrow.down.circle")
-                            .font(.footnote.weight(.medium))
-                    }
-                    .buttonStyle(.bordered)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+                Text("\(tracks.count) 首歌曲")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
             }
             #endif
 
@@ -557,11 +533,6 @@ struct TrackListView: View {
             }
             }
         }
-        #if os(iOS)
-        .sheet(isPresented: $showBatchDownload) {
-            DownloadOptionsSheet(tracks: tracks)
-        }
-        #endif
     }
 
     private var playableTracks: [Track] {

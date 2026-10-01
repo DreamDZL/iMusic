@@ -33,6 +33,8 @@ Users can also copy their NetEase liked songs into iMusic's local favorites from
 - Optional LX Sync for compatible favorites and playlists
 - iOS 27 system Liquid Glass, with transparency and tint following iPhone display and accessibility settings
 
+The first release does not include offline audio downloads, Home Screen widgets or CarPlay. Lock Screen playback and Live Activities remain available.
+
 ## Sources and synchronization
 
 Open **Library → More → Manage LX Sources** to import a source from a file or URL and run its availability check. No third-party source URLs are bundled.
@@ -41,7 +43,7 @@ Open **Library → Sync Library** to enter an LX Sync Server address and connect
 
 ## Build
 
-The iOS application requires macOS and Xcode. XcodeGen generates the app and WidgetKit extension targets:
+The iOS application requires macOS and Xcode. XcodeGen generates the app and ActivityKit extension targets:
 
 ```sh
 cd platforms/ios/ios

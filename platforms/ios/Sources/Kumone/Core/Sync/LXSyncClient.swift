@@ -67,6 +67,7 @@ private enum LXSyncError: LocalizedError {
     case disconnected
     case connectionTimedOut
     case server(String)
+    case temporaryServer(String)
 
     var errorDescription: String? {
         switch self {
@@ -78,8 +79,53 @@ private enum LXSyncError: LocalizedError {
         case .disconnected: return "LX Sync 连接已断开"
         case .connectionTimedOut: return "LX Sync 连接超时，请检查服务器和网络"
         case .server(let message): return message
+        case .temporaryServer(let message): return message
         }
     }
+}
+
+enum LXSyncReconnectPolicy {
+    static func delaySeconds(attempt: Int) -> Double {
+        min(pow(2.0, Double(max(attempt, 0))), 60.0)
+    }
+
+    static func isRetryableNetworkFailure(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost,
+             .notConnectedToInternet, .dnsLookupFailed, .dataNotAllowed,
+             .internationalRoamingOff:
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func isRetryableHTTPStatus(_ statusCode: Int) -> Bool {
+        (500..<600).contains(statusCode)
+    }
+
+    static func isRetryableSocketClose(_ closeCode: URLSessionWebSocketTask.CloseCode) -> Bool {
+        switch closeCode {
+        case .goingAway, .abnormalClosure, .internalServerError, .noStatusReceived:
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func isRetryableSocketFailure(
+        _ error: Error,
+        closeCode: URLSessionWebSocketTask.CloseCode,
+        responseStatusCode: Int?
+    ) -> Bool {
+        if let responseStatusCode, responseStatusCode != 101 {
+            return isRetryableHTTPStatus(responseStatusCode)
+        }
+        if isRetryableSocketClose(closeCode) { return true }
+        return closeCode == .invalid && isRetryableNetworkFailure(error)
+    }
+
 }
 
 private enum LXSyncSecureStore {
@@ -152,6 +198,13 @@ final class LXSyncService: ObservableObject {
     private var receiveTask: Task<Void, Never>?
     private var handshakeTimeoutTask: Task<Void, Never>?
     private var pendingSnapshotTask: Task<Void, Never>?
+    private var reconnectTask: Task<Void, Never>?
+    private var reconnectAttempt = 0
+    private var reconnectGeneration = 0
+    private var connectionGeneration = 0
+    private var activeSocketGeneration: Int?
+    private var connectionTask: Task<Void, Error>?
+    private var connectionTaskGeneration: Int?
     private var readyContinuation: CheckedContinuation<Void, Error>?
     private var pendingCalls: [String: CheckedContinuation<Any?, Error>] = [:]
     private var applyingRemoteData = false
@@ -200,24 +253,60 @@ final class LXSyncService: ObservableObject {
     }
 
     func connect() async throws {
-        guard !isConnecting else { return }
+        if isConnected { return }
+        if let connectionTask {
+            try await connectionTask.value
+            return
+        }
         userRequestedDisconnect = false
-        let address = try LXSyncAddress(endpoint)
+        disconnectSocket(message: "正在连接 LX Sync Server…")
+        let generation = connectionGeneration
+        let task = Task { @MainActor [weak self] in
+            guard let self else { throw LXSyncError.disconnected }
+            try await self.performConnection(generation: generation)
+        }
+        connectionTask = task
+        connectionTaskGeneration = generation
+
+        do {
+            try await task.value
+            clearConnectionTask(ifCurrent: generation)
+        } catch {
+            clearConnectionTask(ifCurrent: generation)
+            throw error
+        }
+    }
+
+    private func performConnection(generation: Int) async throws {
+        guard isCurrentConnection(generation) else { throw LXSyncError.disconnected }
+        let address: LXSyncAddress
+        do {
+            address = try LXSyncAddress(endpoint)
+        } catch {
+            lastError = error.localizedDescription
+            statusMessage = "连接失败"
+            throw error
+        }
         let code = connectionCode.trimmingCharacters(in: .whitespacesAndNewlines)
         if code.isEmpty,
            LXSyncSecureStore.load(account: "connection-code") == nil {
-            throw LXSyncError.invalidConnectionCode
+            let error = LXSyncError.invalidConnectionCode
+            lastError = error.localizedDescription
+            statusMessage = "连接失败"
+            throw error
         }
 
-        disconnectSocket(message: "正在连接 LX Sync Server…")
         isConnecting = true
         isConnected = false
         lastError = nil
         statusMessage = "正在验证服务器…"
-        defer { isConnecting = false }
+        defer {
+            if isCurrentConnection(generation) { isConnecting = false }
+        }
 
         do {
             let serviceID = try await fetchServerID(address)
+            guard isCurrentConnection(generation) else { throw LXSyncError.disconnected }
             serverID = serviceID
             let savedCode = code.isEmpty
                 ? String(data: LXSyncSecureStore.load(account: "connection-code") ?? Data(), encoding: .utf8) ?? ""
@@ -232,6 +321,7 @@ final class LXSyncService: ObservableObject {
                 code: savedCode,
                 forceConnectionCode: !code.isEmpty && code != storedCode
             )
+            guard isCurrentConnection(generation) else { throw LXSyncError.disconnected }
             keyInfo = key
             if !savedCode.isEmpty {
                 LXSyncSecureStore.save(Data(savedCode.utf8), account: "connection-code")
@@ -247,14 +337,23 @@ final class LXSyncService: ObservableObject {
             let requestURL = try address.socketURL(clientID: key.clientId, encryptedTicket: ticket.base64EncodedString())
             let task = URLSession.shared.webSocketTask(with: requestURL)
             socket = task
+            activeSocketGeneration = generation
             task.resume()
-            startReceiving(from: task)
+            startReceiving(from: task, generation: generation)
             statusMessage = "正在同步资料库…"
-            try await waitUntilReady()
+            try await waitUntilReady(generation: generation)
+            guard isCurrentConnection(generation), isConnected else {
+                throw LXSyncError.disconnected
+            }
+            reconnectAttempt = 0
         } catch {
+            guard isCurrentConnection(generation) else { throw LXSyncError.disconnected }
             lastError = error.localizedDescription
             statusMessage = "连接失败"
-            disconnectSocket(message: statusMessage)
+            disconnectSocket(message: statusMessage, invalidatesConnection: false)
+            if isRetryableNetworkFailure(error) {
+                scheduleReconnect()
+            }
             throw error
         }
     }
@@ -264,11 +363,13 @@ final class LXSyncService: ObservableObject {
               !userRequestedDisconnect,
               !isConnected,
               !isConnecting else { return }
+        cancelScheduledReconnect()
         do { try await connect() }
         catch { /* The Library sync page presents the error when opened. */ }
     }
 
     func syncNow() async throws {
+        cancelScheduledReconnect()
         do {
             if !isConnected {
                 try await connect()
@@ -284,6 +385,7 @@ final class LXSyncService: ObservableObject {
 
     func disconnect() {
         userRequestedDisconnect = true
+        cancelScheduledReconnect()
         disconnectSocket(message: "已断开")
     }
 
@@ -371,19 +473,25 @@ final class LXSyncService: ObservableObject {
         statusMessage = "已同步"
     }
 
-    private func waitUntilReady() async throws {
+    private func waitUntilReady(generation: Int) async throws {
         try await withCheckedThrowingContinuation { continuation in
+            guard isCurrentConnection(generation) else {
+                continuation.resume(throwing: LXSyncError.disconnected)
+                return
+            }
             readyContinuation = continuation
             handshakeTimeoutTask?.cancel()
             handshakeTimeoutTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(45))
-                guard !Task.isCancelled, let self, self.readyContinuation != nil else { return }
+                guard !Task.isCancelled, let self,
+                      self.isCurrentConnection(generation),
+                      self.readyContinuation != nil else { return }
                 self.failHandshake(LXSyncError.connectionTimedOut)
             }
         }
     }
 
-    private func startReceiving(from task: URLSessionWebSocketTask) {
+    private func startReceiving(from task: URLSessionWebSocketTask, generation: Int) {
         receiveTask?.cancel()
         receiveTask = Task { [weak self] in
             guard let self else { return }
@@ -398,16 +506,23 @@ final class LXSyncService: ObservableObject {
                         text = value
                     @unknown default: continue
                     }
-                    await self.handleMessage(text)
+                    await self.handleMessage(text, generation: generation)
                 }
             } catch {
                 guard !Task.isCancelled else { return }
-                await self.socketDidClose(error)
+                let statusCode = (task.response as? HTTPURLResponse)?.statusCode
+                await self.socketDidClose(
+                    error,
+                    closeCode: task.closeCode,
+                    responseStatusCode: statusCode,
+                    generation: generation
+                )
             }
         }
     }
 
-    private func handleMessage(_ text: String) async {
+    private func handleMessage(_ text: String, generation: Int) async {
+        guard isCurrentConnection(generation) else { return }
         guard let data = text.data(using: .utf8),
               let message = try? JSONSerialization.jsonObject(with: data) as? [Any],
               let type = message.first as? Int else { return }
@@ -666,15 +781,107 @@ final class LXSyncService: ObservableObject {
         try await socket.send(.string(text))
     }
 
-    private func socketDidClose(_ error: Error) {
-        guard socket != nil else { return }
+    private func socketDidClose(
+        _ error: Error,
+        closeCode: URLSessionWebSocketTask.CloseCode,
+        responseStatusCode: Int?,
+        generation: Int
+    ) {
+        guard isCurrentConnection(generation),
+              activeSocketGeneration == generation,
+              socket != nil else { return }
+        let shouldReconnect = !userRequestedDisconnect && LXSyncReconnectPolicy.isRetryableSocketFailure(
+            error,
+            closeCode: closeCode,
+            responseStatusCode: responseStatusCode
+        )
         socket = nil
+        activeSocketGeneration = nil
         isConnected = false
         statusMessage = "连接已断开"
-        if readyContinuation != nil { failHandshake(error) }
+        lastError = error.localizedDescription
+        if readyContinuation != nil {
+            failHandshake(shouldReconnect ? error : LXSyncError.server("LX Sync WebSocket 连接被服务端拒绝"))
+        }
         let calls = pendingCalls.values
         pendingCalls.removeAll()
         for continuation in calls { continuation.resume(throwing: error) }
+        if shouldReconnect { scheduleReconnect() }
+    }
+
+    /// Keep an established library sync alive when the server or transport
+    /// drops its socket without a phone-network transition. The retry delay
+    /// grows from one second to a one-minute ceiling, and an explicit user
+    /// disconnect always cancels the loop.
+    private func scheduleReconnect() {
+        guard reconnectTask == nil,
+              !userRequestedDisconnect,
+              !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        let generation = reconnectGeneration
+        reconnectTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled, !self.userRequestedDisconnect {
+                let delay = LXSyncReconnectPolicy.delaySeconds(attempt: self.reconnectAttempt)
+                self.statusMessage = "连接中断，\(Int(delay)) 秒后重试"
+                do {
+                    try await Task.sleep(for: .seconds(delay))
+                } catch {
+                    break
+                }
+
+                guard !Task.isCancelled,
+                      !self.userRequestedDisconnect,
+                      !self.isConnected,
+                      !self.isConnecting else { break }
+
+                self.reconnectAttempt = min(self.reconnectAttempt + 1, 6)
+                do {
+                    try await self.connect()
+                    if self.isConnected { break }
+                } catch {
+                    guard !self.userRequestedDisconnect else { break }
+                    guard self.isRetryableNetworkFailure(error) else {
+                        self.statusMessage = "连接失败"
+                        break
+                    }
+                    self.lastError = error.localizedDescription
+                }
+            }
+            if self.reconnectGeneration == generation {
+                self.reconnectTask = nil
+            }
+        }
+    }
+
+    private func cancelScheduledReconnect() {
+        guard connectionTask == nil else { return }
+        reconnectGeneration += 1
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnectAttempt = 0
+    }
+
+    private func isRetryableNetworkFailure(_ error: Error) -> Bool {
+        if let syncError = error as? LXSyncError {
+            switch syncError {
+            case .connectionTimedOut, .disconnected, .temporaryServer:
+                return true
+            default:
+                return false
+            }
+        }
+        return LXSyncReconnectPolicy.isRetryableNetworkFailure(error)
+    }
+
+    private func isCurrentConnection(_ generation: Int) -> Bool {
+        connectionGeneration == generation
+    }
+
+    private func clearConnectionTask(ifCurrent generation: Int) {
+        guard connectionTaskGeneration == generation else { return }
+        connectionTask = nil
+        connectionTaskGeneration = nil
     }
 
     private func failHandshake(_ error: Error) {
@@ -684,13 +891,20 @@ final class LXSyncService: ObservableObject {
         readyContinuation = nil
     }
 
-    private func disconnectSocket(message: String) {
+    private func disconnectSocket(message: String, invalidatesConnection: Bool = true) {
+        if invalidatesConnection {
+            connectionGeneration &+= 1
+            connectionTask?.cancel()
+            connectionTask = nil
+            connectionTaskGeneration = nil
+        }
         handshakeTimeoutTask?.cancel()
         handshakeTimeoutTask = nil
         receiveTask?.cancel()
         receiveTask = nil
         socket?.cancel(with: .normalClosure, reason: nil)
         socket = nil
+        activeSocketGeneration = nil
         isConnected = false
         isConnecting = false
         statusMessage = message
@@ -785,6 +999,9 @@ final class LXSyncService: ObservableObject {
         guard let http = response as? HTTPURLResponse else { throw LXSyncError.invalidServerResponse }
         if http.statusCode == 403 { throw LXSyncError.server("服务器暂时封锁了此网络地址") }
         if http.statusCode == 401 { throw LXSyncError.authorizationFailed }
+        if LXSyncReconnectPolicy.isRetryableHTTPStatus(http.statusCode) {
+            throw LXSyncError.temporaryServer("LX Sync Server 暂时不可用（HTTP \(http.statusCode)）")
+        }
         guard (200..<300).contains(http.statusCode) else {
             throw LXSyncError.server("LX Sync Server 请求失败（HTTP \(http.statusCode)）")
         }

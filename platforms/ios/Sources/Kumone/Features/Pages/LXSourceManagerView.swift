@@ -332,7 +332,8 @@ struct LXSourceManagerView: View {
                         .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("选择音源 (source.name)")
+                .accessibilityLabel("选择音源 \(source.name)")
+                .accessibilityValue(lxStore.selectedID == source.id ? "当前音源" : "未选择")
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
@@ -371,7 +372,7 @@ struct LXSourceManagerView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(testingSourceID != nil)
-                .accessibilityLabel("测试 (source.name)")
+                .accessibilityLabel("测试音源 \(source.name)")
 
                 Button(role: .destructive) {
                     sourceToDelete = source
@@ -381,7 +382,7 @@ struct LXSourceManagerView: View {
                         .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("删除 (source.name)")
+                .accessibilityLabel("删除音源 \(source.name)")
             }
 
             if !source.description.isEmpty {
@@ -432,7 +433,7 @@ struct LXSourceManagerView: View {
                 )
                 .font(.caption)
                 .tint(Theme.accent)
-                .accessibilityLabel("启用音源 (source.name)")
+                .accessibilityLabel("启用 \(source.name) 作为备用音源")
 
                 Spacer(minLength: 0)
 
@@ -559,7 +560,7 @@ struct LXSourceManagerView: View {
             }
             .buttonStyle(.borderless)
             .disabled(testingSourceID != nil)
-            .accessibilityLabel("测试 \\(source.name)")
+            .accessibilityLabel("测试音源 \(source.name)")
 
             Button(role: .destructive) {
                 sourceToDelete = source
@@ -570,7 +571,7 @@ struct LXSourceManagerView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel("删除 \(source.name)")
+            .accessibilityLabel("删除音源 \(source.name)")
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button(role: .destructive) {

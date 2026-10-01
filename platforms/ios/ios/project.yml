@@ -58,7 +58,7 @@ targets:
         PRODUCT_NAME: MoumusicWidget
         PRODUCT_MODULE_NAME: MoumusicWidget
         PRODUCT_BUNDLE_IDENTIFIER: com.jiajia2222.imusic.ios.widget
-        INFOPLIST_KEY_CFBundleDisplayName: iMusic 歌词
+        INFOPLIST_KEY_CFBundleDisplayName: iMusic
         CODE_SIGN_ENTITLEMENTS: Config/MoumusicWidget.entitlements
         PROVISIONING_PROFILE_SPECIFIER: $(MOU_WIDGET_PROVISIONING_PROFILE)
 schemes:

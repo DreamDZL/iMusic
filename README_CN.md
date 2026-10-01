@@ -32,6 +32,8 @@ QQ 音乐和网易云公开歌单会导入为可编辑的本地副本。本地�
 - 可选 LX Sync，支持兼容的收藏和歌单
 - iOS 27 原生 Liquid Glass；透明度、着色及辅助功能表现跟随 iPhone 系统设置
 
+首版不包含离线音乐下载、主屏幕小组件或 CarPlay；锁屏播放控制和实时活动仍可用。
+
 ## 音源与同步
 
 进入 **资料库 → 更多 → 管理 LX 音源**，可从文件或 URL 导入音源并检测可用性。仓库不会预置第三方音源地址。
@@ -40,7 +42,7 @@ QQ 音乐和网易云公开歌单会导入为可编辑的本地副本。本地�
 
 ## 构建
 
-iOS 应用需要 macOS 和 Xcode。使用 XcodeGen 生成 App 与 WidgetKit 扩展：
+iOS 应用需要 macOS 和 Xcode。使用 XcodeGen 生成 App 与实时活动扩展：
 
 ```sh
 cd platforms/ios/ios

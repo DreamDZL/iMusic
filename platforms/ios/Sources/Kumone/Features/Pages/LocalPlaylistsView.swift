@@ -506,10 +506,6 @@ struct LocalPlaylistDetailView: View {
     @State private var playlistQuery = ""
     @State private var isSelectingTracks = false
     @State private var selectedTrackKeys = Set<String>()
-    #if os(iOS)
-    @State private var showSelectedDownload = false
-    #endif
-
     var body: some View {
         ScrollView {
             if let playlist = store.playlist(id: playlistID) {
@@ -577,13 +573,6 @@ struct LocalPlaylistDetailView: View {
                     } label: {
                         Label("加入歌单", systemImage: "text.badge.plus")
                     }
-                    #if os(iOS)
-                    Button {
-                        showSelectedDownload = true
-                    } label: {
-                        Label("下载所选", systemImage: "arrow.down.circle")
-                    }
-                    #endif
                     Button(role: .destructive) {
                         store.remove(selectedTracks(from: playlist), from: playlistID)
                         selectedTrackKeys.removeAll()
@@ -631,13 +620,6 @@ struct LocalPlaylistDetailView: View {
         .sheet(isPresented: $showReorderTracks) {
             ReorderLocalTracksSheet(playlistID: playlistID)
         }
-        #if os(iOS)
-        .sheet(isPresented: $showSelectedDownload) {
-            if let playlist = store.playlist(id: playlistID) {
-                DownloadOptionsSheet(tracks: selectedTracks(from: playlist))
-            }
-        }
-        #endif
         .searchable(text: $playlistQuery, prompt: "搜索此歌单")
     }
 

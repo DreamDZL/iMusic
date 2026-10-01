@@ -20,7 +20,6 @@ struct SettingsView: View {
     @ObservedObject private var equalizer = MoumusicEqualizer.shared
 #if os(iOS)
     @State private var showSourceManager = false
-    @State private var showDownloads = false
     @State private var showQQMusicLogin = false
     @State private var showKugouLogin = false
     @State private var showBilibiliLogin = false
@@ -333,16 +332,9 @@ struct SettingsView: View {
 #endif
             }
 
-            SettingsDisclosureSection("存储与下载", isExpanded: sectionBinding("storage")) {
+            SettingsDisclosureSection("存储", isExpanded: sectionBinding("storage")) {
                 LabeledContent("图片缓存", value: cacheSize)
                 Button("清除缓存") { clearCache() }
-#if os(iOS)
-                Button {
-                    showDownloads = true
-                } label: {
-                    Label("下载管理", systemImage: "arrow.down.circle")
-                }
-#endif
             }
 
             SettingsDisclosureSection("更新", isExpanded: sectionBinding("updates")) {
@@ -391,10 +383,6 @@ struct SettingsView: View {
             NavigationStack {
                 LXSourceManagerView()
             }
-        }
-        .sheet(isPresented: $showDownloads) {
-            DownloadsView()
-                .environmentObject(player)
         }
         .sheet(isPresented: $showQQMusicLogin) {
             QQMusicLoginSheet()
