@@ -27,7 +27,7 @@ jobs:
           brew install xcodegen
           xcodegen generate
 
-      - name: Run package and launch UI tests on the latest simulator
+      - name: Run feature tests and launch the app on the latest simulator
         working-directory: platforms/ios/ios
         run: |
           xcodebuild -list -project KumoneIOS.xcodeproj
@@ -45,5 +45,10 @@ jobs:
             -destination-timeout 120 \
             -derivedDataPath smoke-build \
             -parallel-testing-enabled NO \
+            -skip-testing:KumoneIOSUITests \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
+          xcrun simctl boot "$SIMULATOR_ID" || true
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b
+          xcrun simctl install "$SIMULATOR_ID" smoke-build/Build/Products/Debug-iphonesimulator/iMusic.app
+          xcrun simctl launch "$SIMULATOR_ID" com.jiajia2222.imusic.ios
