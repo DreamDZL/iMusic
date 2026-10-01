@@ -26,4 +26,27 @@ final class LXSyncModelsTests: XCTestCase {
         XCTAssertEqual(rebuilt.meta.qualitys, wireTrack.meta.qualitys)
         XCTAssertEqual(rebuilt.meta._qualitys, wireTrack.meta._qualitys)
     }
+
+    func testLocalCopyFlagSurvivesLXSyncRoundTrip() throws {
+        let original = LXSyncUserPlaylist(
+            id: "playlist-1",
+            name: "My local copy",
+            source: "netease",
+            sourceListId: "42",
+            iMusicLocalCopy: true
+        )
+
+        let encoded = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(LXSyncUserPlaylist.self, from: encoded)
+
+        XCTAssertEqual(decoded.iMusicLocalCopy, true)
+        XCTAssertEqual(decoded.sourceListId, "42")
+    }
+
+    func testOlderLXSyncPlaylistDefaultsLocalCopyFlagToNil() throws {
+        let json = #"{"id":"playlist-1","name":"Older playlist","list":[]}"#
+        let decoded = try JSONDecoder().decode(LXSyncUserPlaylist.self, from: Data(json.utf8))
+
+        XCTAssertNil(decoded.iMusicLocalCopy)
+    }
 }

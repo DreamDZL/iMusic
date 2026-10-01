@@ -196,9 +196,13 @@ struct MoumusicAmbientGlow: View {
     let colors: ArtworkColors
     let isPlaying: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var renderingBudget = RenderingBudget.shared
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 20, paused: !isPlaying || reduceMotion)) { context in
+        TimelineView(.animation(
+            minimumInterval: max(1.0 / 20.0, renderingBudget.minimumAnimationInterval),
+            paused: !isPlaying || reduceMotion
+        )) { context in
             let time = context.date.timeIntervalSinceReferenceDate
             ZStack {
                 Circle()

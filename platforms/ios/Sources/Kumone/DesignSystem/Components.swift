@@ -4,9 +4,10 @@ import SwiftUI
 
 struct SkeletonView: View {
     var cornerRadius: CGFloat = Theme.Radius.standard
+    @ObservedObject private var renderingBudget = RenderingBudget.shared
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { context in
+        TimelineView(.animation(minimumInterval: renderingBudget.minimumAnimationInterval)) { context in
             let phase = context.date.timeIntervalSinceReferenceDate
                 .truncatingRemainder(dividingBy: 1.5) / 1.5
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

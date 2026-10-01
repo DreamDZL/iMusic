@@ -386,6 +386,7 @@ struct SearchView: View {
     @StateObject private var model: SearchViewModel
     @StateObject private var history = SearchHistoryStore.shared
     @State private var searchText: String = ""
+    @State private var searchDebounceTask: Task<Void, Never>?
 
     init(query: String) {
         _model = StateObject(wrappedValue: SearchViewModel(query: query))
@@ -425,12 +426,17 @@ struct SearchView: View {
         #endif
         .onChange(of: searchText) { newValue in
             model.setQuery(newValue)
+            searchDebounceTask?.cancel()
             #if os(iOS)
             // Keep search responsive while allowing Chinese/third-party IMEs
             // to finish composing before the request is sent.
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(400))
-                guard searchText == newValue else { return }
+            searchDebounceTask = Task { @MainActor in
+                do {
+                    try await Task.sleep(for: .milliseconds(400))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled, searchText == newValue else { return }
                 if newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     await model.loadHotKeywords()
                 } else {
@@ -440,7 +446,8 @@ struct SearchView: View {
             #endif
         }
         .navigationTitle(searchText.isEmpty ? "搜索" : searchText)
-        .task(id: "\(model.tab.rawValue)-\(model.platform.rawValue)-\(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)") {
+        .task(id: searchContextTaskID) {
+            searchDebounceTask?.cancel()
             if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 await model.loadHotKeywords()
             } else {
@@ -448,6 +455,8 @@ struct SearchView: View {
             }
         }
         .onDisappear {
+            searchDebounceTask?.cancel()
+            searchDebounceTask = nil
             resignSearchInput()
         }
     }
@@ -460,6 +469,14 @@ struct SearchView: View {
         history.add(query)
         model.setQuery(query)
         Task { await model.load(tab: model.tab, force: true) }
+    }
+
+    private var searchContextTaskID: String {
+        #if os(iOS)
+        "\(model.tab.rawValue)-\(model.platform.rawValue)"
+        #else
+        "\(model.tab.rawValue)-\(model.platform.rawValue)-\(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)"
+        #endif
     }
 
     /// Some third-party IMEs submit before SwiftUI has copied marked text into

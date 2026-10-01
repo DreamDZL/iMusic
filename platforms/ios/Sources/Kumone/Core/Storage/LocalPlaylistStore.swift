@@ -16,12 +16,16 @@ struct LocalPlaylist: Codable, Hashable, Identifiable {
     var remotePlaylistID: String?
     var remoteRevision: Int?
     var lxSyncID: String?
+    /// A selected provider playlist becomes a frozen local copy after the user
+    /// edits it. The provider identity remains for attribution and deduplication.
+    var isLocalCopy: Bool?
 
     init(id: UUID = UUID(), name: String, coverURL: String? = nil,
          sourceName: String? = nil, tracks: [Track] = [], createdAt: Date = .now,
          updatedAt: Date? = nil,
          remoteSource: String? = nil, remotePlaylistID: String? = nil,
-         remoteRevision: Int? = nil, lxSyncID: String? = nil) {
+         remoteRevision: Int? = nil, lxSyncID: String? = nil,
+         isLocalCopy: Bool? = nil) {
         self.id = id
         self.name = name
         self.coverURL = coverURL
@@ -33,6 +37,167 @@ struct LocalPlaylist: Codable, Hashable, Identifiable {
         self.remotePlaylistID = remotePlaylistID
         self.remoteRevision = remoteRevision
         self.lxSyncID = lxSyncID
+        self.isLocalCopy = isLocalCopy
+    }
+}
+
+enum LocalPlaylistSyncPolicy {
+    static func shouldApplyProviderSnapshot(to playlist: LocalPlaylist?) -> Bool {
+        playlist?.isLocalCopy != true
+    }
+
+    static func shouldRefreshFromProvider(_ playlist: LocalPlaylist) -> Bool {
+        playlist.isLocalCopy != true
+    }
+
+    static func shouldPreserveLocalEdits(
+        current: LocalPlaylist?,
+        incomingLocalCopyFlag: Bool?,
+        incomingUpdateTime: Int?
+    ) -> Bool {
+        guard let current, current.isLocalCopy == true else { return false }
+        guard incomingLocalCopyFlag == true else { return true }
+        guard let localUpdatedAt = current.updatedAt ?? current.createdAt,
+              let incomingUpdateTime,
+              incomingUpdateTime > 0 else { return true }
+        let incomingUpdatedAt = Date(timeIntervalSince1970: TimeInterval(incomingUpdateTime) / 1_000)
+        return incomingUpdatedAt <= localUpdatedAt
+    }
+
+    static func matchesProviderPlaylist(_ playlist: LocalPlaylist, source: String, id: String) -> Bool {
+        playlist.remoteSource == source && playlist.remotePlaylistID == id
+    }
+
+    static func providerIdentityKey(source: String, id: String) -> String {
+        "\(source.lowercased())\u{1F}\(id)"
+    }
+
+    static func deduplicateProviderPlaylists(_ playlists: [LXSyncUserPlaylist]) -> [LXSyncUserPlaylist] {
+        var result: [LXSyncUserPlaylist] = []
+        var groupedPlaylists: [[LXSyncUserPlaylist]] = []
+        var resultIndicesByGroup: [Int] = []
+        var indicesByProviderIdentity: [String: Int] = [:]
+
+        for incoming in playlists {
+            guard let source = incoming.source,
+                  let sourceListID = incoming.sourceListId,
+                  !sourceListID.isEmpty else {
+                result.append(incoming)
+                continue
+            }
+            let key = providerIdentityKey(source: source, id: sourceListID)
+            guard let index = indicesByProviderIdentity[key] else {
+                let groupIndex = groupedPlaylists.count
+                indicesByProviderIdentity[key] = groupIndex
+                resultIndicesByGroup.append(result.count)
+                result.append(incoming)
+                groupedPlaylists.append([incoming])
+                continue
+            }
+            groupedPlaylists[index].append(incoming)
+        }
+
+        for (index, group) in groupedPlaylists.enumerated() {
+            guard !group.isEmpty else { continue }
+            let protectedCopies = group.filter { $0.iMusicLocalCopy == true }
+            let candidates = protectedCopies.isEmpty ? group : protectedCopies
+            var winner = candidates.sorted(by: isPreferredDuplicate).first ?? group[0]
+            // The stable sync ID is independent of which row wins the content
+            // comparison, so merge results do not vary with server row order.
+            winner.id = group.map(\.id).min() ?? winner.id
+            if !protectedCopies.isEmpty { winner.iMusicLocalCopy = true }
+            result[resultIndicesByGroup[index]] = winner
+        }
+
+        return result
+    }
+
+    private static func isPreferredDuplicate(_ lhs: LXSyncUserPlaylist, _ rhs: LXSyncUserPlaylist) -> Bool {
+        switch (lhs.locationUpdateTime, rhs.locationUpdateTime) {
+        case let (left?, right?) where left != right:
+            return left > right
+        case (.some, nil):
+            return true
+        case (nil, .some):
+            return false
+        default:
+            if lhs.id != rhs.id { return lhs.id < rhs.id }
+            return stableContentKey(lhs) < stableContentKey(rhs)
+        }
+    }
+
+    private static func stableContentKey(_ playlist: LXSyncUserPlaylist) -> String {
+        var content = playlist
+        content.id = ""
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(content) else { return content.name }
+        return data.base64EncodedString()
+    }
+
+    static func merge(_ remote: LXSyncUserPlaylist, with current: LocalPlaylist?) -> LocalPlaylist {
+        let preserveLocalEdits = shouldPreserveLocalEdits(
+            current: current,
+            incomingLocalCopyFlag: remote.iMusicLocalCopy,
+            incomingUpdateTime: remote.locationUpdateTime
+        )
+        let preserved = preserveLocalEdits ? current : nil
+        let coverURL = remote.iMusicCoverURL
+            ?? remote.list.first(where: { $0.meta.picUrl != nil })?.meta.picUrl
+        let updatedAt = remote.locationUpdateTime.map {
+            Date(timeIntervalSince1970: TimeInterval($0) / 1_000)
+        } ?? current?.updatedAt ?? current?.createdAt ?? .now
+
+        return LocalPlaylist(
+            id: current?.id ?? UUID(),
+            name: preserved?.name ?? remote.name,
+            coverURL: preserved != nil ? preserved?.coverURL : coverURL,
+            sourceName: preserved != nil ? preserved?.sourceName : (remote.iMusicSourceName ?? remote.source),
+            tracks: preserved?.tracks ?? remote.list.map { $0.track.normalizedForLXPlayback() },
+            createdAt: current?.createdAt ?? updatedAt,
+            updatedAt: preserved != nil ? preserved?.updatedAt : updatedAt,
+            remoteSource: preserved != nil ? preserved?.remoteSource : remote.source,
+            remotePlaylistID: preserved != nil ? preserved?.remotePlaylistID : remote.sourceListId,
+            remoteRevision: preserved != nil ? preserved?.remoteRevision : remote.locationUpdateTime,
+            lxSyncID: remote.id,
+            isLocalCopy: current?.isLocalCopy == true || remote.iMusicLocalCopy == true
+        )
+    }
+
+    static func mergeAll(
+        _ syncedPlaylists: [LXSyncUserPlaylist],
+        currentPlaylists: [LocalPlaylist]
+    ) -> [LocalPlaylist] {
+        let currentBySyncID = Dictionary(
+            currentPlaylists.compactMap { playlist in playlist.lxSyncID.map { ($0, playlist) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let currentByProviderIdentity = Dictionary(
+            currentPlaylists.compactMap { playlist -> (String, LocalPlaylist)? in
+                guard let source = playlist.remoteSource,
+                      let remoteID = playlist.remotePlaylistID else { return nil }
+                let key = providerIdentityKey(source: source, id: remoteID)
+                return (key, playlist)
+            },
+            uniquingKeysWith: { current, duplicate in
+                let currentDate = current.updatedAt ?? current.createdAt
+                let duplicateDate = duplicate.updatedAt ?? duplicate.createdAt
+                return duplicateDate > currentDate ? duplicate : current
+            }
+        )
+
+        return deduplicateProviderPlaylists(syncedPlaylists).map { remote in
+            let providerMatch: LocalPlaylist? = {
+                guard let source = remote.source, let id = remote.sourceListId else { return nil }
+                return currentByProviderIdentity[providerIdentityKey(source: source, id: id)]
+            }()
+            let current = [currentBySyncID[remote.id], providerMatch]
+                .compactMap { $0 }
+                .max { lhs, rhs in
+                    (lhs.updatedAt ?? lhs.createdAt) < (rhs.updatedAt ?? rhs.createdAt)
+                }
+            return merge(remote, with: current)
+        }
     }
 }
 
@@ -131,31 +296,7 @@ final class LocalPlaylistStore: ObservableObject {
     }
 
     func replaceFromLXSync(playlists syncedPlaylists: [LXSyncUserPlaylist], favorites: [Track]) {
-        let currentBySyncID = Dictionary(
-            playlists.compactMap { playlist in playlist.lxSyncID.map { ($0, playlist) } },
-            uniquingKeysWith: { first, _ in first }
-        )
-        playlists = syncedPlaylists.map { remote in
-            let current = currentBySyncID[remote.id]
-            let coverURL = remote.iMusicCoverURL
-                ?? remote.list.first(where: { $0.meta.picUrl != nil })?.meta.picUrl
-            let updatedAt = remote.locationUpdateTime.map {
-                Date(timeIntervalSince1970: TimeInterval($0) / 1_000)
-            } ?? current?.updatedAt ?? current?.createdAt ?? .now
-            return LocalPlaylist(
-                id: current?.id ?? UUID(),
-                name: remote.name,
-                coverURL: coverURL,
-                sourceName: remote.iMusicSourceName ?? remote.source,
-                tracks: remote.list.map { $0.track.normalizedForLXPlayback() },
-                createdAt: current?.createdAt ?? updatedAt,
-                updatedAt: updatedAt,
-                remoteSource: remote.source,
-                remotePlaylistID: remote.sourceListId,
-                remoteRevision: remote.locationUpdateTime,
-                lxSyncID: remote.id
-            )
-        }
+        playlists = LocalPlaylistSyncPolicy.mergeAll(syncedPlaylists, currentPlaylists: playlists)
         favoriteTracks = favorites.map { $0.normalizedForLXPlayback() }
         persist(notifySync: false)
         persistFavorites(notifySync: false)
@@ -163,7 +304,7 @@ final class LocalPlaylistStore: ObservableObject {
 
     func containsRemotePlaylist(source: String, id: Int) -> Bool {
         playlists.contains {
-            $0.remoteSource == source && $0.remotePlaylistID == String(id)
+            LocalPlaylistSyncPolicy.matchesProviderPlaylist($0, source: source, id: String(id))
         }
     }
 
@@ -182,9 +323,12 @@ final class LocalPlaylistStore: ObservableObject {
     ) -> (id: UUID, inserted: Bool, changed: Bool) {
         let normalizedTracks = tracks.map { $0.normalizedForLXPlayback() }
         if let index = playlists.firstIndex(where: {
-            $0.remoteSource == source && $0.remotePlaylistID == String(remoteID)
+            LocalPlaylistSyncPolicy.matchesProviderPlaylist($0, source: source, id: String(remoteID))
         }) {
             let old = playlists[index]
+            guard LocalPlaylistSyncPolicy.shouldApplyProviderSnapshot(to: old) else {
+                return (old.id, false, false)
+            }
             let changed = old.name != name
                 || old.coverURL != coverURL
                 || old.remoteRevision != revision
@@ -218,11 +362,19 @@ final class LocalPlaylistStore: ObservableObject {
 
     @discardableResult
     func create(name: String, tracks: [Track] = [], coverURL: String? = nil,
-                sourceName: String? = nil) -> UUID? {
+                sourceName: String? = nil,
+                remoteSource: String? = nil,
+                remotePlaylistID: String? = nil,
+                remoteRevision: Int? = nil,
+                isLocalCopy: Bool? = nil) -> UUID? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let playlist = LocalPlaylist(name: trimmed, coverURL: coverURL,
-                                     sourceName: sourceName, tracks: tracks)
+                                     sourceName: sourceName, tracks: tracks,
+                                     remoteSource: remoteSource,
+                                     remotePlaylistID: remotePlaylistID,
+                                     remoteRevision: remoteRevision,
+                                     isLocalCopy: isLocalCopy)
         playlists.insert(playlist, at: 0)
         persist()
         return playlist.id
@@ -231,6 +383,8 @@ final class LocalPlaylistStore: ObservableObject {
     func rename(id: UUID, name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let index = playlists.firstIndex(where: { $0.id == id }) else { return }
+        guard playlists[index].name != trimmed else { return }
+        markAsLocalCopyIfProviderPlaylist(at: index)
         playlists[index].name = trimmed
         playlists[index].updatedAt = .now
         persist()
@@ -245,8 +399,11 @@ final class LocalPlaylistStore: ObservableObject {
 
     func moveTracks(fromOffsets offsets: IndexSet, toOffset destination: Int, in playlistID: UUID) {
         guard let index = playlists.firstIndex(where: { $0.id == playlistID }) else { return }
-        var tracks = playlists[index].tracks
+        let originalTracks = playlists[index].tracks
+        var tracks = originalTracks
         Self.move(&tracks, fromOffsets: offsets, toOffset: destination)
+        guard tracks != originalTracks else { return }
+        markAsLocalCopyIfProviderPlaylist(at: index)
         playlists[index].tracks = tracks
         playlists[index].updatedAt = .now
         persist()
@@ -264,6 +421,7 @@ final class LocalPlaylistStore: ObservableObject {
             ToastCenter.shared.show("歌曲已经在这个歌单中")
             return
         }
+        markAsLocalCopyIfProviderPlaylist(at: index)
         playlists[index].tracks.append(track)
         playlists[index].updatedAt = .now
         persist()
@@ -287,6 +445,7 @@ final class LocalPlaylistStore: ObservableObject {
         }
 
         if added > 0 {
+            markAsLocalCopyIfProviderPlaylist(at: index)
             playlists[index].updatedAt = .now
             persist()
         }
@@ -296,7 +455,10 @@ final class LocalPlaylistStore: ObservableObject {
     func remove(_ track: Track, from playlistID: UUID) {
         guard let index = playlists.firstIndex(where: { $0.id == playlistID }) else { return }
         let key = trackKey(track)
+        let originalCount = playlists[index].tracks.count
         playlists[index].tracks.removeAll { trackKey($0) == key }
+        guard playlists[index].tracks.count != originalCount else { return }
+        markAsLocalCopyIfProviderPlaylist(at: index)
         playlists[index].updatedAt = .now
         persist()
     }
@@ -305,7 +467,10 @@ final class LocalPlaylistStore: ObservableObject {
         guard let index = playlists.firstIndex(where: { $0.id == playlistID }) else { return }
         let keys = Set(tracks.map(trackKey))
         guard !keys.isEmpty else { return }
+        let originalCount = playlists[index].tracks.count
         playlists[index].tracks.removeAll { keys.contains(trackKey($0)) }
+        guard playlists[index].tracks.count != originalCount else { return }
+        markAsLocalCopyIfProviderPlaylist(at: index)
         playlists[index].updatedAt = .now
         persist()
     }
@@ -313,8 +478,23 @@ final class LocalPlaylistStore: ObservableObject {
     @discardableResult
     func importPlaylist(from input: String) async throws -> UUID {
         let imported = try await PlaylistImportService.importPlaylist(from: input)
+        if let remoteSource = imported.remoteSource,
+           let remotePlaylistID = imported.remotePlaylistID,
+           let existing = playlists.first(where: {
+               LocalPlaylistSyncPolicy.matchesProviderPlaylist(
+                   $0,
+                   source: remoteSource,
+                   id: remotePlaylistID
+               )
+           }) {
+            return existing.id
+        }
         let id = create(name: imported.name, tracks: imported.tracks,
-                        coverURL: imported.coverURL, sourceName: imported.sourceName)
+                        coverURL: imported.coverURL, sourceName: imported.sourceName,
+                        remoteSource: imported.remoteSource,
+                        remotePlaylistID: imported.remotePlaylistID,
+                        remoteRevision: imported.remoteRevision,
+                        isLocalCopy: imported.isLocalCopy)
         guard let id else { throw PlaylistImportError.invalidFormat }
         return id
     }
@@ -334,6 +514,11 @@ final class LocalPlaylistStore: ObservableObject {
         guard let data = try? encoder.encode(playlists) else { return }
         UserDefaults.standard.set(data, forKey: key)
         if notifySync { notifyLXSync() }
+    }
+
+    private func markAsLocalCopyIfProviderPlaylist(at index: Int) {
+        guard playlists[index].remoteSource != nil || playlists[index].remotePlaylistID != nil else { return }
+        playlists[index].isLocalCopy = true
     }
 
     private func persistFavorites(notifySync: Bool = true) {
@@ -377,6 +562,30 @@ private struct ImportedPlaylist {
     let coverURL: String?
     let sourceName: String?
     let tracks: [Track]
+    let remoteSource: String?
+    let remotePlaylistID: String?
+    let remoteRevision: Int?
+    let isLocalCopy: Bool?
+
+    init(
+        name: String,
+        coverURL: String?,
+        sourceName: String?,
+        tracks: [Track],
+        remoteSource: String? = nil,
+        remotePlaylistID: String? = nil,
+        remoteRevision: Int? = nil,
+        isLocalCopy: Bool? = nil
+    ) {
+        self.name = name
+        self.coverURL = coverURL
+        self.sourceName = sourceName
+        self.tracks = tracks
+        self.remoteSource = remoteSource
+        self.remotePlaylistID = remotePlaylistID
+        self.remoteRevision = remoteRevision
+        self.isLocalCopy = isLocalCopy
+    }
 }
 
 private enum PlaylistImportService {
@@ -459,7 +668,10 @@ private enum PlaylistImportService {
                     name: detail.name,
                     coverURL: detail.coverURL,
                     sourceName: platform.displayName,
-                    tracks: detail.tracks
+                    tracks: detail.tracks,
+                    remoteSource: platform.rawValue,
+                    remotePlaylistID: reference.id,
+                    isLocalCopy: true
                 )
             } catch let error as PlaylistImportError {
                 throw error
@@ -504,7 +716,11 @@ private enum PlaylistImportService {
             name: resolved.name,
             coverURL: resolved.coverURL,
             sourceName: "汽水音乐",
-            tracks: tracks
+            tracks: tracks,
+            remoteSource: "sd",
+            remotePlaylistID: resolved.id,
+            remoteRevision: resolved.revision,
+            isLocalCopy: true
         )
     }
 
@@ -550,7 +766,11 @@ private enum PlaylistImportService {
             ?? string(playlist["picUrl"])
             ?? string(playlist["cover"])
         return ImportedPlaylist(name: name, coverURL: cover,
-                                sourceName: "网易云", tracks: tracks)
+                                sourceName: "网易云", tracks: tracks,
+                                remoteSource: "netease",
+                                remotePlaylistID: String(playlistID),
+                                remoteRevision: integer(playlist["updateTime"]),
+                                isLocalCopy: true)
     }
 
     private static func resolvedPlaylistReference(from url: URL) async throws -> RemotePlaylistReference {

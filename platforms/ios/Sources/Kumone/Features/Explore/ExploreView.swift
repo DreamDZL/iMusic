@@ -123,6 +123,7 @@ final class ExploreViewModel: ObservableObject {
 }
 
 struct ExploreView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @StateObject private var model = ExploreViewModel.shared
     @EnvironmentObject private var settings: SettingsManager
 #if os(iOS)
@@ -133,6 +134,11 @@ struct ExploreView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
+                if model.selectedCategory == "推荐",
+                   let featured = model.playlists.first {
+                    featuredPlaylistCard(featured)
+                }
+
                 platformPicker
                 categoryChips
 
@@ -160,22 +166,24 @@ struct ExploreView: View {
                             .padding(.horizontal, Theme.Layout.contentInset - 10)
                     }
 
-                    CardGrid {
-                        ForEach(Array(model.playlists.enumerated()), id: \.element.id) { index, playlist in
-                            NavigationLink(value: Destination.lxPlaylist(source: playlist.source, id: playlist.id)) {
-                                CoverCardBody(
-                                    coverURL: playlist.coverURL?.resizedImageURL(384),
-                                    title: playlist.name,
-                                    subtitle: [playlist.source.displayName, playlist.author]
-                                        .compactMap { $0 }.joined(separator: " · "),
-                                    playCount: playlist.playCount
-                                )
+                    if !visiblePlaylists.isEmpty {
+                        CardGrid {
+                            ForEach(Array(visiblePlaylists.enumerated()), id: \.element.id) { index, playlist in
+                                NavigationLink(value: Destination.lxPlaylist(source: playlist.source, id: playlist.id)) {
+                                    CoverCardBody(
+                                        coverURL: playlist.coverURL?.resizedImageURL(384),
+                                        title: playlist.name,
+                                        subtitle: [playlist.source.displayName, playlist.author]
+                                            .compactMap { $0 }.joined(separator: " · "),
+                                        playCount: playlist.playCount
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .staggeredAppearance(index: index % 10, id: "explore-\(playlist.source.rawValue)-\(playlist.id)")
                             }
-                            .buttonStyle(.plain)
-                            .staggeredAppearance(index: index % 10, id: "explore-\(playlist.source.rawValue)-\(playlist.id)")
                         }
+                        .padding(.horizontal, Theme.Layout.contentInset)
                     }
-                    .padding(.horizontal, Theme.Layout.contentInset)
 
                     if model.isLoading {
                         HStack {
@@ -253,6 +261,65 @@ struct ExploreView: View {
                 .padding(.horizontal, Theme.Layout.contentInset)
             }
         }
+    }
+
+    private var visiblePlaylists: [LXPlaylistSummary] {
+        model.selectedCategory == "推荐" ? Array(model.playlists.dropFirst()) : model.playlists
+    }
+
+    private func featuredPlaylistCard(_ playlist: LXPlaylistSummary) -> some View {
+        NavigationLink(value: Destination.lxPlaylist(source: playlist.source, id: playlist.id)) {
+            ZStack(alignment: .bottomLeading) {
+                CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(900), animated: false)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: featuredCardHeight)
+                    .clipped()
+
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.18), .black.opacity(0.82)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("为你发现")
+                            .font(.caption.weight(.bold))
+                            .tracking(1.2)
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.subheadline.weight(.semibold))
+                            .padding(10)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
+                    Spacer()
+                    Text(playlist.name)
+                        .font(.largeTitle.weight(.bold))
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text([playlist.source.displayName, playlist.author].compactMap { $0 }.joined(separator: " · "))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.82))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundStyle(.white)
+                .padding(20)
+            }
+            .frame(height: featuredCardHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("打开推荐歌单：\(playlist.name)")
+        .padding(.horizontal, Theme.Layout.contentInset)
+    }
+
+    private var featuredCardHeight: CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 460 : 330
     }
 
     private var categoryChips: some View {

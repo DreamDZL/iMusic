@@ -15,6 +15,8 @@ public struct VinylTurntableView: View {
     @State private var dragOffset: CGFloat = 0
     @State private var isDragging = false
     @State private var isTransitioningTrack = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var renderingBudget = RenderingBudget.shared
 
     public init(artworkImage: PlatformImage?, isPlaying: Bool, trackId: Int? = nil, size: CGFloat = 280, onTap: (() -> Void)? = nil, onNextTrack: (() -> Void)? = nil, onPreviousTrack: (() -> Void)? = nil) {
         self.artworkImage = artworkImage
@@ -30,7 +32,10 @@ public struct VinylTurntableView: View {
         let armHeight = size * 0.68
 
         ZStack(alignment: .top) {
-            TimelineView(.animation(paused: !isPlaying || isDragging || isTransitioningTrack)) { timeline in
+            TimelineView(.animation(
+                minimumInterval: renderingBudget.minimumAnimationInterval,
+                paused: !isPlaying || isDragging || isTransitioningTrack || reduceMotion
+            )) { timeline in
                 VinylRecordView(artworkImage: artworkImage, size: size)
                     .rotationEffect(.degrees(rotationState.currentAngle(at: timeline.date)))
             }

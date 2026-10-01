@@ -69,16 +69,7 @@ final class LXSourceStore: ObservableObject {
     }
 
     func importScript(_ data: Data, suggestedName: String, sourceURL: String? = nil) throws {
-        guard let raw = decodeText(data),
-              !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw ImportError.invalidEncoding
-        }
-
-        let source = decodeExport(raw, suggestedName: suggestedName, sourceURL: sourceURL)
-            ?? sourceFromHeader(raw, suggestedName: suggestedName, sourceURL: sourceURL)
-        guard isLXScript(source.script) else {
-            throw ImportError.invalidScript
-        }
+        let source = try decodeSourceData(data, suggestedName: suggestedName, sourceURL: sourceURL)
 
         let replacedIDs = Set(sources.filter { $0.id == source.id || $0.name == source.name }.map(\.id))
         sources.removeAll { replacedIDs.contains($0.id) }
@@ -97,6 +88,27 @@ final class LXSourceStore: ObservableObject {
         LXUserAPIService.shared.loadSelectedSource()
     }
 
+    /// Parses the same JSON or source-header formats used by import, without
+    /// modifying the user's installed sources. This also makes exports
+    /// verifiable without writing test fixtures into the user's source store.
+    func decodeSourceData(
+        _ data: Data,
+        suggestedName: String,
+        sourceURL: String? = nil
+    ) throws -> Source {
+        guard let raw = decodeText(data),
+              !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ImportError.invalidEncoding
+        }
+
+        let source = decodeExport(raw, suggestedName: suggestedName, sourceURL: sourceURL)
+            ?? sourceFromHeader(raw, suggestedName: suggestedName, sourceURL: sourceURL)
+        guard isLXScript(source.script) else {
+            throw ImportError.invalidScript
+        }
+        return source
+    }
+
     /// Imports either an inline LX script/export or a local JSON descriptor
     /// that points to its script URL. The latter is common when a source was
     /// exported from a desktop client or saved from a source catalogue.
@@ -107,6 +119,18 @@ final class LXSourceStore: ObservableObject {
             guard case .invalidScript = error,
                   let url = Self.remoteScriptURL(in: data) else { throw error }
             try await importOnlineScript(url.absoluteString)
+        }
+    }
+
+    /// Exports a complete source descriptor, including the local script, in a
+    /// JSON shape accepted by the existing LX source importer.
+    func exportData(_ source: Source) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        do {
+            return try encoder.encode(source)
+        } catch {
+            throw ImportError.exportFailed
         }
     }
 
@@ -217,6 +241,7 @@ final class LXSourceStore: ObservableObject {
         case invalidURL
         case downloadFailed
         case tooLarge
+        case exportFailed
 
         var errorDescription: String? {
             switch self {
@@ -226,6 +251,7 @@ final class LXSourceStore: ObservableObject {
             case .invalidURL: return "请输入有效的 HTTP 或 HTTPS 音源链接"
             case .downloadFailed: return "音源下载失败，请检查链接和网络"
             case .tooLarge: return "音源文件超过 16 MB，已拒绝导入"
+            case .exportFailed: return "无法导出音源文件"
             }
         }
     }

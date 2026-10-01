@@ -426,7 +426,8 @@ final class LXSyncService: ObservableObject {
                 locationUpdateTime: Int((playlist.updatedAt ?? playlist.createdAt).timeIntervalSince1970 * 1_000),
                 list: playlist.tracks.map(LXSyncMusicInfo.init(track:)),
                 iMusicSourceName: playlist.sourceName,
-                iMusicCoverURL: playlist.coverURL
+                iMusicCoverURL: playlist.coverURL,
+                iMusicLocalCopy: playlist.isLocalCopy
             )
         }
         return LXSyncListData(

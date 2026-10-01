@@ -40,10 +40,11 @@ struct LXSyncUserPlaylist: Codable, Equatable, Identifiable {
     /// safely ignorable by other LX Music clients.
     var iMusicSourceName: String?
     var iMusicCoverURL: String?
+    var iMusicLocalCopy: Bool?
 
     private enum CodingKeys: String, CodingKey {
         case id, name, source, sourceListId, locationUpdateTime, list
-        case iMusicSourceName, iMusicCoverURL
+        case iMusicSourceName, iMusicCoverURL, iMusicLocalCopy
     }
 
     init(
@@ -54,7 +55,8 @@ struct LXSyncUserPlaylist: Codable, Equatable, Identifiable {
         locationUpdateTime: Int? = nil,
         list: [LXSyncMusicInfo] = [],
         iMusicSourceName: String? = nil,
-        iMusicCoverURL: String? = nil
+        iMusicCoverURL: String? = nil,
+        iMusicLocalCopy: Bool? = nil
     ) {
         self.id = id
         self.name = name
@@ -64,6 +66,7 @@ struct LXSyncUserPlaylist: Codable, Equatable, Identifiable {
         self.list = list
         self.iMusicSourceName = iMusicSourceName
         self.iMusicCoverURL = iMusicCoverURL
+        self.iMusicLocalCopy = iMusicLocalCopy
     }
 
     init(from decoder: Decoder) throws {
@@ -76,6 +79,7 @@ struct LXSyncUserPlaylist: Codable, Equatable, Identifiable {
         list = (try? container.decode([LXSyncMusicInfo].self, forKey: .list)) ?? []
         iMusicSourceName = try? container.decode(String.self, forKey: .iMusicSourceName)
         iMusicCoverURL = try? container.decode(String.self, forKey: .iMusicCoverURL)
+        iMusicLocalCopy = try? container.decode(Bool.self, forKey: .iMusicLocalCopy)
     }
 }
 

@@ -322,6 +322,7 @@ final class HomeViewModel: ObservableObject {
 }
 
 struct HomeView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var settings: SettingsManager
@@ -331,6 +332,14 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                switch model.state {
+                case .loaded:
+                    featureCards
+                case .idle, .loading:
+                    featureCardsPlaceholder
+                case .error:
+                    EmptyView()
+                }
                 if !localLibrary.recentTracks.isEmpty {
                     recentTracksShelf
                 }
@@ -527,12 +536,6 @@ struct HomeView: View {
 
     private var loadingBody: some View {
         VStack(alignment: .leading, spacing: 32) {
-            HStack(spacing: 16) {
-                ForEach(0..<3, id: \.self) { _ in
-                    SkeletonView(cornerRadius: Theme.Radius.large)
-                        .frame(width: 230, height: 132)
-                }
-            }
             SkeletonShelf()
             SkeletonShelf()
         }
@@ -543,8 +546,6 @@ struct HomeView: View {
     private var loadedBody: some View {
         LazyVStack(alignment: .leading, spacing: 34) {
             homePlatformPicker
-            featureCards
-                .padding(.top, 8)
 
             if !model.recommendPlaylists.isEmpty {
                 Shelf(title: "推荐歌单", rowHeight: Theme.Layout.coverShelfHeight) {
@@ -614,10 +615,36 @@ struct HomeView: View {
 
     // MARK: - Feature cards
 
+    private var featureCardHeight: CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 380 : 252
+    }
+
+    private var featureCardsPlaceholder: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("为你精选")
+                .font(.title2.weight(.bold))
+                .padding(.horizontal, Theme.Layout.contentInset)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    Color.clear.frame(width: max(0, Theme.Layout.contentInset - 14), height: 1)
+                    SkeletonView(cornerRadius: Theme.Radius.large)
+                        .frame(width: 310, height: featureCardHeight)
+                }
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
     private var featureCards: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 16) {
-                Color.clear.frame(width: max(0, Theme.Layout.contentInset - 16), height: 1)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("为你精选")
+                .font(.title2.weight(.bold))
+                .padding(.horizontal, Theme.Layout.contentInset)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    Color.clear.frame(width: max(0, Theme.Layout.contentInset - 14), height: 1)
                 // Daily recommendations are always visible; the page shows
                 // a separate login CTA when account sync is unavailable.
                 NavigationLink(value: Destination.daily) {
@@ -626,7 +653,8 @@ struct HomeView: View {
                         subtitle: "根据你的口味生成",
                         icon: "calendar",
                         coverURL: model.dailyFirstCover?.resizedImageURL(512),
-                        showsDate: true
+                        showsDate: true,
+                        size: CGSize(width: 310, height: featureCardHeight)
                     )
                 }
                 .buttonStyle(.plain)
@@ -639,7 +667,8 @@ struct HomeView: View {
                         subtitle: "按首页平台生成漫游队列",
                         icon: "wave.3.right.circle.fill",
                         gradient: [Color(red: 0.16, green: 0.20, blue: 0.42),
-                                   Color(red: 0.36, green: 0.24, blue: 0.62)]
+                                   Color(red: 0.36, green: 0.24, blue: 0.62)],
+                        size: CGSize(width: 310, height: featureCardHeight)
                     )
                 }
                 .buttonStyle(.interactiveCard)
@@ -653,14 +682,16 @@ struct HomeView: View {
                             subtitle: "你的红心歌曲和相似推荐",
                             icon: "heart.circle.fill",
                             gradient: [Color(red: 0.85, green: 0.19, blue: 0.41),
-                                       Color(red: 0.98, green: 0.42, blue: 0.34)]
+                                       Color(red: 0.98, green: 0.42, blue: 0.34)],
+                            size: CGSize(width: 310, height: featureCardHeight)
                         )
                     }
                     .buttonStyle(.interactiveCard)
                 }
-                Color.clear.frame(width: max(0, Theme.Layout.contentInset - 16), height: 1)
+                    Color.clear.frame(width: max(0, Theme.Layout.contentInset - 14), height: 1)
+                }
+                .padding(.vertical, 2)
             }
-            .padding(.vertical, 6)
         }
         .compatScrollClipDisabled()
     }
@@ -785,12 +816,13 @@ struct FeatureCard: View {
     var gradient: [Color] = [Color(red: 0.75, green: 0.16, blue: 0.22),
                              Color(red: 0.95, green: 0.35, blue: 0.28)]
     var showsDate = false
+    var size = CGSize(width: 230, height: 132)
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             if let coverURL {
                 CachedAsyncImage(url: coverURL)
-                    .frame(width: 230, height: 132)
+                    .frame(width: size.width, height: size.height)
                 LinearGradient(colors: [.black.opacity(0.1), .black.opacity(0.68)],
                                startPoint: .top, endPoint: .bottom)
             } else {
@@ -813,17 +845,19 @@ struct FeatureCard: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 Text(title)
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.headline.weight(.bold))
                     .foregroundStyle(.white)
+                    .lineLimit(2)
                 Text(subtitle)
-                    .font(.system(size: 11))
+                    .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.75))
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(14)
             .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
         }
-        .frame(width: 230, height: 132)
+        .frame(width: size.width, height: size.height)
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous)

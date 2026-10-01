@@ -995,6 +995,7 @@ struct LyricMainText: View {
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var settings: SettingsManager
+    @ObservedObject private var renderingBudget = RenderingBudget.shared
 
     var body: some View {
         if settings.lyricsDisplayStyle == .amll {
@@ -1007,7 +1008,10 @@ struct LyricMainText: View {
             )
         } else if settings.lyricsAnnotation == .furigana, let segments = line.furigana, !segments.isEmpty,
            isActive, verbatim, let words = line.words, !words.isEmpty {
-            TimelineView(.animation(paused: !player.isPlaying)) { _ in
+            TimelineView(.animation(
+                minimumInterval: renderingBudget.minimumAnimationInterval,
+                paused: !player.isPlaying
+            )) { _ in
                 RubyText(
                     segments: segments,
                     size: rubySize,
@@ -1026,7 +1030,10 @@ struct LyricMainText: View {
             )
             .frame(maxWidth: .infinity, alignment: .leading)
         } else if isActive, verbatim, let words = line.words, !words.isEmpty {
-            TimelineView(.animation(paused: !player.isPlaying)) { _ in
+            TimelineView(.animation(
+                minimumInterval: renderingBudget.minimumAnimationInterval,
+                paused: !player.isPlaying
+            )) { _ in
                 karaoke(words, at: player.livePlaybackTime + settings.lyricsOffset).font(font)
                     .minimumScaleFactor(0.72)
             }
@@ -1084,11 +1091,15 @@ private struct AMLLyricText: View {
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var settings: SettingsManager
+    @ObservedObject private var renderingBudget = RenderingBudget.shared
 
     var body: some View {
         Group {
             if isActive, verbatim, let words = line.words, !words.isEmpty {
-                TimelineView(.animation(paused: !player.isPlaying)) { _ in
+                TimelineView(.animation(
+                    minimumInterval: renderingBudget.minimumAnimationInterval,
+                    paused: !player.isPlaying
+                )) { _ in
                     ZStack(alignment: .leading) {
                         Text(line.text)
                             .foregroundStyle(.white.opacity(0.28))

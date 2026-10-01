@@ -183,7 +183,9 @@ final class AccountStore: ObservableObject {
 
     private func syncImportedPlaylistCopies() async {
         let mirrored = LocalPlaylistStore.shared.playlists.filter {
-            $0.remoteSource == "netease" && $0.remotePlaylistID != nil
+            $0.remoteSource == "netease"
+                && $0.remotePlaylistID != nil
+                && LocalPlaylistSyncPolicy.shouldRefreshFromProvider($0)
         }
         guard !mirrored.isEmpty else { return }
 
@@ -217,11 +219,20 @@ final class AccountStore: ObservableObject {
         var failed: [String] = []
 
         for summary in candidates {
+            let localCopy = LocalPlaylistStore.shared.playlists.first(where: {
+                LocalPlaylistSyncPolicy.matchesProviderPlaylist(
+                    $0,
+                    source: "netease",
+                    id: String(summary.id)
+                )
+            })
+            if let localCopy, !LocalPlaylistSyncPolicy.shouldRefreshFromProvider(localCopy) {
+                unchanged += 1
+                continue
+            }
+
             if !force,
-               let local = LocalPlaylistStore.shared.playlists.first(where: {
-                   $0.remoteSource == "netease"
-                       && $0.remotePlaylistID == String(summary.id)
-               }),
+               let local = localCopy,
                summary.updateTime > 0,
                local.remoteRevision == summary.updateTime {
                 unchanged += 1

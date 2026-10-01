@@ -10,6 +10,9 @@ struct LXSourceManagerView: View {
     @StateObject private var lxAPI = LXUserAPIService.shared
     @State private var isImportingFile = false
     @State private var isShowingOnlineImport = false
+    @State private var isExportingSource = false
+    @State private var sourceExportDocument = LXSourceExportDocument(data: Data())
+    @State private var sourceExportFilename = "LX 音源.json"
     @State private var onlineSourceURL = ""
     @State private var isLoadingOnline = false
     @State private var sourceToDelete: LXSourceStore.Source?
@@ -25,6 +28,17 @@ struct LXSourceManagerView: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("完成") { dismiss() }
+            }
+        }
+        .fileExporter(
+            isPresented: $isExportingSource,
+            document: sourceExportDocument,
+            contentType: .json,
+            defaultFilename: sourceExportFilename
+        ) { result in
+            if case .failure(let error) = result {
+                if (error as? CocoaError)?.code == .userCancelled { return }
+                lxError = error.localizedDescription
             }
         }
         // UIDocumentPicker is used instead of the higher-level fileImporter
@@ -374,15 +388,24 @@ struct LXSourceManagerView: View {
                 .disabled(testingSourceID != nil)
                 .accessibilityLabel("测试音源 \(source.name)")
 
-                Button(role: .destructive) {
-                    sourceToDelete = source
+                Menu {
+                    Button {
+                        exportSource(source)
+                    } label: {
+                        Label("导出音源脚本", systemImage: "square.and.arrow.up")
+                    }
+                    Button(role: .destructive) {
+                        sourceToDelete = source
+                    } label: {
+                        Label("删除音源", systemImage: "trash")
+                    }
                 } label: {
-                    Image(systemName: "trash")
+                    Image(systemName: "ellipsis.circle")
                         .font(.body.weight(.semibold))
                         .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("删除音源 \(source.name)")
+                .accessibilityLabel("更多 \(source.name) 操作")
             }
 
             if !source.description.isEmpty {
@@ -733,6 +756,42 @@ struct LXSourceManagerView: View {
                 lxError = error.localizedDescription
             }
         }
+    }
+
+    private func exportSource(_ source: LXSourceStore.Source) {
+        do {
+            sourceExportDocument = LXSourceExportDocument(data: try lxStore.exportData(source))
+            let allowedCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+            let safeName = source.name.unicodeScalars
+                .map { allowedCharacters.contains($0) ? String($0) : "_" }
+                .joined()
+                .trimmingCharacters(in: CharacterSet(charactersIn: "._-"))
+            sourceExportFilename = "\(safeName.isEmpty ? "lx-source" : safeName).json"
+            isExportingSource = true
+        } catch {
+            lxError = error.localizedDescription
+        }
+    }
+}
+
+private struct LXSourceExportDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+
+    let data: Data
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        self.data = data
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
     }
 }
 

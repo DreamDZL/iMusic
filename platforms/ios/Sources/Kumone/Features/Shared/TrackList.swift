@@ -289,9 +289,13 @@ struct TrackRow: View {
 /// happened.
 struct PlayingIndicator: View {
     var animating: Bool
+    @ObservedObject private var renderingBudget = RenderingBudget.shared
 
     var body: some View {
-        SpectrumBars(animating: animating)
+        SpectrumBars(
+            animating: animating && !Platform.isReduceMotionEnabled,
+            minimumInterval: renderingBudget.minimumAnimationInterval
+        )
             .frame(width: SpectrumBarsView.width, height: SpectrumBarsView.maxHeight)
     }
 }
@@ -299,8 +303,14 @@ struct PlayingIndicator: View {
 #if os(macOS)
 private struct SpectrumBars: NSViewRepresentable {
     var animating: Bool
-    func makeNSView(context: Context) -> SpectrumBarsView { SpectrumBarsView() }
+    var minimumInterval: TimeInterval
+    func makeNSView(context: Context) -> SpectrumBarsView {
+        let view = SpectrumBarsView()
+        view.minimumInterval = minimumInterval
+        return view
+    }
     func updateNSView(_ view: SpectrumBarsView, context: Context) {
+        view.minimumInterval = minimumInterval
         view.animating = animating
     }
     static func dismantleNSView(_ view: SpectrumBarsView, coordinator: ()) {
@@ -310,8 +320,14 @@ private struct SpectrumBars: NSViewRepresentable {
 #else
 private struct SpectrumBars: UIViewRepresentable {
     var animating: Bool
-    func makeUIView(context: Context) -> SpectrumBarsView { SpectrumBarsView() }
+    var minimumInterval: TimeInterval
+    func makeUIView(context: Context) -> SpectrumBarsView {
+        let view = SpectrumBarsView()
+        view.minimumInterval = minimumInterval
+        return view
+    }
     func updateUIView(_ view: SpectrumBarsView, context: Context) {
+        view.minimumInterval = minimumInterval
         view.animating = animating
     }
     static func dismantleUIView(_ view: SpectrumBarsView, coordinator: ()) {
@@ -332,6 +348,14 @@ final class SpectrumBarsView: PlatformView {
     private var bars: [CALayer] = []
     private var timer: Timer?
     private var startedAt = CACurrentMediaTime()
+    var minimumInterval: TimeInterval = 1.0 / 30.0 {
+        didSet {
+            guard minimumInterval != oldValue, animating else { return }
+            timer?.invalidate()
+            timer = nil
+            start()
+        }
+    }
 
     var animating = false {
         didSet {
@@ -396,7 +420,7 @@ final class SpectrumBarsView: PlatformView {
         guard timer == nil else { return }
         startedAt = CACurrentMediaTime()
         // Common mode so the bars keep moving while a list is being scrolled.
-        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: minimumInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
         RunLoop.main.add(timer, forMode: .common)
