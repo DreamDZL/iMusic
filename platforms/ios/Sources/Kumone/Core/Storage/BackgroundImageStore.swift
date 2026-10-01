@@ -201,7 +201,8 @@ struct MoumusicAmbientGlow: View {
     var body: some View {
         TimelineView(.animation(
             minimumInterval: max(1.0 / 20.0, renderingBudget.minimumAnimationInterval),
-            paused: !isPlaying || reduceMotion
+            paused: !isPlaying || reduceMotion || !renderingBudget.isSceneActive
+                || !renderingBudget.allowsContinuousEffects
         )) { context in
             let time = context.date.timeIntervalSinceReferenceDate
             ZStack {

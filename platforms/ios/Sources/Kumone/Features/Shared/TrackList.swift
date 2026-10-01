@@ -293,7 +293,10 @@ struct PlayingIndicator: View {
 
     var body: some View {
         SpectrumBars(
-            animating: animating && !Platform.isReduceMotionEnabled,
+            animating: animating
+                && !Platform.isReduceMotionEnabled
+                && renderingBudget.isSceneActive
+                && renderingBudget.allowsContinuousEffects,
             minimumInterval: renderingBudget.minimumAnimationInterval
         )
             .frame(width: SpectrumBarsView.width, height: SpectrumBarsView.maxHeight)

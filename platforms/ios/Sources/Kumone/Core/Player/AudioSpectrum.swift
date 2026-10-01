@@ -2,6 +2,7 @@ import Accelerate
 import AVFoundation
 import Foundation
 import MediaToolbox
+import Synchronization
 
 /// Real-time band levels pulled out of the playing audio.
 ///
@@ -31,6 +32,8 @@ final class AudioSpectrum {
     /// fresh store leaves the old tap writing to one nobody reads, which it
     /// keeps alive on its own until it is finalized.
     private var store = SpectrumStore()
+    private var analysisStride = 4
+    private var analysisEnabled = true
     private init() {}
 
     /// True while the tap is actually delivering samples for the current track.
@@ -62,6 +65,19 @@ final class AudioSpectrum {
         store.level(at: index)
     }
 
+    func setAnalysisStride(_ stride: Int) {
+        let boundedStride = max(1, stride)
+        guard analysisStride != boundedStride else { return }
+        analysisStride = boundedStride
+        store.setAnalysisStride(boundedStride)
+    }
+
+    func setAnalysisEnabled(_ enabled: Bool) {
+        guard analysisEnabled != enabled else { return }
+        analysisEnabled = enabled
+        store.setAnalysisEnabled(enabled)
+    }
+
 
     /// Builds the audio mix that feeds this analyzer.
     ///
@@ -82,6 +98,8 @@ final class AudioSpectrum {
     func beginPreparing() {
         tapState = .preparing
         store = SpectrumStore()
+        store.setAnalysisStride(analysisStride)
+        store.setAnalysisEnabled(analysisEnabled)
     }
 
     /// Call once it's settled that this source can't be tapped.
@@ -118,13 +136,19 @@ private final class SpectrumStore: @unchecked Sendable {
     /// Published band levels, written by the audio thread, read by the UI.
     private let levels: UnsafeMutablePointer<Float>
     /// Whether the tap has produced audio recently.
-    private let liveFlag: UnsafeMutablePointer<Int32>
+    private let liveFlag = Atomic<Bool>(false)
+    private let analysisEnabled = Atomic<Bool>(true)
+    private let analysisStride = Atomic<Int>(4)
 
     /// Scratch buffers — preallocated because the audio thread must not malloc.
     private let window: UnsafeMutablePointer<Float>
     private let mono: UnsafeMutablePointer<Float>
     private let ring: UnsafeMutablePointer<Float>
     private var ringFill = 0
+    /// Audio-thread-only window countdown; the stride itself is atomic so the
+    /// main actor can respond to thermal and Low Power Mode changes safely.
+    private var blocksUntilAnalysis = 1
+    private var lastAnalysisStride = 4
     private let realp: UnsafeMutablePointer<Float>
     private let imagp: UnsafeMutablePointer<Float>
     private let magnitudes: UnsafeMutablePointer<Float>
@@ -146,8 +170,6 @@ private final class SpectrumStore: @unchecked Sendable {
         let n = Self.fftSize
         levels = .allocate(capacity: AudioSpectrum.bandCount)
         levels.initialize(repeating: 0, count: AudioSpectrum.bandCount)
-        liveFlag = .allocate(capacity: 1)
-        liveFlag.initialize(to: 0)
         window = .allocate(capacity: n)
         mono = .allocate(capacity: n)
         ring = .allocate(capacity: n)
@@ -175,7 +197,6 @@ private final class SpectrumStore: @unchecked Sendable {
 
     deinit {
         levels.deallocate()
-        liveFlag.deallocate()
         window.deallocate()
         mono.deallocate()
         ring.deallocate()
@@ -189,7 +210,16 @@ private final class SpectrumStore: @unchecked Sendable {
         if let fftSetup { vDSP_destroy_fftsetup(fftSetup) }
     }
 
-    var isLive: Bool { liveFlag.pointee != 0 }
+    var isLive: Bool { liveFlag.load(ordering: .relaxed) }
+
+    func setAnalysisStride(_ stride: Int) {
+        analysisStride.store(max(1, stride), ordering: .relaxed)
+    }
+
+    func setAnalysisEnabled(_ enabled: Bool) {
+        analysisEnabled.store(enabled, ordering: .relaxed)
+        if !enabled { liveFlag.store(false, ordering: .relaxed) }
+    }
 
     func level(at index: Int) -> Float {
         guard index >= 0, index < AudioSpectrum.bandCount else { return 0 }
@@ -206,7 +236,7 @@ private final class SpectrumStore: @unchecked Sendable {
             windowLoDB[i] = band.floorDB
         }
         ringFill = 0
-        liveFlag.pointee = 0
+        liveFlag.store(false, ordering: .relaxed)
     }
 
     // MARK: Tap plumbing
@@ -341,7 +371,7 @@ private final class SpectrumStore: @unchecked Sendable {
 
 
     fileprivate func process(_ bufferList: UnsafeMutablePointer<AudioBufferList>, frames: Int) {
-        guard frames > 0 else { return }
+        guard frames > 0, analysisEnabled.load(ordering: .relaxed) else { return }
         let abl = UnsafeMutableAudioBufferListPointer(bufferList)
         guard let first = abl.first, let raw = first.mData else { return }
 
@@ -354,23 +384,32 @@ private final class SpectrumStore: @unchecked Sendable {
             : min(frames, floatCount)
         guard available > 0 else { return }
 
-        // Walk the whole buffer in FFT-sized blocks. The tap can hand us far more
-        // than one window at a time; analyzing only the first block would drop
-        // most of the audio and — because the envelope advances once per call —
-        // stretch every time constant by however many blocks went unread.
+        // Walk the whole buffer in FFT-sized blocks so the sampling cadence is
+        // stable for any AVPlayer buffer size. Only selected windows are copied
+        // and analyzed; the remaining windows are skipped without FFT work.
+        let stride = max(1, analysisStride.load(ordering: .relaxed))
+        if stride != lastAnalysisStride {
+            lastAnalysisStride = stride
+            blocksUntilAnalysis = stride
+        }
         var offset = 0
         while offset + n <= available {
-            if isInterleaved, channelCount > 1 {
-                let base = src.advanced(by: offset * channelCount)
-                vDSP_vadd(base, vDSP_Stride(channelCount),
-                          base.advanced(by: 1), vDSP_Stride(channelCount),
-                          ring, 1, vDSP_Length(n))
-                var half: Float = 0.5
-                vDSP_vsmul(ring, 1, &half, ring, 1, vDSP_Length(n))
+            if blocksUntilAnalysis <= 1 {
+                if isInterleaved, channelCount > 1 {
+                    let base = src.advanced(by: offset * channelCount)
+                    vDSP_vadd(base, vDSP_Stride(channelCount),
+                              base.advanced(by: 1), vDSP_Stride(channelCount),
+                              ring, 1, vDSP_Length(n))
+                    var half: Float = 0.5
+                    vDSP_vsmul(ring, 1, &half, ring, 1, vDSP_Length(n))
+                } else {
+                    memcpy(ring, src.advanced(by: offset), n * MemoryLayout<Float>.size)
+                }
+                analyze(blockFrames: n * stride)
+                blocksUntilAnalysis = stride
             } else {
-                memcpy(ring, src.advanced(by: offset), n * MemoryLayout<Float>.size)
+                blocksUntilAnalysis -= 1
             }
-            analyze(blockFrames: n)
             offset += n
         }
     }
@@ -449,6 +488,6 @@ private final class SpectrumStore: @unchecked Sendable {
             levels[i] = previous + (target - previous) * coefficient
         }
 
-        if sawSignal { liveFlag.pointee = 1 }
+        if sawSignal { liveFlag.store(true, ordering: .relaxed) }
     }
 }

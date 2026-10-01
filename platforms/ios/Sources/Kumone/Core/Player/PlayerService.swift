@@ -223,6 +223,9 @@ final class PlayerService: ObservableObject {
             guard isPlaying else { return }
             engine.rate = playbackRate
             NowPlayingManager.shared.updateElapsed(progress, rate: Double(playbackRate))
+#if os(iOS)
+            syncLiveActivity()
+#endif
         }
     }
 
@@ -316,6 +319,7 @@ final class PlayerService: ObservableObject {
     private var scrobbled = false
     private var startScrobbled = false
 #if os(iOS)
+    private var audioSessionActive = false
     /// Account URLs are tried for the matching catalogue before the enabled
     /// LX sources. A provider downgrade is reported using the actual tier.
     private var pendingNeteaseTrackIDs: [String: Int] = [:]
@@ -324,7 +328,6 @@ final class PlayerService: ObservableObject {
         let url: URL
         let quality: String
     }
-    private var lastLiveActivityProgress = -10.0
 #endif
     private var runtimeStarted = false
 
@@ -359,14 +362,7 @@ final class PlayerService: ObservableObject {
         guard !runtimeStarted else { return }
         runtimeStarted = true
 
-        #if os(iOS)
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            print("Failed to activate audio session: \(error)")
-        }
-
+#if os(iOS)
         // Resume after interruptions (phone calls, WeChat voice messages, …).
         NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
@@ -413,11 +409,6 @@ final class PlayerService: ObservableObject {
                         seconds,
                         rate: self.isPlaying ? Double(self.playbackRate) : 0
                     )
-                    if self.isPlaying,
-                       seconds - self.lastLiveActivityProgress >= 5 {
-                        self.lastLiveActivityProgress = seconds
-                        self.syncLiveActivity()
-                    }
                 }
             }
         }
@@ -445,6 +436,7 @@ final class PlayerService: ObservableObject {
             elapsed: progress,
             duration: duration,
             isPlaying: isPlaying,
+            playbackRate: Double(playbackRate),
             newTrack: newTrack
         )
     }
@@ -463,6 +455,7 @@ final class PlayerService: ObservableObject {
               let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
         switch type {
         case .began:
+            audioSessionActive = false
             wasPlayingBeforeInterruption = isPlaying
             if isPlaying {
                 // The system already silenced us; sync our state and UI.
@@ -475,7 +468,12 @@ final class PlayerService: ObservableObject {
             let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
             guard wasPlayingBeforeInterruption, options.contains(.shouldResume) else { return }
             wasPlayingBeforeInterruption = false
-            try? AVAudioSession.sharedInstance().setActive(true)
+            guard activateAudioSession() else {
+                isPlaying = false
+                NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+                syncLiveActivity()
+                return
+            }
             engine.play()
             engine.rate = playbackRate
             isPlaying = true
@@ -483,6 +481,33 @@ final class PlayerService: ObservableObject {
             syncLiveActivity()
         @unknown default:
             break
+        }
+    }
+
+    private func activateAudioSession() -> Bool {
+        guard !audioSessionActive else { return true }
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default)
+            try session.setActive(true)
+            audioSessionActive = true
+            return true
+        } catch {
+            print("Failed to activate audio session: \(error)")
+            return false
+        }
+    }
+
+    private func deactivateAudioSession() {
+        guard audioSessionActive else { return }
+        do {
+            try AVAudioSession.sharedInstance().setActive(
+                false,
+                options: [.notifyOthersOnDeactivation]
+            )
+            audioSessionActive = false
+        } catch {
+            print("Failed to deactivate audio session: \(error)")
         }
     }
     #endif
@@ -536,6 +561,9 @@ final class PlayerService: ObservableObject {
         guard let track = currentTrack else { return }
         if isPlaying {
             engine.pause()
+#if os(iOS)
+            deactivateAudioSession()
+#endif
             isPlaying = false
             AudioSpectrum.shared.reset()
         } else if engine.currentItem == nil {
@@ -543,6 +571,15 @@ final class PlayerService: ObservableObject {
             startPlaying(track, indexUnchanged: true)
             return
         } else {
+#if os(iOS)
+            guard activateAudioSession() else {
+                isPlaying = false
+                ToastCenter.shared.show("无法启用音频会话，请稍后重试")
+                NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+                syncLiveActivity()
+                return
+            }
+#endif
             engine.play()
             engine.rate = playbackRate
             isPlaying = true
@@ -553,6 +590,9 @@ final class PlayerService: ObservableObject {
 
     func pause() {
         engine.pause()
+#if os(iOS)
+        deactivateAudioSession()
+#endif
         isPlaying = false
         AudioSpectrum.shared.reset()
         NowPlayingManager.shared.updateElapsed(progress, rate: 0)
@@ -830,6 +870,9 @@ final class PlayerService: ObservableObject {
                     ToastCenter.shared.show(String(localized: "已经是最后一首了"))
                 } else {
                     isPlaying = false
+#if os(iOS)
+                    deactivateAudioSession()
+#endif
                     NowPlayingManager.shared.updateElapsed(progress, rate: 0)
                     syncLiveActivity()
                 }
@@ -842,6 +885,7 @@ final class PlayerService: ObservableObject {
     }
 
     private func handleItemEnded() {
+        guard isPlaying else { return }
         scrobbleIfNeeded(completed: true)
         if sleepTimer.consumeEndOfCurrentTrack() {
             progress = duration
@@ -853,6 +897,15 @@ final class PlayerService: ObservableObject {
         if repeatMode == .one, !isFMMode {
             scrobbled = false
             seek(to: 0)
+#if os(iOS)
+            guard activateAudioSession() else {
+                isPlaying = false
+                ToastCenter.shared.show("无法启用音频会话，请稍后重试")
+                NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+                syncLiveActivity()
+                return
+            }
+#endif
             engine.play()
             isPlaying = true
             syncLiveActivity()
@@ -870,6 +923,9 @@ final class PlayerService: ObservableObject {
         // URL/lyric resolution. Otherwise a fast next/previous tap leaves the
         // old AVPlayerItem audible until the new source responds.
         engine.pause()
+#if os(iOS)
+        deactivateAudioSession()
+#endif
         engine.replaceCurrentItem(with: nil)
         if let old = endObserver {
             NotificationCenter.default.removeObserver(old)
@@ -879,7 +935,6 @@ final class PlayerService: ObservableObject {
         currentTrack = track
         LocalPlaylistStore.shared.recordRecent(track)
         progress = resumeAt ?? 0
-        lastLiveActivityProgress = progress - 5
         pendingSeek = resumeAt
         duration = track.duration
         servedQuality = nil
@@ -1080,11 +1135,29 @@ final class PlayerService: ObservableObject {
                         toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                 Task { @MainActor in
                     guard let self, generation == self.resolveGeneration else { return }
+#if os(iOS)
+                    guard self.activateAudioSession() else {
+                        self.isPlaying = false
+                        ToastCenter.shared.show("无法启用音频会话，请稍后重试")
+                        NowPlayingManager.shared.updateElapsed(self.progress, rate: 0)
+                        self.syncLiveActivity()
+                        return
+                    }
+#endif
                     self.engine.play()
                     self.engine.rate = self.playbackRate
                 }
             }
         } else {
+#if os(iOS)
+            guard activateAudioSession() else {
+                isPlaying = false
+                ToastCenter.shared.show("无法启用音频会话，请稍后重试")
+                NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+                syncLiveActivity()
+                return
+            }
+#endif
             engine.play()
             engine.rate = playbackRate
         }

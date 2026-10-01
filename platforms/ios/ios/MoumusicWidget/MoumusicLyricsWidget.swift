@@ -55,10 +55,7 @@ private struct PlaybackProgressView: View {
     }
 
     private var playbackInterval: ClosedRange<Date> {
-        let duration = max(state.duration, 1)
-        let elapsed = min(max(state.elapsed, 0), duration)
-        let start = state.updatedAt.addingTimeInterval(-elapsed)
-        return start...start.addingTimeInterval(duration)
+        state.playbackInterval
     }
 }
 

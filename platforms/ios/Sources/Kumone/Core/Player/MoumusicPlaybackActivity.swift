@@ -13,6 +13,7 @@ public struct MoumusicPlaybackActivityAttributes: ActivityAttributes {
         public var elapsed: TimeInterval
         public var duration: TimeInterval
         public var isPlaying: Bool
+        public var playbackRate: Double
         public var updatedAt: Date
 
         public init(
@@ -22,6 +23,7 @@ public struct MoumusicPlaybackActivityAttributes: ActivityAttributes {
             elapsed: TimeInterval,
             duration: TimeInterval,
             isPlaying: Bool,
+            playbackRate: Double = 1,
             updatedAt: Date = .now
         ) {
             self.title = title
@@ -30,7 +32,32 @@ public struct MoumusicPlaybackActivityAttributes: ActivityAttributes {
             self.elapsed = max(0, elapsed)
             self.duration = max(0, duration)
             self.isPlaying = isPlaying
+            self.playbackRate = max(0.1, playbackRate)
             self.updatedAt = updatedAt
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case title, artist, artworkURL, elapsed, duration, isPlaying, playbackRate, updatedAt
+        }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            title = try values.decode(String.self, forKey: .title)
+            artist = try values.decode(String.self, forKey: .artist)
+            artworkURL = try values.decodeIfPresent(String.self, forKey: .artworkURL)
+            elapsed = max(0, try values.decode(TimeInterval.self, forKey: .elapsed))
+            duration = max(0, try values.decode(TimeInterval.self, forKey: .duration))
+            isPlaying = try values.decode(Bool.self, forKey: .isPlaying)
+            playbackRate = max(0.1, try values.decodeIfPresent(Double.self, forKey: .playbackRate) ?? 1)
+            updatedAt = try values.decode(Date.self, forKey: .updatedAt)
+        }
+
+        public var playbackInterval: ClosedRange<Date> {
+            let safeRate = max(playbackRate, 0.1)
+            let safeDuration = max(duration, 1)
+            let safeElapsed = min(max(elapsed, 0), safeDuration)
+            let start = updatedAt.addingTimeInterval(-safeElapsed / safeRate)
+            return start...start.addingTimeInterval(safeDuration / safeRate)
         }
     }
 
@@ -62,6 +89,7 @@ final class MoumusicPlaybackActivityManager {
         elapsed: TimeInterval,
         duration: TimeInterval,
         isPlaying: Bool,
+        playbackRate: Double = 1,
         newTrack: Bool = false
     ) {
         if newTrack {
@@ -74,7 +102,8 @@ final class MoumusicPlaybackActivityManager {
             artworkURL: artworkURL,
             elapsed: elapsed,
             duration: duration,
-            isPlaying: isPlaying
+            isPlaying: isPlaying,
+            playbackRate: playbackRate
         )
         lastState = state
 

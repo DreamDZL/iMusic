@@ -8,6 +8,7 @@ import SwiftUI
 /// player.  The animation also stops when Reduce Motion is enabled.
 struct MidAutumnFestivalEffect: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var renderingBudget = RenderingBudget.shared
     @State private var glowPulse = false
 
     private let stars: [(x: CGFloat, y: CGFloat, size: CGFloat, opacity: Double)] = [
@@ -54,13 +55,29 @@ struct MidAutumnFestivalEffect: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .onAppear {
-            guard !reduceMotion else { return }
-            glowPulse = true
+            glowPulse = canAnimate
+        }
+        .onChange(of: renderingBudget.isSceneActive) { active in
+            glowPulse = active && !reduceMotion && renderingBudget.allowsContinuousEffects
+        }
+        .onChange(of: reduceMotion) { isReduced in
+            glowPulse = renderingBudget.isSceneActive
+                && renderingBudget.allowsContinuousEffects
+                && !isReduced
+        }
+        .onChange(of: renderingBudget.allowsContinuousEffects) { allowsEffects in
+            glowPulse = renderingBudget.isSceneActive && !reduceMotion && allowsEffects
         }
         .animation(
-            reduceMotion ? nil : .easeInOut(duration: 4.2).repeatForever(autoreverses: true),
+            !canAnimate
+                ? nil : .easeInOut(duration: 4.2).repeatForever(autoreverses: true),
             value: glowPulse
         )
+    }
+
+    private var canAnimate: Bool {
+        !reduceMotion && renderingBudget.isSceneActive
+            && renderingBudget.allowsContinuousEffects
     }
 
     private var moon: some View {

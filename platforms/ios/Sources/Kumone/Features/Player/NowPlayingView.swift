@@ -1010,7 +1010,7 @@ struct LyricMainText: View {
            isActive, verbatim, let words = line.words, !words.isEmpty {
             TimelineView(.animation(
                 minimumInterval: renderingBudget.minimumAnimationInterval,
-                paused: !player.isPlaying
+                paused: !player.isPlaying || !renderingBudget.isSceneActive
             )) { _ in
                 RubyText(
                     segments: segments,
@@ -1032,7 +1032,7 @@ struct LyricMainText: View {
         } else if isActive, verbatim, let words = line.words, !words.isEmpty {
             TimelineView(.animation(
                 minimumInterval: renderingBudget.minimumAnimationInterval,
-                paused: !player.isPlaying
+                paused: !player.isPlaying || !renderingBudget.isSceneActive
             )) { _ in
                 karaoke(words, at: player.livePlaybackTime + settings.lyricsOffset).font(font)
                     .minimumScaleFactor(0.72)
@@ -1098,7 +1098,7 @@ private struct AMLLyricText: View {
             if isActive, verbatim, let words = line.words, !words.isEmpty {
                 TimelineView(.animation(
                     minimumInterval: renderingBudget.minimumAnimationInterval,
-                    paused: !player.isPlaying
+                    paused: !player.isPlaying || !renderingBudget.isSceneActive
                 )) { _ in
                     ZStack(alignment: .leading) {
                         Text(line.text)

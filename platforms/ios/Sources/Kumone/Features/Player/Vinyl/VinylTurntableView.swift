@@ -34,7 +34,9 @@ public struct VinylTurntableView: View {
         ZStack(alignment: .top) {
             TimelineView(.animation(
                 minimumInterval: renderingBudget.minimumAnimationInterval,
-                paused: !isPlaying || isDragging || isTransitioningTrack || reduceMotion
+                paused: !isPlaying || isDragging || isTransitioningTrack
+                    || reduceMotion || !renderingBudget.isSceneActive
+                    || !renderingBudget.allowsContinuousEffects
             )) { timeline in
                 VinylRecordView(artworkImage: artworkImage, size: size)
                     .rotationEffect(.degrees(rotationState.currentAngle(at: timeline.date)))

@@ -35,4 +35,42 @@ final class RenderingBudgetTests: XCTestCase {
             accuracy: 0.0001
         )
     }
+
+    func testAudioAnalysisStrideGrowsWhenPowerOrThermalBudgetIsConstrained() {
+        XCTAssertEqual(
+            RenderingBudget.audioStride(lowPowerMode: false, thermalState: .nominal),
+            4
+        )
+        XCTAssertEqual(
+            RenderingBudget.audioStride(lowPowerMode: true, thermalState: .nominal),
+            6
+        )
+        XCTAssertEqual(
+            RenderingBudget.audioStride(lowPowerMode: false, thermalState: .fair),
+            6
+        )
+        XCTAssertEqual(
+            RenderingBudget.audioStride(lowPowerMode: false, thermalState: .serious),
+            12
+        )
+        XCTAssertEqual(
+            RenderingBudget.audioStride(lowPowerMode: true, thermalState: .critical),
+            12
+        )
+    }
+
+    func testContinuousDecorativeEffectsStopWhenPowerOrThermalBudgetIsConstrained() {
+        XCTAssertTrue(
+            RenderingBudget.permitsContinuousEffects(lowPowerMode: false, thermalState: .nominal)
+        )
+        XCTAssertFalse(
+            RenderingBudget.permitsContinuousEffects(lowPowerMode: true, thermalState: .nominal)
+        )
+        XCTAssertFalse(
+            RenderingBudget.permitsContinuousEffects(lowPowerMode: false, thermalState: .fair)
+        )
+        XCTAssertFalse(
+            RenderingBudget.permitsContinuousEffects(lowPowerMode: false, thermalState: .serious)
+        )
+    }
 }
