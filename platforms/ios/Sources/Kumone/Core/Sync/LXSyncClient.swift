@@ -827,6 +827,7 @@ final class LXSyncService: ObservableObject {
     private static func aesCrypt(_ data: Data, key: Data, operation: CCOperation) throws -> Data {
         guard key.count == kCCKeySizeAES128 else { throw LXSyncError.invalidServerResponse }
         var output = Data(count: data.count + kCCBlockSizeAES128)
+        let outputCapacity = output.count
         var outputLength = 0
         let status = output.withUnsafeMutableBytes { outputBytes in
             data.withUnsafeBytes { inputBytes in
@@ -841,7 +842,7 @@ final class LXSyncService: ObservableObject {
                         inputBytes.baseAddress,
                         data.count,
                         outputBytes.baseAddress,
-                        output.count,
+                        outputCapacity,
                         &outputLength
                     )
                 }
