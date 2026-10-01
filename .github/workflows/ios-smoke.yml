@@ -38,6 +38,8 @@ jobs:
             exit 1
           fi
           echo "Using iPhone simulator: $SIMULATOR_ID"
+          xcrun simctl boot "$SIMULATOR_ID" || true
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b
           xcodebuild test \
             -project KumoneIOS.xcodeproj \
             -scheme KumoneIOS \
