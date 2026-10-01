@@ -40,7 +40,7 @@ struct LXSyncSettingsView: View {
                 }
             }
 
-            Section("LX Sync Server") {
+            Section {
                 TextField("https://music.example.com", text: $sync.endpoint)
 #if os(iOS)
                     .textInputAutocapitalization(.never)
@@ -73,11 +73,13 @@ struct LXSyncSettingsView: View {
                         sync.disconnect()
                     }
                 }
+            } header: {
+                Text("LX Sync Server")
             } footer: {
                 Text("填写你自行部署的 LX Sync Server 地址和连接码。首次连接会合并本机歌单与服务器列表。")
             }
 
-            Section("同步内容") {
+            Section {
                 Label("我喜欢的音乐", systemImage: "heart.fill")
                 Label("本地歌单、导入歌单及歌单内歌曲", systemImage: "music.note.list")
                 Label("歌单名称、曲目顺序与来源标记", systemImage: "arrow.up.arrow.down")
@@ -85,6 +87,8 @@ struct LXSyncSettingsView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            } header: {
+                Text("同步内容")
             }
 
             Section {
