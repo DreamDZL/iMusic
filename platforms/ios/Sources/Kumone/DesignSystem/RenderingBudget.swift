@@ -33,7 +33,7 @@ final class RenderingBudget: ObservableObject {
         refresh()
     }
 
-    static func interval(
+    nonisolated static func interval(
         lowPowerMode: Bool,
         thermalState: ProcessInfo.ThermalState
     ) -> TimeInterval {
