@@ -12,6 +12,7 @@ on:
 jobs:
   launch:
     runs-on: xcode-27
+    timeout-minutes: 20
     permissions:
       contents: read
 
@@ -41,6 +42,8 @@ jobs:
             -project KumoneIOS.xcodeproj \
             -scheme KumoneIOS \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -destination-timeout 120 \
             -derivedDataPath smoke-build \
+            -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
