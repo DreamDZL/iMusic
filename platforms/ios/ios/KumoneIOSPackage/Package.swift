@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "KumoneIOSFeature",
     defaultLocalization: "zh-Hans",
-    platforms: [.iOS(.v16)],
+    platforms: [.iOS("27.0")],
     products: [
         .library(
             name: "KumoneIOSFeature",
@@ -25,7 +25,8 @@ let package = Package(
         .testTarget(
             name: "KumoneIOSFeatureTests",
             dependencies: [
-                "KumoneIOSFeature"
+                "KumoneIOSFeature",
+                .product(name: "KumoneCore", package: "ios"),
             ]
         ),
     ]

@@ -19,16 +19,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Run core Swift tests
-        working-directory: platforms/ios
-        run: swift test
-
       - name: Generate Xcode project
         working-directory: platforms/ios/ios
         run: |
           brew untap aws/tap || true
           brew install xcodegen
           xcodegen generate
+
+      - name: Run iOS package tests on the latest simulator
+        working-directory: platforms/ios/ios
+        run: |
+          xcodebuild -list -project KumoneIOS.xcodeproj
+          SIMULATOR_ID=$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ { print $2; exit }')
+          if [ -z "$SIMULATOR_ID" ]; then
+            echo "No available iPhone simulator was found"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "Using iPhone simulator: $SIMULATOR_ID"
+          xcodebuild test \
+            -project KumoneIOS.xcodeproj \
+            -scheme KumoneIOSFeature \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -derivedDataPath package-test-build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
 
       - name: Run launch UI test on the latest simulator
         working-directory: platforms/ios/ios
