@@ -6,7 +6,6 @@ import UIKit
 
 struct PlayerBar: View {
     @EnvironmentObject private var player: PlayerService
-    @EnvironmentObject private var account: AccountStore
 
     var body: some View {
         GeometryReader { proxy in
@@ -41,14 +40,14 @@ struct PlayerBar: View {
                         VIPBadge()
                     }
                 }
-                Text(player.currentTrack?.artistNames ?? "Kumone")
+                Text(player.currentTrack?.artistNames ?? "iMusic")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if let track = player.currentTrack {
-                LikeButton(trackID: track.id)
+                LikeButton(track: track)
             }
         }
     }
@@ -245,18 +244,18 @@ struct PlayerIconButton: View {
 // MARK: - Like button
 
 struct LikeButton: View {
-    let trackID: Int
+    let track: Track
     var size: CGFloat = 13
 
-    @EnvironmentObject private var account: AccountStore
+    @ObservedObject private var localLibrary = LocalPlaylistStore.shared
 
     var body: some View {
-        let liked = account.isLiked(trackID)
+        let liked = localLibrary.isFavorite(track)
         PlayerIconButton(
             icon: liked ? "heart.fill" : "heart", size: size,
             isActive: liked
         ) {
-            Task { await account.toggleLike(trackID: trackID) }
+            localLibrary.toggleFavorite(track)
         }
         .help(liked ? String(localized: "取消喜欢") : String(localized: "喜欢"))
     }

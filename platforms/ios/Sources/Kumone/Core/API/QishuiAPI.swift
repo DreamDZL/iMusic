@@ -346,7 +346,7 @@ actor QishuiAPI {
             var request = URLRequest(url: playlistEndpoint)
             request.httpMethod = "POST"
             request.timeoutInterval = 20
-            request.setValue("Moumusic/1.0 (iOS; public Qishui playlist import)",
+            request.setValue("iMusic/1.0 (iOS; public Qishui playlist import)",
                              forHTTPHeaderField: "User-Agent")
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue("application/json", forHTTPHeaderField: "Accept")

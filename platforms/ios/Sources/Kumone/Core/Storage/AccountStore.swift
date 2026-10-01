@@ -125,6 +125,30 @@ final class AccountStore: ObservableObject {
         likedArtists = await artists ?? likedArtists
     }
 
+    /// Copies the account's liked songs into iMusic's local favorites. This is
+    /// an explicit one-way import; later local edits never write back to NetEase.
+    func importLikedSongsToLocalLibrary() async throws -> (remoteCount: Int, addedCount: Int) {
+        guard hasAuthCookie else { throw NeteaseAPIError.needLogin }
+        let userID: Int
+        if let profileUserID = profile?.userId {
+            userID = profileUserID
+        } else {
+            let remoteProfile = try await NeteaseAPI.userAccount()
+            profile = remoteProfile
+            userID = remoteProfile.userId
+        }
+
+        let ids = try await NeteaseAPI.likedTrackIDs(uid: userID)
+        var tracks: [Track] = []
+        for offset in stride(from: 0, to: ids.count, by: 200) {
+            let end = min(offset + 200, ids.count)
+            let response = try await NeteaseAPI.songDetails(ids: Array(ids[offset..<end]))
+            tracks.append(contentsOf: response.songs)
+        }
+        let addedCount = LocalPlaylistStore.shared.mergeFavorites(tracks)
+        return (remoteCount: ids.count, addedCount: addedCount)
+    }
+
     func isLiked(_ trackID: Int) -> Bool {
         likedTrackIDs.contains(trackID)
     }

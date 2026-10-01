@@ -16,7 +16,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: xcode-27
     permissions:
       contents: write
 
@@ -42,13 +42,13 @@ jobs:
           : "${IOS_CERTIFICATE_PASSWORD:?Missing IOS_CERTIFICATE_PASSWORD repository secret}"
           : "${IOS_PROVISIONING_PROFILE_BASE64:?Missing IOS_PROVISIONING_PROFILE_BASE64 repository secret}"
 
-          keychain_path="$RUNNER_TEMP/moumusic-signing.keychain-db"
+          keychain_path="$RUNNER_TEMP/imusic-signing.keychain-db"
           keychain_password="$(uuidgen)"
-          certificate_path="$RUNNER_TEMP/moumusic-signing.p12"
-          app_profile_path="$RUNNER_TEMP/moumusic-app.mobileprovision"
-          app_profile_plist="$RUNNER_TEMP/moumusic-app-profile.plist"
-          widget_profile_path="$RUNNER_TEMP/moumusic-widget.mobileprovision"
-          widget_profile_plist="$RUNNER_TEMP/moumusic-widget-profile.plist"
+          certificate_path="$RUNNER_TEMP/imusic-signing.p12"
+          app_profile_path="$RUNNER_TEMP/imusic-app.mobileprovision"
+          app_profile_plist="$RUNNER_TEMP/imusic-app-profile.plist"
+          widget_profile_path="$RUNNER_TEMP/imusic-widget.mobileprovision"
+          widget_profile_plist="$RUNNER_TEMP/imusic-widget-profile.plist"
 
           printf '%s' "$IOS_CERTIFICATE_P12_BASE64" | base64 -D > "$certificate_path"
           printf '%s' "$IOS_PROVISIONING_PROFILE_BASE64" | base64 -D > "$app_profile_path"
@@ -90,9 +90,9 @@ jobs:
             [[ "$profile_suffix" == "$bundle_id" ]]
           }
 
-          app_bundle_id='com.jiajia2222.moumusic.ios'
-          widget_bundle_id='com.jiajia2222.moumusic.ios.widget'
-          app_group='group.com.jiajia2222.moumusic'
+          app_bundle_id='com.jiajia2222.imusic.ios'
+          widget_bundle_id='com.jiajia2222.imusic.ios.widget'
+          app_group='group.com.jiajia2222.imusic'
 
           if ! profile_allows_bundle "$application_id" "$app_bundle_id"; then
             echo "The app profile does not match $app_bundle_id (profile: $application_id)." >&2
@@ -146,12 +146,12 @@ jobs:
             export_certificate='Apple Distribution'
           fi
 
-          echo "MOU_APP_PROVISIONING_PROFILE=$profile_uuid" >> "$GITHUB_ENV"
-          echo "MOU_WIDGET_PROVISIONING_PROFILE=$widget_profile_uuid" >> "$GITHUB_ENV"
-          echo "MOU_TEAM_ID=$team_id" >> "$GITHUB_ENV"
-          echo "MOU_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
-          echo "MOU_EXPORT_METHOD=$export_method" >> "$GITHUB_ENV"
-          echo "MOU_EXPORT_CERTIFICATE=$export_certificate" >> "$GITHUB_ENV"
+          echo "IMUSIC_APP_PROVISIONING_PROFILE=$profile_uuid" >> "$GITHUB_ENV"
+          echo "IMUSIC_WIDGET_PROVISIONING_PROFILE=$widget_profile_uuid" >> "$GITHUB_ENV"
+          echo "IMUSIC_TEAM_ID=$team_id" >> "$GITHUB_ENV"
+          echo "IMUSIC_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "IMUSIC_EXPORT_METHOD=$export_method" >> "$GITHUB_ENV"
+          echo "IMUSIC_EXPORT_CERTIFICATE=$export_certificate" >> "$GITHUB_ENV"
           echo "Validated profile: $profile_name ($application_id)"
 
       - name: Generate Xcode project
@@ -168,60 +168,60 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/Moumusic.xcarchive" \
-            -derivedDataPath "$RUNNER_TEMP/moumusic-derived-data" \
+            -archivePath "$RUNNER_TEMP/iMusic.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/imusic-derived-data" \
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGNING_REQUIRED=YES \
             CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="$MOU_TEAM_ID" \
-            CODE_SIGN_IDENTITY="$MOU_SIGNING_IDENTITY" \
-            MOU_APP_PROVISIONING_PROFILE="$MOU_APP_PROVISIONING_PROFILE" \
-            MOU_WIDGET_PROVISIONING_PROFILE="$MOU_WIDGET_PROVISIONING_PROFILE"
+            DEVELOPMENT_TEAM="$IMUSIC_TEAM_ID" \
+            CODE_SIGN_IDENTITY="$IMUSIC_SIGNING_IDENTITY" \
+            MOU_APP_PROVISIONING_PROFILE="$IMUSIC_APP_PROVISIONING_PROFILE" \
+            MOU_WIDGET_PROVISIONING_PROFILE="$IMUSIC_WIDGET_PROVISIONING_PROFILE"
 
       - name: Export signed IPA
         run: |
           set -euo pipefail
-          export_options="$RUNNER_TEMP/Moumusic-ExportOptions.plist"
+          export_options="$RUNNER_TEMP/iMusic-ExportOptions.plist"
           cat > "$export_options" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0"><dict>
-            <key>method</key><string>$MOU_EXPORT_METHOD</string>
+            <key>method</key><string>$IMUSIC_EXPORT_METHOD</string>
             <key>signingStyle</key><string>manual</string>
-            <key>signingCertificate</key><string>$MOU_EXPORT_CERTIFICATE</string>
-            <key>teamID</key><string>$MOU_TEAM_ID</string>
+            <key>signingCertificate</key><string>$IMUSIC_EXPORT_CERTIFICATE</string>
+            <key>teamID</key><string>$IMUSIC_TEAM_ID</string>
             <key>provisioningProfiles</key><dict>
-              <key>com.jiajia2222.moumusic.ios</key><string>$MOU_APP_PROVISIONING_PROFILE</string>
-              <key>com.jiajia2222.moumusic.ios.widget</key><string>$MOU_WIDGET_PROVISIONING_PROFILE</string>
+              <key>com.jiajia2222.imusic.ios</key><string>$IMUSIC_APP_PROVISIONING_PROFILE</string>
+              <key>com.jiajia2222.imusic.ios.widget</key><string>$IMUSIC_WIDGET_PROVISIONING_PROFILE</string>
             </dict>
           </dict></plist>
           EOF
           xcodebuild -exportArchive \
-            -archivePath "$RUNNER_TEMP/Moumusic.xcarchive" \
-            -exportPath "$RUNNER_TEMP/Moumusic-export" \
+            -archivePath "$RUNNER_TEMP/iMusic.xcarchive" \
+            -exportPath "$RUNNER_TEMP/iMusic-export" \
             -exportOptionsPlist "$export_options"
-          signed_ipa="$(find "$RUNNER_TEMP/Moumusic-export" -maxdepth 1 -name '*.ipa' -print -quit)"
+          signed_ipa="$(find "$RUNNER_TEMP/iMusic-export" -maxdepth 1 -name '*.ipa' -print -quit)"
           test -n "$signed_ipa"
-          cp "$signed_ipa" "$GITHUB_WORKSPACE/Moumusic-signed.ipa"
+          cp "$signed_ipa" "$GITHUB_WORKSPACE/iMusic-signed.ipa"
 
       - name: Verify signed IPA
         run: |
           set -euo pipefail
-          verify_dir="$RUNNER_TEMP/moumusic-ipa-verify"
+          verify_dir="$RUNNER_TEMP/imusic-ipa-verify"
           mkdir -p "$verify_dir"
-          unzip -q Moumusic-signed.ipa -d "$verify_dir"
-          codesign --verify --deep --strict --verbose=2 "$verify_dir/Payload/Moumusic.app"
-          test -d "$verify_dir/Payload/Moumusic.app/PlugIns/MoumusicWidget.appex"
+          unzip -q iMusic-signed.ipa -d "$verify_dir"
+          codesign --verify --deep --strict --verbose=2 "$verify_dir/Payload/iMusic.app"
+          test -d "$verify_dir/Payload/iMusic.app/PlugIns/MoumusicWidget.appex"
 
       - name: Upload signed IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Moumusic-ios-signed
-          path: Moumusic-signed.ipa
+          name: iMusic-ios-signed
+          path: iMusic-signed.ipa
           if-no-files-found: error
 
       - name: Publish signed IPA to Release
         if: ${{ inputs.publish_release && inputs.release_tag != '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ inputs.release_tag }}" Moumusic-signed.ipa --clobber --repo "$GITHUB_REPOSITORY"
+        run: gh release upload "${{ inputs.release_tag }}" iMusic-signed.ipa --clobber --repo "$GITHUB_REPOSITORY"

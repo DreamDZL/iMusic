@@ -4,7 +4,7 @@ import WidgetKit
 import ActivityKit
 import KumoneIOSFeature
 
-private let widgetSuite = "group.com.jiajia2222.moumusic"
+private let widgetSuite = "group.com.jiajia2222.imusic"
 
 private enum WidgetKeys {
     static let title = "widget.track.title"
@@ -20,7 +20,7 @@ struct LyricsWidgetEntry: TimelineEntry {
     let lyric: String
 
     var hasTrack: Bool {
-        !title.isEmpty && title != "Moumusic"
+        !title.isEmpty && title != "iMusic"
     }
 
     var displayLyric: String {
@@ -32,7 +32,7 @@ struct LyricsWidgetProvider: TimelineProvider {
     func placeholder(in context: Context) -> LyricsWidgetEntry {
         LyricsWidgetEntry(
             date: .now,
-            title: "Moumusic",
+            title: "iMusic",
             artist: "歌词小组件",
             lyric: "播放歌曲后显示当前歌词"
         )
@@ -55,7 +55,7 @@ struct LyricsWidgetProvider: TimelineProvider {
         let updatedAt = defaults?.double(forKey: WidgetKeys.updatedAt) ?? 0
         return LyricsWidgetEntry(
             date: updatedAt > 0 ? Date(timeIntervalSince1970: updatedAt) : .now,
-            title: defaults?.string(forKey: WidgetKeys.title) ?? "Moumusic",
+            title: defaults?.string(forKey: WidgetKeys.title) ?? "iMusic",
             artist: defaults?.string(forKey: WidgetKeys.artist) ?? "歌词小组件",
             lyric: defaults?.string(forKey: WidgetKeys.lyric) ?? "播放歌曲后显示当前歌词"
         )
@@ -90,7 +90,7 @@ struct MoumusicLyricsWidgetView: View {
         case .accessoryRectangular:
             LockScreenLyricsView(entry: entry)
         case .accessoryInline:
-            Text("Moumusic  ·  \(entry.displayLyric)")
+            Text("iMusic  ·  \(entry.displayLyric)")
                 .lineLimit(1)
         default:
             SmallLyricsView(entry: entry)
@@ -108,7 +108,7 @@ private struct WidgetHeader: View {
                 .foregroundStyle(.white)
                 .frame(width: compact ? 20 : 24, height: compact ? 20 : 24)
                 .background(.primary, in: Circle())
-            Text("Moumusic")
+            Text("iMusic")
                 .font(.system(size: compact ? 11 : 13, weight: .semibold, design: .rounded))
             Spacer(minLength: 0)
             Image(systemName: "waveform")
@@ -207,7 +207,7 @@ private struct LockScreenLyricsView: View {
                 Text(entry.displayLyric)
                     .font(.caption.weight(.semibold))
                     .lineLimit(2)
-                Text(entry.hasTrack ? entry.title : "Moumusic")
+                Text(entry.hasTrack ? entry.title : "iMusic")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -225,7 +225,7 @@ private struct TrackLabel: View {
             Text(entry.hasTrack ? entry.title : "等待播放")
                 .font(.system(size: compact ? 12 : 14, weight: .semibold, design: .rounded))
                 .lineLimit(1)
-            Text(entry.hasTrack && !entry.artist.isEmpty ? entry.artist : "打开 Moumusic 播放歌曲")
+            Text(entry.hasTrack && !entry.artist.isEmpty ? entry.artist : "打开 iMusic 播放歌曲")
                 .font(.system(size: compact ? 10 : 11, weight: .regular, design: .rounded))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -272,7 +272,7 @@ struct MoumusicLyricsWidget: Widget {
         StaticConfiguration(kind: kind, provider: LyricsWidgetProvider()) { entry in
             MoumusicLyricsWidgetView(entry: entry)
         }
-        .configurationDisplayName("Moumusic 歌词")
+        .configurationDisplayName("iMusic 歌词")
         .description("在主屏幕或锁屏查看当前播放歌词")
         .supportedFamilies([
             .systemSmall, .systemMedium, .systemLarge,
@@ -350,7 +350,7 @@ private struct PlaybackActivityLockScreenView: View {
                 Text(state.title)
                     .font(.headline.weight(.semibold))
                     .lineLimit(1)
-                Text(state.artist.isEmpty ? "Moumusic" : state.artist)
+                Text(state.artist.isEmpty ? "iMusic" : state.artist)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -373,7 +373,7 @@ struct MoumusicPlaybackLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: MoumusicPlaybackActivityAttributes.self) { context in
             PlaybackActivityLockScreenView(state: context.state)
-                .widgetURL(URL(string: "moumusic://now-playing"))
+                .widgetURL(URL(string: "imusic://now-playing"))
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
@@ -407,7 +407,7 @@ struct MoumusicPlaybackLiveActivity: Widget {
                 Image(systemName: context.state.isPlaying ? "waveform" : "music.note")
                     .font(.caption.weight(.semibold))
             }
-            .widgetURL(URL(string: "moumusic://now-playing"))
+            .widgetURL(URL(string: "imusic://now-playing"))
             .keylineTint(.red)
         }
     }

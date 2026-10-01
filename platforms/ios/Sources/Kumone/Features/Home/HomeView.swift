@@ -325,27 +325,20 @@ struct HomeView: View {
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var settings: SettingsManager
-#if os(iOS)
-    @EnvironmentObject private var bilibili: BilibiliSessionStore
-    @State private var showBilibiliCenter = false
-#endif
     @StateObject private var model = HomeViewModel.shared
+    @ObservedObject private var localLibrary = LocalPlaylistStore.shared
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                communityAnnouncement
-
-#if os(iOS)
-                if settings.bilibiliContentEnabled {
-                    bilibiliEntryCard
+                if !localLibrary.recentTracks.isEmpty {
+                    recentTracksShelf
                 }
-#endif
                 standardHomeBody
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle("推荐")
+        .navigationTitle("主页")
         #if os(iOS)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -370,14 +363,38 @@ struct HomeView: View {
         .refreshable {
             await loadCurrentHome(force: true)
         }
-#if os(iOS)
-        .fullScreenCover(isPresented: $showBilibiliCenter) {
-            NavigationStack {
-                BilibiliContentView()
-                    .environmentObject(bilibili)
+    }
+
+    private var recentTracksShelf: some View {
+        Shelf(title: "最近播放", rowHeight: 214) {
+            ForEach(Array(localLibrary.recentTracks.prefix(12)), id: \.playbackKey) { track in
+                Button {
+                    player.play(
+                        tracks: localLibrary.recentTracks,
+                        source: .none,
+                        startAt: track
+                    )
+                } label: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(320), animated: false)
+                            .frame(width: 156, height: 156)
+                            .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        Text(track.name)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        Text(track.artistNames)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .frame(width: 156, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("播放最近听过的歌曲：\(track.name)，\(track.artistNames)")
             }
         }
-#endif
     }
 
     private var homeTaskID: String {
@@ -417,89 +434,6 @@ struct HomeView: View {
                              qishuiSessionRevision: 0)
         }
     }
-
-    private var communityAnnouncement: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "megaphone.fill")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 42, height: 42)
-                .background(Theme.accentGradient, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("公告")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.accent)
-                Text("Moumusic QQ 群：945130957")
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                Text("欢迎加入交流群，反馈问题和获取更新通知")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-
-            Spacer(minLength: 8)
-            Image(systemName: "person.3.fill")
-                .font(.title3)
-                .foregroundStyle(Theme.accent.opacity(0.75))
-                .accessibilityHidden(true)
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(Theme.accent.opacity(0.16), lineWidth: 1)
-        }
-        .padding(.horizontal, Theme.Layout.contentInset)
-        .padding(.top, 8)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("公告：Moumusic QQ 群 945130957，欢迎加入交流群，反馈问题和获取更新通知")
-    }
-
-#if os(iOS)
-    private var bilibiliEntryCard: some View {
-        Button {
-            showBilibiliCenter = true
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "play.rectangle.fill")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 42, height: 42)
-                    .background(Color(red: 0.08, green: 0.62, blue: 0.86), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("哔哩哔哩视频中心")
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text("推荐 · 分区 · 排行榜 · 听视频 / 看视频")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(Color(red: 0.08, green: 0.62, blue: 0.86).opacity(0.28), lineWidth: 1)
-            }
-        }
-        .buttonStyle(.plain)
-        .frame(minHeight: 44)
-        .padding(.horizontal, Theme.Layout.contentInset)
-    }
-#endif
 
     private var lxLoadedBody: some View {
         LazyVStack(alignment: .leading, spacing: 22) {

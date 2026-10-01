@@ -882,6 +882,7 @@ final class PlayerService: ObservableObject {
         }
         scrobbleIfNeeded(completed: false)
         currentTrack = track
+        LocalPlaylistStore.shared.recordRecent(track)
         WidgetSnapshotStore.update(track: track, lyric: nil)
         progress = resumeAt ?? 0
         lastLiveActivityProgress = progress - 5

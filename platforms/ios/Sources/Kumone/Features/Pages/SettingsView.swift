@@ -16,7 +16,6 @@ struct SettingsView: View {
     @ObservedObject private var backgroundStore = BackgroundImageStore.shared
 #endif
     @State private var cacheSize = "计算中…"
-    private let afdianURL = URL(string: "https://afdian.com/a/moumou2026")!
     @State private var showEqualizer = false
     @ObservedObject private var equalizer = MoumusicEqualizer.shared
 #if os(iOS)
@@ -32,7 +31,7 @@ struct SettingsView: View {
     @State private var expandedSections: Set<String> = [
         "audio", "accounts", "playback", "home", "sources",
         "appearance", "player", "background", "lyrics",
-        "storage", "updates", "about", "support"
+        "storage", "updates", "about"
     ]
 
     var body: some View {
@@ -80,6 +79,11 @@ struct SettingsView: View {
 
 #if os(iOS)
             SettingsDisclosureSection("账号与同步", isExpanded: sectionBinding("accounts")) {
+                NavigationLink {
+                    LXSyncSettingsView()
+                } label: {
+                    Label("LX 多设备同步", systemImage: "arrow.triangle.2.circlepath")
+                }
                 NavigationLink(value: Destination.accountSync) {
                     Label("账号同步", systemImage: "person.crop.circle.badge.checkmark")
                 }
@@ -213,6 +217,9 @@ struct SettingsView: View {
 
             SettingsDisclosureSection("主题模式", isExpanded: sectionBinding("appearance")) {
                 AppearancePicker(selection: $settings.appearance)
+                Text("Liquid Glass 的透明度与着色由 iPhone 的系统显示设置控制；iMusic 使用原生玻璃组件并跟随系统偏好。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
 #if os(iOS)
@@ -355,55 +362,12 @@ struct SettingsView: View {
             }
 
             SettingsDisclosureSection("关于", isExpanded: sectionBinding("about")) {
-                LabeledContent("Moumusic", value: appVersion)
+                LabeledContent("iMusic", value: appVersion)
                 Text("播放、歌词和封面支持用户导入的 LX User API 音源。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            SettingsDisclosureSection("赞赏与支持", isExpanded: sectionBinding("support")) {
-#if os(iOS)
-                supportLink
-#else
-                Link(destination: afdianURL) {
-                    HStack(spacing: 12) {
-                        CachedAsyncImage(
-                            url: URL(string: "https://afdian.com/favicon.ico"),
-                            animated: false
-                        ) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                    .fill(Color.orange.opacity(0.16))
-                                Image(systemName: "heart.fill")
-                                    .font(.title3.weight(.semibold))
-                                    .foregroundStyle(.orange)
-                            }
-                        }
-                        .frame(width: 48, height: 48)
-                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("在爱发电支持 Moumusic")
-                                .font(.headline.weight(.semibold))
-                                .foregroundStyle(.primary)
-                            Text("每一份支持都会帮助我继续维护项目")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        Spacer(minLength: 8)
-                        Image(systemName: "arrow.up.right")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.orange)
-                    }
-                    .padding(.vertical, 6)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("在爱发电支持 Moumusic")
-                .accessibilityHint("打开爱发电支持页面")
-#endif
-            }
         }
         .formStyle(.grouped)
 #if os(iOS)
@@ -455,31 +419,6 @@ struct SettingsView: View {
     }
 
 #if os(iOS)
-    private var supportLink: some View {
-        NavigationLink {
-            AfdianSupportView()
-        } label: {
-            HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .fill(Color.orange.opacity(0.16))
-                    .overlay {
-                        Image(systemName: "heart.fill")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.orange)
-                    }
-                    .frame(width: 48, height: 48)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("赞助者名单与支持")
-                        .font(.headline.weight(.semibold))
-                    Text("查看真实支持者、金额并在应用内支持")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
     private var sourceManagerRow: some View {
         Button {
             showSourceManager = true

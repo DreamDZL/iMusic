@@ -122,7 +122,7 @@ final class LXSourceStore: ObservableObject {
         }
 
         var request = URLRequest(url: url)
-        request.setValue("Moumusic LX source importer", forHTTPHeaderField: "User-Agent")
+        request.setValue("iMusic LX source importer", forHTTPHeaderField: "User-Agent")
         request.setValue("text/plain, application/json, application/javascript, */*", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 30
         let (data, response) = try await URLSession.shared.data(for: request)

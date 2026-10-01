@@ -9,7 +9,7 @@ import UIKit
 struct NowPlayingView: View {
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
-    @EnvironmentObject private var account: AccountStore
+    @ObservedObject private var localLibrary = LocalPlaylistStore.shared
     @EnvironmentObject private var settings: SettingsManager
     #if os(iOS)
     @ObservedObject private var backgroundStore = BackgroundImageStore.shared
@@ -779,12 +779,12 @@ struct NowPlayingView: View {
         // the row scale to any width instead.
         HStack(spacing: 0) {
             if let track = player.currentTrack {
-                let liked = account.isLiked(track.id)
+                let liked = localLibrary.isFavorite(track)
                 circleButton(
                     icon: liked ? "heart.fill" : "heart",
                     size: 15, tint: liked ? Theme.accent : nil
                 ) {
-                    Task { await account.toggleLike(trackID: track.id) }
+                    localLibrary.toggleFavorite(track)
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -1414,7 +1414,7 @@ private struct ImmersiveArtworkFramePreferenceKey: PreferenceKey {
 
 private struct CompactTrackHeader: View {
     @EnvironmentObject private var player: PlayerService
-    @EnvironmentObject private var account: AccountStore
+    @ObservedObject private var localLibrary = LocalPlaylistStore.shared
     @EnvironmentObject private var settings: SettingsManager
     @State private var showAddToPlaylist = false
     @State private var showComments = false
@@ -1461,10 +1461,10 @@ private struct CompactTrackHeader: View {
             .accessibilityIdentifier("immersiveTrackMetadata")
 
             if let track = player.currentTrack {
-                let liked = account.isLiked(track.id)
+                let liked = localLibrary.isFavorite(track)
                 HStack(spacing: 0) {
                     Button {
-                        Task { await account.toggleLike(trackID: track.id) }
+                        localLibrary.toggleFavorite(track)
                     } label: {
                         Image(systemName: liked ? "heart.fill" : "heart")
                             .font(.system(size: 21, weight: .medium))
@@ -2233,7 +2233,7 @@ private struct MinimalLyricCentersKey: PreferenceKey {
 
 private struct MinimalTrackInfoRow: View {
     @EnvironmentObject private var player: PlayerService
-    @EnvironmentObject private var account: AccountStore
+    @ObservedObject private var localLibrary = LocalPlaylistStore.shared
     @State private var showAddToPlaylist = false
     @State private var airPlayRequest = 0
     var metadataOnly = false
@@ -2296,9 +2296,9 @@ private struct MinimalTrackInfoRow: View {
     }
 
     private func favoriteButton(for track: Track) -> some View {
-        let liked = account.isLiked(track.id)
+        let liked = localLibrary.isFavorite(track)
         return Button {
-            Task { await account.toggleLike(trackID: track.id) }
+            localLibrary.toggleFavorite(track)
         } label: {
             Image(systemName: liked ? "heart.fill" : "heart")
                 .font(.system(size: 22, weight: .medium))

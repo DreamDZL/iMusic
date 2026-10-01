@@ -3,9 +3,10 @@ import UniformTypeIdentifiers
 
 struct LocalPlaylistsView: View {
     @StateObject private var store = LocalPlaylistStore.shared
-    @EnvironmentObject private var account: AccountStore
     @State private var showImport = false
     @State private var showCreate = false
+    @State private var showSourceManager = false
+    @State private var showReorderPlaylists = false
     @State private var newName = ""
 
     var body: some View {
@@ -15,6 +16,8 @@ struct LocalPlaylistsView: View {
                     likedSongsRow
                 }
                 .buttonStyle(.plain)
+
+                libraryShortcuts
 
                 if store.playlists.isEmpty {
                     VStack(spacing: 14) {
@@ -64,9 +67,29 @@ struct LocalPlaylistsView: View {
             .padding(.top, 14)
             PlayerClearanceSpacer()
         }
-        .navigationTitle("本地歌单")
+        .navigationTitle("资料库")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                Menu {
+                    Button {
+                        showReorderPlaylists = true
+                    } label: {
+                        Label("调整歌单顺序", systemImage: "line.3.horizontal")
+                    }
+                    Button {
+                        showSourceManager = true
+                    } label: {
+                        Label("管理 LX 音源", systemImage: "waveform.badge.plus")
+                    }
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        Label("设置", systemImage: "gearshape")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .accessibilityLabel("更多资料库选项")
+                }
                 Button {
                     showImport = true
                 } label: {
@@ -79,6 +102,14 @@ struct LocalPlaylistsView: View {
                 }
             }
         }
+        .sheet(isPresented: $showSourceManager) {
+            NavigationStack {
+                LXSourceManagerView()
+            }
+        }
+        .sheet(isPresented: $showReorderPlaylists) {
+            ReorderLocalPlaylistsSheet()
+        }
         .sheet(isPresented: $showImport) {
             ImportPlaylistSheet()
         }
@@ -90,6 +121,41 @@ struct LocalPlaylistsView: View {
             }
             Button("取消", role: .cancel) { newName = "" }
         }
+    }
+
+    private var libraryShortcuts: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                libraryShortcut("最近播放", icon: "clock.arrow.circlepath", destination: .recents)
+                libraryShortcut("我的收藏", icon: "square.grid.2x2", destination: .collections)
+                NavigationLink {
+                    LXSyncSettingsView()
+                } label: {
+                    Label("同步资料库", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 42)
+                        .background(.thinMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, Theme.Layout.contentInset)
+        }
+    }
+
+    private func libraryShortcut(
+        _ title: String,
+        icon: String,
+        destination: Destination
+    ) -> some View {
+        NavigationLink(value: destination) {
+            Label(title, systemImage: icon)
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 14)
+                .frame(minHeight: 42)
+                .background(.thinMaterial, in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private var likedSongsRow: some View {
@@ -131,9 +197,8 @@ struct LocalPlaylistsView: View {
     }
 
     private var likedSongsSubtitle: String {
-        guard account.isLoggedIn else { return "登录网易云后同步红心歌曲" }
-        let count = account.likedTrackIDs.count
-        return count == 0 ? "暂无红心歌曲" : "\(count) 首红心歌曲 · 云端同步"
+        let count = store.favoriteTracks.count
+        return count == 0 ? "收藏的歌曲会保存在这里" : "\(count) 首歌曲 · 可通过 LX Sync 同步"
     }
 
     private func playlistRow(_ playlist: LocalPlaylist) -> some View {
@@ -172,22 +237,17 @@ struct LocalPlaylistsView: View {
 }
 
 struct LikedSongsView: View {
-    @EnvironmentObject private var account: AccountStore
+    @StateObject private var store = LocalPlaylistStore.shared
     @EnvironmentObject private var player: PlayerService
+    @EnvironmentObject private var account: AccountStore
     @Environment(\.openLogin) private var openLogin
-
-    @State private var tracks: [Track] = []
     @State private var query = ""
-    @State private var isLoading = false
-    @State private var errorMessage: String?
-    #if os(iOS)
-    @State private var showDownloadOptions = false
-    #endif
+    @State private var isImportingAccountFavorites = false
 
     private var visibleTracks: [Track] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return tracks }
-        return tracks.filter { track in
+        guard !query.isEmpty else { return store.favoriteTracks }
+        return store.favoriteTracks.filter { track in
             track.name.localizedCaseInsensitiveContains(query)
                 || track.artistNames.localizedCaseInsensitiveContains(query)
                 || track.album.name.localizedCaseInsensitiveContains(query)
@@ -199,27 +259,28 @@ struct LikedSongsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 header
 
-                if !account.isLoggedIn {
-                    loginState
-                } else if isLoading && tracks.isEmpty {
-                    VStack(spacing: 14) {
+                Button(action: importAccountFavorites) {
+                    if isImportingAccountFavorites {
                         ProgressView()
-                            .controlSize(.large)
-                        Text("正在读取红心歌曲")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Label("从网易云导入红心", systemImage: "icloud.and.arrow.down")
                     }
-                    .frame(maxWidth: .infinity, minHeight: 260)
-                } else if let errorMessage, tracks.isEmpty {
-                    ErrorStateView(message: errorMessage) {
-                        Task { await loadTracks() }
-                    }
-                    .frame(minHeight: 280)
-                } else if tracks.isEmpty {
+                }
+                .buttonStyle(.bordered)
+                .padding(.horizontal, Theme.Layout.contentInset)
+                .disabled(isImportingAccountFavorites)
+                Text("导入内容会成为 iMusic 本地副本，可随 LX Sync 同步；收藏和删除不会写回网易云账号。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Theme.Layout.contentInset)
+
+                if store.favoriteTracks.isEmpty {
                     EmptyStateView(
                         icon: "heart",
-                        title: "还没有红心歌曲",
-                        subtitle: "在歌曲播放页点红心，歌曲会同步出现在这里"
+                        title: "还没有收藏歌曲",
+                        subtitle: "在播放器或歌曲菜单中点按心形，即可将歌曲加入资料库"
                     )
                     .frame(minHeight: 260)
                 } else {
@@ -255,37 +316,28 @@ struct LikedSongsView: View {
                     } label: {
                         Label("播放全部", systemImage: "play.fill")
                     }
-
-                    #if os(iOS)
-                    Button {
-                        showDownloadOptions = true
-                    } label: {
-                        Label("批量下载", systemImage: "arrow.down.circle")
-                    }
-                    #endif
-                }
-
-                Button {
-                    Task { await loadTracks() }
-                } label: {
-                    Label("刷新红心歌曲", systemImage: "arrow.clockwise")
                 }
             }
         }
-        .searchable(text: $query, prompt: "搜索红心歌曲")
-        .task(id: account.likedTrackIDs) {
-            await account.refreshForOpen()
-            await loadTracks()
+        .searchable(text: $query, prompt: "搜索收藏歌曲")
+    }
+
+    private func importAccountFavorites() {
+        guard !isImportingAccountFavorites else { return }
+        guard account.hasAuthCookie else {
+            openLogin()
+            return
         }
-        .refreshable {
-            await account.refreshLibrary()
-            await loadTracks()
+        isImportingAccountFavorites = true
+        Task {
+            defer { isImportingAccountFavorites = false }
+            do {
+                let report = try await account.importLikedSongsToLocalLibrary()
+                ToastCenter.shared.show("已检查网易云红心 \(report.remoteCount) 首，新增 \(report.addedCount) 首")
+            } catch {
+                ToastCenter.shared.show(error.localizedDescription)
+            }
         }
-        #if os(iOS)
-        .sheet(isPresented: $showDownloadOptions) {
-            DownloadOptionsSheet(tracks: visibleTracks)
-        }
-        #endif
     }
 
     private var header: some View {
@@ -306,9 +358,7 @@ struct LikedSongsView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("我喜欢的音乐")
                     .font(.title3.weight(.bold))
-                Text(account.isLoggedIn
-                     ? "\(account.likedTrackIDs.count) 首 · 网易云云端同步"
-                     : "登录网易云后查看你的红心歌单")
+                Text("\(store.favoriteTracks.count) 首 · iMusic 资料库")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -316,67 +366,6 @@ struct LikedSongsView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, Theme.Layout.contentInset)
-    }
-
-    private var loginState: some View {
-        VStack(spacing: 14) {
-            EmptyStateView(
-                icon: "person.crop.circle.badge.plus",
-                title: "登录网易云查看红心歌曲",
-                subtitle: "红心歌单来自网易云账号，不会使用应用内置账号"
-            )
-            Button {
-                openLogin()
-            } label: {
-                Label("登录网易云", systemImage: "person.crop.circle.badge.checkmark")
-                    .frame(maxWidth: .infinity, minHeight: 44)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Theme.accent)
-            .padding(.horizontal, Theme.Layout.contentInset * 2)
-        }
-        .frame(maxWidth: .infinity, minHeight: 280)
-    }
-
-    @MainActor
-    private func loadTracks() async {
-        guard account.isLoggedIn else {
-            tracks = []
-            errorMessage = nil
-            return
-        }
-
-        let ids = account.likedTrackIDs.sorted(by: >)
-        guard !ids.isEmpty else {
-            tracks = []
-            errorMessage = nil
-            return
-        }
-
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
-
-        do {
-            var fetched: [Track] = []
-            for start in stride(from: 0, to: ids.count, by: 500) {
-                let chunk = Array(ids.dropFirst(start).prefix(500))
-                let response = try await NeteaseAPI.songDetails(ids: chunk)
-                let lookup = Dictionary(
-                    response.songs.map { ($0.id, $0.normalizedForLXPlayback()) },
-                    uniquingKeysWith: { first, _ in first }
-                )
-                fetched.append(contentsOf: chunk.compactMap { lookup[$0] })
-            }
-
-            tracks = fetched
-            if fetched.isEmpty {
-                errorMessage = "红心歌曲暂时无法读取，请稍后重试"
-            }
-        } catch {
-            tracks = []
-            errorMessage = "红心歌曲暂时无法读取，请检查网络后重试"
-        }
     }
 }
 
@@ -513,6 +502,7 @@ struct LocalPlaylistDetailView: View {
     @State private var showRename = false
     @State private var renameText = ""
     @State private var showAddTracks = false
+    @State private var showReorderTracks = false
     @State private var playlistQuery = ""
     @State private var isSelectingTracks = false
     @State private var selectedTrackKeys = Set<String>()
@@ -608,6 +598,11 @@ struct LocalPlaylistDetailView: View {
                     } label: {
                         Label("添加到歌单", systemImage: "text.badge.plus")
                     }
+                    Button {
+                        showReorderTracks = true
+                    } label: {
+                        Label("调整歌曲顺序", systemImage: "line.3.horizontal")
+                    }
                 }
                 Button {
                     renameText = store.playlist(id: playlistID)?.name ?? ""
@@ -632,6 +627,9 @@ struct LocalPlaylistDetailView: View {
                 let tracks = selectedTracks(from: playlist)
                 AddToPlaylistSheet(tracks: tracks.isEmpty ? playlist.tracks : tracks)
             }
+        }
+        .sheet(isPresented: $showReorderTracks) {
+            ReorderLocalTracksSheet(playlistID: playlistID)
         }
         #if os(iOS)
         .sheet(isPresented: $showSelectedDownload) {
@@ -687,5 +685,108 @@ struct LocalPlaylistDetailView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, Theme.Layout.contentInset)
+    }
+}
+
+private struct ReorderLocalPlaylistsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var store = LocalPlaylistStore.shared
+    @State private var editMode: EditMode = .active
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(store.playlists) { playlist in
+                    HStack(spacing: 12) {
+                        CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(128), animated: false)
+                            .frame(width: 48, height: 48)
+                            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(playlist.name).font(.body.weight(.medium)).lineLimit(1)
+                            Text("\(playlist.tracks.count) 首歌曲")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .onMove(perform: store.movePlaylists)
+                .onDelete { offsets in
+                    for playlist in offsets.sorted(by: >).map({ store.playlists[$0] }) {
+                        store.delete(id: playlist.id)
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .environment(\.editMode, $editMode)
+            .navigationTitle("歌单顺序")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    EditButton()
+                }
+            }
+        }
+        #if os(iOS)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        #endif
+    }
+}
+
+private struct ReorderLocalTracksSheet: View {
+    let playlistID: UUID
+
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var store = LocalPlaylistStore.shared
+    @State private var editMode: EditMode = .active
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let playlist = store.playlist(id: playlistID) {
+                    List {
+                        ForEach(playlist.tracks, id: \.playbackKey) { track in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(track.name).font(.body.weight(.medium)).lineLimit(1)
+                                Text(track.artistNames).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                        .onMove { offsets, destination in
+                            store.moveTracks(fromOffsets: offsets, toOffset: destination, in: playlistID)
+                        }
+                        .onDelete { offsets in
+                            guard let playlist = store.playlist(id: playlistID) else { return }
+                            store.remove(offsets.map { playlist.tracks[$0] }, from: playlistID)
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                    .environment(\.editMode, $editMode)
+                } else {
+                    EmptyStateView(icon: "music.note.list", title: "歌单不存在")
+                }
+            }
+            .navigationTitle("歌曲顺序")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    EditButton()
+                }
+            }
+        }
+        #if os(iOS)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        #endif
     }
 }

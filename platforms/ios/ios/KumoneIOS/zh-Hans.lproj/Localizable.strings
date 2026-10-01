@@ -189,8 +189,8 @@
 "当前账号" = "当前账号";
 "未登录" = "未登录";
 "关于" = "关于";
-"about.description" = "iOS 使用原生 Kumone SwiftUI 界面；播放解析支持用户导入的 LX User API 音源。";
-"iOS 使用原生 Kumone SwiftUI 界面；播放解析支持用户导入的 LX User API 音源。" = "iOS 使用原生 Kumone SwiftUI 界面；播放解析支持用户导入的 LX User API 音源。";
+"about.description" = "iOS 使用原生 iMusic SwiftUI 界面；播放解析支持用户导入的 LX User API 音源。";
+"iOS 使用原生 Kumone SwiftUI 界面；播放解析支持用户导入的 LX User API 音源。" = "iOS 使用原生 iMusic SwiftUI 界面；播放解析支持用户导入的 LX User API 音源。";
 "无损与 Hi-Res 是否可用取决于音源和账号权限。" = "无损与 Hi-Res 是否可用取决于音源和账号权限。";
 "首页推荐" = "首页推荐";
 "推荐来源" = "推荐来源";
@@ -262,7 +262,7 @@
 "音源设置" = "音源设置";
 "LX 音源" = "LX 音源";
 "同步我喜欢的音乐、歌单与每日推荐" = "同步我喜欢的音乐、歌单与每日推荐";
-"开启后，无法播放的歌曲会尝试 Kumone 的兼容解锁流程。" = "开启后，无法播放的歌曲会尝试 Kumone 的兼容解锁流程。";
+"开启后，无法播放的歌曲会尝试 iMusic 的兼容解锁流程。" = "开启后，无法播放的歌曲会尝试 iMusic 的兼容解锁流程。";
 "没有内置音源，请导入 LX User API 文件。" = "没有内置音源，请导入 LX User API 文件。";
 "未启用音源，可在这里导入" = "未启用音源，可在这里导入";
 "管理 / 导入 LX 音源" = "管理 / 导入 LX 音源";

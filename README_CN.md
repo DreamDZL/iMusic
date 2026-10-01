@@ -1,134 +1,76 @@
 <div align="center">
 
-<img src="platforms/ios/docs/icon.png" width="140" alt="Moumusic" />
+<img src="platforms/ios/docs/iMusicIcon.png" width="140" alt="iMusic" />
 
-# Moumusic
+# iMusic
 
-仅供学习，请支持正版！⚠️
+**原生 iOS 27 音乐客户端，采用 Apple Music 风格界面**
 
-For educational purposes only. Please support the original work! ⚠️
+SwiftUI · 系统 Liquid Glass · LX User API 音源 · LX Sync Server
 
-**面向 iOS 与 Android 的多音源音乐客户端**
-
-iOS 原生 SwiftUI · LX User API 音源 · Android LX Music Mobile
-
-[![Platform](https://img.shields.io/badge/platform-iOS%2016%2B%20%7C%20Android-blue?logo=apple)](#构建)
+[![Platform](https://img.shields.io/badge/platform-iOS%2027%2B-blue?logo=apple)](#构建)
 [![LGPL-3.0](https://img.shields.io/badge/license-LGPL--3.0-orange)](LICENSE)
 [![GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-orange)](COPYING)
 
 </div>
 
-[English](README.md) · **简体中文**
+iMusic 基于 [Moumusic](https://github.com/jiajia2222/Moumusic) 的原生 iOS 工程继续开发。主页面为“主页、新内容、搜索、资料库”，使用 SwiftUI 原生导航并跟随系统 Liquid Glass 外观。实际播放由用户自行导入的 LX User API 音源解析。
 
-Moumusic 是一个独立的跨平台音乐客户端：iOS 以 Kumone 的原生 SwiftUI 播放体验为基础，Android 使用 LX Music Mobile 客户端和音源协议。目录、推荐、搜索和歌单用于发现音乐，实际播放由用户自行导入并启用的 LX User API 音源完成。
+QQ 音乐和网易云公开歌单会导入为可编辑的本地副本。本地收藏和兼容歌单可通过自托管的 [LX Sync Server](https://github.com/lyswhut/lx-music-sync-server) 在设备间同步；修改不会写回 QQ 音乐或网易云账号。音源脚本由每台设备分别管理。
 
-> 本项目不内置或分发第三方音源地址，也不提供网易云登录。请只添加你有权使用的音源，并遵守相关服务条款和版权规定。
+登录网易云后，可在“我喜欢的音乐”中把账号红心复制到 iMusic 本地收藏。这是单向导入；之后的改动只保存在 iMusic 并可经 LX Sync 同步。
 
 ## 功能
 
-- 从 JSON、JavaScript 或在线链接导入 LX User API 音源
-- 音源可用性检测、启用、切换和删除
-- 酷我、酷狗、QQ 音乐、网易云、咪咕及 LX 聚合搜索
-- 通过用户音源解析播放、歌词、封面和音质选择
-- iOS 原生播放页、播放队列、同步歌词、锁屏控制和控制中心播放控制；CarPlay（需 Apple 授权后可选启用）
-- WidgetKit 当前歌词小组件，支持主屏幕和锁屏
-- 网易云公开目录：推荐、发现、歌单、评论和歌单导入
-- Android LX Music Mobile 原生音源管理、搜索、歌词、下载和播放
-- 简体中文与英文界面
+- Apple Music 风格的主页、新内容、搜索和资料库页面
+- 歌手、专辑与歌单详情，迷你播放器、全屏播放器、队列和同步歌词
+- 原生锁屏与控制中心播放控制
+- LX 音源文件/链接导入、检测、启停、切换、导出和删除
+- 多平台目录搜索与音源解析播放
+- 本地收藏、最近播放和可编辑歌单
+- QQ 音乐与网易云公开歌单导入为本地副本
+- 可选 LX Sync，支持兼容的收藏和歌单
+- iOS 27 原生 Liquid Glass；透明度、着色及辅助功能表现跟随 iPhone 系统设置
 
-## 添加音源
+## 音源与同步
 
-iOS：进入 **我的 → 设置 → LX 音源**，选择 **从文件导入** 或 **从在线链接导入**，然后选择并检测音源。Android 使用 LX Music Mobile 原有的音源管理页面。
+进入 **资料库 → 更多 → 管理 LX 音源**，可从文件或 URL 导入音源并检测可用性。仓库不会预置第三方音源地址。
 
-仓库不会预置第三方音源地址。用户导入的音源属于用户配置，请自行确认来源合法并遵守相关平台规定。
-
-## 安装
-
-从 [Releases](https://github.com/jiajia2222/Moumusic/releases) 下载最新构建。iOS 发布的是未签名 IPA，需要使用自己的证书、AltStore、SideStore、TrollStore 或其他侧载工具安装。
+进入 **资料库 → 同步资料库**，填写 LX Sync Server 地址和连接码。客户端同步兼容的收藏与歌单；LX Sync 不同步音源脚本，因此每台设备需要分别导入。QQ 音乐和网易云歌单仅作为本地副本保存，不会修改平台账号。
 
 ## 构建
 
-### Android
-
-```sh
-cd platforms/android
-npm ci
-npm run pack:android
-```
-
-### iOS
-
-需要 macOS 和 Xcode。工程使用 XcodeGen 生成 App 与 WidgetKit 扩展：
+iOS 应用需要 macOS 和 Xcode。使用 XcodeGen 生成 App 与 WidgetKit 扩展：
 
 ```sh
 cd platforms/ios/ios
 xcodegen generate
-xcodebuild -project KumoneIOS.xcodeproj -scheme KumoneIOS -configuration Release -sdk iphoneos build
+xcodebuild -project KumoneIOS.xcodeproj -scheme KumoneIOS -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO build
 ```
 
-#### CarPlay（可选）
-
-iOS 工程已同步 Kumone 0.3.16 的 CarPlay 播放队列、随机/循环、专辑与歌手跳转。由于 `com.apple.developer.carplay-audio` 是 Apple 受限能力，默认构建不会声明 CarPlay，也不会影响普通未签名 IPA。只有已经获得 Apple CarPlay Audio 授权、并使用匹配 App ID 与描述文件时，才在 `platforms/ios` 执行：
-
-```sh
-cd platforms/ios
-make configure-carplay
-cd ios
-xcodegen generate
-xcodebuild -project KumoneIOS.xcodeproj -scheme KumoneIOS -configuration Release -sdk iphoneos build
-```
-
-恢复普通构建：
-
-```sh
-cd platforms/ios
-make configure
-```
+最低部署版本为 iOS 27，适配目标为常规 iPhone 尺寸；当前不提供折叠屏专属布局。
 
 ## 项目结构
 
 ```text
 platforms/ios/
 ├── Sources/Kumone/
-│   ├── Core/API/          网易云目录 API 与 LX User API 桥接
-│   ├── Core/Models/       歌曲模型与歌词解析器
-│   ├── Core/Player/       队列、AVPlayer、歌词和系统播放状态
-│   ├── Core/Storage/      设置、账户和图片缓存
-│   ├── DesignSystem/      SwiftUI 颜色、卡片、玻璃效果和布局
-│   └── Features/          首页、搜索、音乐库、设置和播放页
-├── ios/                   iOS App 壳与 XcodeGen 配置
-├── ios/MoumusicWidget/    WidgetKit 当前歌词扩展
-├── Scripts/               iOS 打包和发布脚本
-└── docs/                  图标和产品截图
-platforms/android/         LX Music Mobile React Native 客户端
+│   ├── Core/API/          目录、歌单导入和 LX 音源桥接
+│   ├── Core/Models/       歌曲、歌单和歌词模型
+│   ├── Core/Player/       AVPlayer、队列、歌词和系统播放状态
+│   ├── Core/Storage/      本地资料库、音源配置和账号数据
+│   ├── Core/Sync/         LX Sync 数据模型与客户端
+│   ├── DesignSystem/      SwiftUI 主题和 Liquid Glass 辅助组件
+│   └── Features/          主页、新内容、搜索、资料库、设置和播放器
+├── ios/                   iOS App 壳、Widget 和 XcodeGen 配置
+└── docs/                  产品图标与截图
+platforms/android/         保留的上游子树，不属于 iMusic iOS 目标
 ```
 
-## 上游项目
+## 上游与许可证
 
-- [Kumone](https://github.com/missuo/kumone)：原生 SwiftUI 音乐客户端基础和 iOS 界面方向
-- [LX Music Mobile](https://github.com/lyswhut/lx-music-mobile)：音源协议和 Android 客户端
+- [Moumusic](https://github.com/jiajia2222/Moumusic)：原生 iOS 工程基础
+- [LX Music Mobile](https://github.com/lyswhut/lx-music-mobile)：LX 音源与数据协议参考
+- [LX Sync Server](https://github.com/lyswhut/lx-music-sync-server)：兼容的自托管同步服务
 
-Moumusic 的修改范围见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，上游代码和资源继续遵守各自原始许可证。
-
-## 许可证
-
-仓库附带完整的 [LGPL-3.0-only](LICENSE) 和 [GPL-3.0-only](COPYING) 文本。各源文件和组件按其声明使用对应许可证：Kumone 代码继续遵守 LGPL-3.0-only，LX Music Mobile 代码继续遵守 Apache-2.0。
-
-<h2 align="center">💖 支持 Moumusic</h2>
-
-<p align="center">
-  如果 Moumusic 对你有帮助，欢迎在爱发电支持项目持续维护。<br />
-  <a href="https://www.ifdian.net/a/moumou2026">
-    <img src="https://img.shields.io/badge/%E7%88%B1%E5%8F%91%E7%94%B5-%E6%94%AF%E6%8C%81%E9%A1%B9%E7%9B%AE-ff5c5c?style=for-the-badge&logo=heart&logoColor=white" alt="在爱发电支持项目" height="36" />
-  </a>
-</p>
-
-<h2 align="center">⭐ Star 趋势</h2>
-
-<a href="https://www.star-history.com/?type=date&repos=jiajia2222%2FMoumusic">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=jiajia2222/Moumusic&type=date&theme=dark&legend=top-left&sealed_token=7V-vJu1k6AepIoqrFLS3S_DCHmhVCY19DW-BjSBOohycTR2EimUmGUfb4oBZh4-uCd6-9dhU4c3uQEdcKsjrYn0D-zmPWVGpRHLEPiUn3MkSTCH7kxmoKQ" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=jiajia2222/Moumusic&type=date&legend=top-left&sealed_token=7V-vJu1k6AepIoqrFLS3S_DCHmhVCY19DW-BjSBOohycTR2EimUmGUfb4oBZh4-uCd6-9dhU4c3uQEdcKsjrYn0D-zmPWVGpRHLEPiUn3MkSTCH7kxmoKQ" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=jiajia2222/Moumusic&type=date&legend=top-left&sealed_token=7V-vJu1k6AepIoqrFLS3S_DCHmhVCY19DW-BjSBOohycTR2EimUmGUfb4oBZh4-uCd6-9dhU4c3uQEdcKsjrYn0D-zmPWVGpRHLEPiUn3MkSTCH7kxmoKQ" />
- </picture>
-</a>
+上游代码、资源和声明继续遵守各自许可证。详情见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)、[LICENSE](LICENSE) 和 [COPYING](COPYING)。

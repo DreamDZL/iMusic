@@ -18,7 +18,7 @@ struct MoumusicIOSApp: App {
 /// time; the coordinator still enforces the 12-hour limit and performs the
 /// same check when the app returns to the foreground.
 final class MoumusicAppDelegate: NSObject, UIApplicationDelegate {
-    static let providerRefreshIdentifier = "com.jiajia2222.moumusic.provider-refresh"
+    static let providerRefreshIdentifier = "com.jiajia2222.imusic.provider-refresh"
 
     func application(
         _ application: UIApplication,

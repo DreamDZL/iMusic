@@ -120,7 +120,7 @@ final class MoumusicPlaybackActivityManager {
     private func finish() async {
         guard let activity else { return }
         let finalState = lastState ?? MoumusicPlaybackActivityAttributes.ContentState(
-            title: "Moumusic",
+            title: "iMusic",
             artist: "",
             artworkURL: nil,
             elapsed: 0,

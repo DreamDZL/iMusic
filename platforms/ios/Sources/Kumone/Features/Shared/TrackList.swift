@@ -25,6 +25,7 @@ struct TrackRow: View {
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
+    @ObservedObject private var localLibrary = LocalPlaylistStore.shared
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @ScaledMetric(relativeTo: .body) private var compactArtworkSize: CGFloat = 48
     @ScaledMetric(relativeTo: .body) private var compactRowHeight: CGFloat = 64
@@ -257,6 +258,9 @@ struct TrackRow: View {
         Button("播放") { onPlay() }
         Button("下一首播放") {
             player.addToPlayNext(track)
+        }
+        Button(localLibrary.isFavorite(track) ? "取消收藏" : "加入我喜欢的音乐") {
+            localLibrary.toggleFavorite(track)
         }
 #if os(iOS)
         Button("下载") {

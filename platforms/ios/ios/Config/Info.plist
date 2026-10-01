@@ -17,13 +17,14 @@
         <dict>
             <key>CFBundleURLSchemes</key>
             <array>
+                <string>imusic</string>
                 <string>moumusic</string>
             </array>
         </dict>
     </array>
     <key>BGTaskSchedulerPermittedIdentifiers</key>
     <array>
-        <string>com.jiajia2222.moumusic.provider-refresh</string>
+        <string>com.jiajia2222.imusic.provider-refresh</string>
     </array>
     <key>UIFileSharingEnabled</key>
     <true/>

@@ -3,7 +3,7 @@
 name: KumoneIOS
 options:
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "27.0"
   createIntermediateGroups: true
 configFiles:
   Debug: Config/Debug.xcconfig
@@ -57,8 +57,8 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         PRODUCT_NAME: MoumusicWidget
         PRODUCT_MODULE_NAME: MoumusicWidget
-        PRODUCT_BUNDLE_IDENTIFIER: com.jiajia2222.moumusic.ios.widget
-        INFOPLIST_KEY_CFBundleDisplayName: Moumusic 歌词
+        PRODUCT_BUNDLE_IDENTIFIER: com.jiajia2222.imusic.ios.widget
+        INFOPLIST_KEY_CFBundleDisplayName: iMusic 歌词
         CODE_SIGN_ENTITLEMENTS: Config/MoumusicWidget.entitlements
         PROVISIONING_PROFILE_SPECIFIER: $(MOU_WIDGET_PROVISIONING_PROFILE)
 schemes:

@@ -157,7 +157,7 @@ struct IOSStartupSplashView: View {
                 }
 
                 VStack(spacing: 8) {
-                    Text("Moumusic")
+                    Text("iMusic")
                         .font(.title2.weight(.bold))
                         .foregroundStyle(.primary)
 
@@ -175,7 +175,7 @@ struct IOSStartupSplashView: View {
             .padding(.horizontal, 32)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(String(localized: "Moumusic 正在启动并预加载在线内容"))
+        .accessibilityLabel(String(localized: "iMusic 正在启动并预加载在线内容"))
         .onAppear {
             guard !reduceMotion else { return }
             withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {

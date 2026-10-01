@@ -194,7 +194,7 @@ struct ExploreView: View {
                 PlayerClearanceSpacer()
             }
         }
-        .navigationTitle("精选")
+        .navigationTitle("新内容")
         .task(id: "\(settings.homeRecommendationMode.rawValue)-\(settings.homeRecommendationPlatform.rawValue)") {
             model.prepare(platform: settings.homeRecommendationPlatform)
             await model.loadMore()

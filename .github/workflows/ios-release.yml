@@ -3,12 +3,14 @@ name: iOS unsigned release
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: xcode-27
     permissions:
       contents: write
 
@@ -40,7 +42,7 @@ jobs:
 
           echo "marketing_version=$version" >> "$GITHUB_OUTPUT"
           echo "build_number=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "Building Moumusic $version ($GITHUB_RUN_NUMBER)"
+          echo "Building iMusic $version ($GITHUB_RUN_NUMBER)"
 
       - name: Build unsigned iOS app
         working-directory: platforms/ios/ios
@@ -67,7 +69,7 @@ jobs:
         env:
           EXPECTED_VERSION: ${{ steps.version.outputs.marketing_version }}
         run: |
-          app="build/Build/Products/Release-iphoneos/MoumusicIOS.app"
+          app="build/Build/Products/Release-iphoneos/iMusic.app"
           actual="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist")"
           build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")"
           echo "Bundle version: $actual ($build)"
@@ -80,18 +82,18 @@ jobs:
         working-directory: platforms/ios/ios
         run: |
           mkdir -p dist/Payload
-          cp -R build/Build/Products/Release-iphoneos/MoumusicIOS.app dist/Payload/Moumusic.app
-          ditto -c -k --sequesterRsrc --keepParent dist/Payload dist/Moumusic-unsigned.ipa
+          cp -R build/Build/Products/Release-iphoneos/iMusic.app dist/Payload/iMusic.app
+          ditto -c -k --sequesterRsrc --keepParent dist/Payload dist/iMusic-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Moumusic-ios-unsigned
-          path: platforms/ios/ios/dist/Moumusic-unsigned.ipa
+          name: iMusic-ios-unsigned
+          path: platforms/ios/ios/dist/iMusic-unsigned.ipa
           if-no-files-found: error
 
       - name: Attach IPA to GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: platforms/ios/ios/dist/Moumusic-unsigned.ipa
+          files: platforms/ios/ios/dist/iMusic-unsigned.ipa

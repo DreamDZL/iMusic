@@ -3,7 +3,7 @@ import WidgetKit
 
 /// Small App Group snapshot shared by the app and the lyrics widget.
 enum WidgetSnapshotStore {
-    static let suiteName = "group.com.jiajia2222.moumusic"
+    static let suiteName = "group.com.jiajia2222.imusic"
     private static let trackTitleKey = "widget.track.title"
     private static let artistKey = "widget.track.artist"
     private static let lyricKey = "widget.lyric"

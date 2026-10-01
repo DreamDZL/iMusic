@@ -28,7 +28,7 @@ enum ReleaseChecker {
         let notes: String?
     }
 
-    private static let repository = "jiajia2222/Moumusic"
+    private static let repository = "DreamDZL/iMusic"
     static let releasesPage = URL(string: "https://github.com/\(repository)/releases/latest")!
 
     static var currentIdentity: AppIdentity {
@@ -54,7 +54,7 @@ enum ReleaseChecker {
     static func latest() async throws -> Release {
         var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("Moumusic-iOS", forHTTPHeaderField: "User-Agent")
+        request.setValue("iMusic-iOS", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 15
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {

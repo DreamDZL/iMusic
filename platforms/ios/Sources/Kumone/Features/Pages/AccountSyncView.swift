@@ -151,7 +151,7 @@ struct AccountSyncView: View {
                 syncMetric(title: "歌曲数", value: "\(syncStore.syncedTrackCount)")
                 syncMetric(title: "状态", value: "已开启")
             }
-            Text("播放歌曲达到有效时长后，Moumusic 会把匹配到的歌曲播放记录和时长同步到账号。没有可用账号音频时，LX 音源负责提供回退音频地址。")
+            Text("播放歌曲达到有效时长后，iMusic 会把匹配到的歌曲播放记录和时长同步到账号。没有可用账号音频时，LX 音源负责提供回退音频地址。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

@@ -3,29 +3,26 @@ import SwiftUI
 // MARK: - 最近播放
 
 struct RecentsView: View {
-    @State private var records: [PlayRecordItem] = []
-    @State private var week = false
-    @State private var isLoading = true
-
-    @EnvironmentObject private var account: AccountStore
+    @StateObject private var library = LocalPlaylistStore.shared
     @EnvironmentObject private var player: PlayerService
+    @State private var query = ""
+
+    private var visibleTracks: [Track] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return library.recentTracks }
+        return library.recentTracks.filter { track in
+            track.name.localizedCaseInsensitiveContains(query)
+                || track.artistNames.localizedCaseInsensitiveContains(query)
+                || track.album.name.localizedCaseInsensitiveContains(query)
+        }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Picker("", selection: $week) {
-                        Text("所有时间").tag(false)
-                        Text("最近一周").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 200)
-
-                    Spacer()
-
+                if !visibleTracks.isEmpty {
                     Button {
-                        player.play(tracks: records.map(\.song), source: .none, context: .recents)
+                        player.play(tracks: visibleTracks, source: .none)
                     } label: {
                         Label("播放全部", systemImage: "play.fill")
                             .font(.system(size: 12.5, weight: .semibold))
@@ -35,54 +32,29 @@ struct RecentsView: View {
                             .background(Theme.accentGradient, in: Capsule())
                     }
                     .buttonStyle(.pressable)
-                    .disabled(records.isEmpty)
+                    .padding(.horizontal, Theme.Layout.contentInset)
                 }
-                .padding(.horizontal, Theme.Layout.contentInset)
-                .padding(.top, 12)
 
-                if isLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, minHeight: 300)
-                } else if records.isEmpty {
-                    EmptyStateView(icon: "clock", title: "暂无播放记录")
+                if library.recentTracks.isEmpty {
+                    EmptyStateView(
+                        icon: "clock.arrow.circlepath",
+                        title: "暂无播放记录",
+                        subtitle: "开始播放后，最近听过的歌曲会出现在这里"
+                    )
                         .frame(minHeight: 300)
+                } else if visibleTracks.isEmpty {
+                    EmptyStateView(icon: "magnifyingglass", title: "没有匹配的歌曲")
+                        .frame(minHeight: 240)
                 } else {
-                    recordList
+                    TrackListView(tracks: visibleTracks, style: .compact)
                         .padding(.horizontal, Theme.Layout.contentInset - 10)
                 }
                 PlayerClearanceSpacer()
             }
+            .padding(.top, 12)
         }
         .navigationTitle("最近播放")
-        .task(id: week) {
-            await load()
-        }
-    }
-
-    private var recordList: some View {
-        LazyVStack(spacing: 1) {
-            ForEach(Array(records.enumerated()), id: \.element.song.id) { index, record in
-                TrackRow(
-                    track: record.song,
-                    index: index + 1,
-                    style: .compact,
-                    trailingText: String(localized: "\(record.playCount) 次")
-                ) {
-                    player.play(tracks: records.map(\.song), source: .none, startAt: record.song,
-                                   context: .recents)
-                }
-            }
-        }
-    }
-
-    private func load() async {
-        guard let uid = account.profile?.userId else {
-            isLoading = false
-            return
-        }
-        isLoading = records.isEmpty
-        records = (try? await NeteaseAPI.playRecords(uid: uid, week: week)) ?? []
-        isLoading = false
+        .searchable(text: $query, prompt: "搜索最近播放")
     }
 }
 

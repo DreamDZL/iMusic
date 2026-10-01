@@ -6,11 +6,11 @@
 // ==========================================
 // Project Identity
 // ==========================================
-PRODUCT_NAME = MoumusicIOS
-PRODUCT_BUNDLE_IDENTIFIER = com.jiajia2222.moumusic.ios
+PRODUCT_NAME = iMusic
+PRODUCT_BUNDLE_IDENTIFIER = com.jiajia2222.imusic.ios
 // PRODUCT_DISPLAY_NAME is not a real build setting; the Home Screen
 // name comes from CFBundleDisplayName.
-INFOPLIST_KEY_CFBundleDisplayName = Moumusic
+INFOPLIST_KEY_CFBundleDisplayName = iMusic
 INFOPLIST_KEY_CFBundleDevelopmentRegion = zh-Hans
 // Keep local/Xcode builds on the current public release. CI overrides this
 // with the version from the v* tag and verifies the final app bundle.
@@ -22,10 +22,10 @@ CODE_SIGN_STYLE = Automatic
 // ==========================================
 // Platform Configuration
 // ==========================================
-IPHONEOS_DEPLOYMENT_TARGET = 16.0
+IPHONEOS_DEPLOYMENT_TARGET = 27.0
 
 // (1 == iPhone, 2 == iPad)
-TARGETED_DEVICE_FAMILY = 1,2 
+TARGETED_DEVICE_FAMILY = 1
 
 // ==========================================
 // Info PLIST

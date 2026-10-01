@@ -26,10 +26,9 @@ public struct IOSMainWindow: View {
 
     @State private var selectedTab: IOSTab = .home
     @State private var homePath = NavigationPath()
-    @State private var explorePath = NavigationPath()
+    @State private var newPath = NavigationPath()
     @State private var searchPath = NavigationPath()
-    @State private var playlistsPath = NavigationPath()
-    @State private var settingsPath = NavigationPath()
+    @State private var libraryPath = NavigationPath()
 
     public init() {}
 
@@ -45,12 +44,18 @@ public struct IOSMainWindow: View {
             .tint(Theme.accent)
             .preferredColorScheme(settings.appearance.colorScheme)
             .animation(reduceMotion ? nil : AppAnimation.smooth, value: settings.appearance)
+            .transaction { transaction in
+                if reduceMotion {
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
+                }
+            }
             // Login is exposed on a separate account page. It is metadata
             // synchronisation only; audio URLs still come exclusively from LX.
             .environment(\.openLogin, {
-                selectedTab = .settings
-                settingsPath = NavigationPath()
-                settingsPath.append(Destination.accountSync)
+                selectedTab = .library
+                libraryPath = NavigationPath()
+                libraryPath.append(Destination.accountSync)
             })
             .task {
                 await startup.start(
@@ -58,6 +63,7 @@ public struct IOSMainWindow: View {
                     account: account,
                     settings: settings
                 )
+                await LXSyncService.shared.reconnectIfConfigured()
                 updateLog.presentIfNeeded()
 
                 if settings.autoCheckUpdates {
@@ -69,10 +75,11 @@ public struct IOSMainWindow: View {
                 Task { @MainActor in
                     await account.refreshForOpen()
                     await MusicSessionRefreshCoordinator.shared.refreshIfNeeded()
+                    await LXSyncService.shared.reconnectIfConfigured()
                 }
             }
             .onOpenURL { url in
-                guard url.scheme?.lowercased() == "moumusic" else { return }
+                guard ["imusic", "moumusic"].contains(url.scheme?.lowercased() ?? "") else { return }
                 player.showNowPlaying = true
             }
             .sheet(isPresented: $updater.showSheet) {
@@ -244,26 +251,22 @@ public struct IOSMainWindow: View {
     @available(iOS 26.0, *)
     private var iOS26TabView: some View {
         TabView(selection: $selectedTab) {
-            Tab("推荐", systemImage: "house", value: .home) {
+            Tab("主页", systemImage: "house", value: .home) {
                 tabStack(.home) { HomeView() }
             }
 
-            Tab("发现", systemImage: "square.grid.2x2", value: .explore) {
-                tabStack(.explore) { ExploreView() }
+            Tab("新内容", systemImage: "square.grid.2x2", value: .new) {
+                tabStack(.new) { ExploreView() }
             }
 
-            Tab("歌单", systemImage: "music.note.list", value: .playlists) {
-                tabStack(.playlists) { LocalPlaylistsView() }
-            }
-
-            Tab("设置", systemImage: "gearshape", value: .settings) {
-                tabStack(.settings) { SettingsView() }
-            }
-
-            // Keep a regular tab so iOS does not add the trailing search-tab
-            // exit X. SearchView still owns the native searchable field.
+            // Search stays a regular tab so the system doesn't add the
+            // dedicated search-tab exit control used by other tab designs.
             Tab("搜索", systemImage: "magnifyingglass", value: .search) {
                 tabStack(.search) { SearchView(query: "") }
+            }
+
+            Tab("资料库", systemImage: "square.stack", value: .library) {
+                tabStack(.library) { LocalPlaylistsView() }
             }
         }
         .toolbarBackground(.hidden, for: .tabBar)
@@ -272,10 +275,7 @@ public struct IOSMainWindow: View {
 
     private var customTabInterface: some View {
         ZStack(alignment: .bottom) {
-            // Construct only the selected page.  The previous ZStack built
-            // all five page trees during launch, including the playlist's LX
-            // source store and the search/FM state, even though the user had
-            // not opened those tabs yet.
+            // Construct only the selected page to keep launch work small.
             selectedPage
 
             VStack(spacing: 8) {
@@ -300,24 +300,21 @@ public struct IOSMainWindow: View {
         switch selectedTab {
         case .home:
             tabStack(.home) { HomeView() }
-        case .explore:
-            tabStack(.explore) { ExploreView() }
+        case .new:
+            tabStack(.new) { ExploreView() }
         case .search:
             tabStack(.search) { SearchView(query: "") }
-        case .playlists:
-            tabStack(.playlists) { LocalPlaylistsView() }
-        case .settings:
-            tabStack(.settings) { SettingsView() }
+        case .library:
+            tabStack(.library) { LocalPlaylistsView() }
         }
     }
 
     private func popToRoot(_ tab: IOSTab) {
         switch tab {
         case .home: homePath = NavigationPath()
-        case .explore: explorePath = NavigationPath()
+        case .new: newPath = NavigationPath()
         case .search: searchPath = NavigationPath()
-        case .playlists: playlistsPath = NavigationPath()
-        case .settings: settingsPath = NavigationPath()
+        case .library: libraryPath = NavigationPath()
         }
     }
 
@@ -347,25 +344,23 @@ public struct IOSMainWindow: View {
     private func binding(for tab: IOSTab) -> Binding<NavigationPath> {
         switch tab {
         case .home: return $homePath
-        case .explore: return $explorePath
+        case .new: return $newPath
         case .search: return $searchPath
-        case .playlists: return $playlistsPath
-        case .settings: return $settingsPath
+        case .library: return $libraryPath
         }
     }
 }
 
 enum IOSTab: Hashable {
-    case home, explore, search, playlists, settings
+    case home, new, search, library
 }
 
 extension IOSMainWindow {
     static let tabItems: [GlassTabBar.Item] = [
-        .init(tab: .home, title: "推荐", icon: "house"),
-        .init(tab: .explore, title: "发现", icon: "square.grid.2x2"),
+        .init(tab: .home, title: "主页", icon: "house"),
+        .init(tab: .new, title: "新内容", icon: "square.grid.2x2"),
         .init(tab: .search, title: "搜索", icon: "magnifyingglass"),
-        .init(tab: .playlists, title: "歌单", icon: "music.note.list"),
-        .init(tab: .settings, title: "设置", icon: "gearshape"),
+        .init(tab: .library, title: "资料库", icon: "square.stack"),
     ]
 }
 

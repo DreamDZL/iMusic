@@ -8,26 +8,31 @@ struct LocalPlaylist: Codable, Hashable, Identifiable {
     var sourceName: String?
     var tracks: [Track]
     let createdAt: Date
+    var updatedAt: Date?
     /// When present, this local playlist mirrors a user-selected cloud
     /// playlist. The source is intentionally explicit so another provider can
     /// be added without confusing it with a normal local import.
     var remoteSource: String?
     var remotePlaylistID: String?
     var remoteRevision: Int?
+    var lxSyncID: String?
 
     init(id: UUID = UUID(), name: String, coverURL: String? = nil,
          sourceName: String? = nil, tracks: [Track] = [], createdAt: Date = .now,
+         updatedAt: Date? = nil,
          remoteSource: String? = nil, remotePlaylistID: String? = nil,
-         remoteRevision: Int? = nil) {
+         remoteRevision: Int? = nil, lxSyncID: String? = nil) {
         self.id = id
         self.name = name
         self.coverURL = coverURL
         self.sourceName = sourceName
         self.tracks = tracks
         self.createdAt = createdAt
+        self.updatedAt = updatedAt
         self.remoteSource = remoteSource
         self.remotePlaylistID = remotePlaylistID
         self.remoteRevision = remoteRevision
+        self.lxSyncID = lxSyncID
     }
 }
 
@@ -52,22 +57,108 @@ final class LocalPlaylistStore: ObservableObject {
     static let shared = LocalPlaylistStore()
 
     @Published private(set) var playlists: [LocalPlaylist]
+    @Published private(set) var favoriteTracks: [Track]
+    @Published private(set) var recentTracks: [Track]
 
     private let key = "moumusic.localPlaylists.v1"
+    private let favoritesKey = "imusic.localFavorites.v1"
+    private let recentTracksKey = "imusic.recentTracks.v1"
 
     private init() {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        if let data = UserDefaults.standard.data(forKey: key),
-           let saved = try? decoder.decode([LocalPlaylist].self, from: data) {
-            playlists = saved
-        } else {
-            playlists = []
-        }
+        if let data = UserDefaults.standard.data(forKey: key) {
+            playlists = (try? decoder.decode([LocalPlaylist].self, from: data))
+                ?? (try? JSONDecoder().decode([LocalPlaylist].self, from: data))
+                ?? []
+        } else { playlists = [] }
+        if let data = UserDefaults.standard.data(forKey: favoritesKey) {
+            favoriteTracks = (try? JSONDecoder().decode([Track].self, from: data)) ?? []
+        } else { favoriteTracks = [] }
+        if let data = UserDefaults.standard.data(forKey: recentTracksKey) {
+            recentTracks = (try? JSONDecoder().decode([Track].self, from: data)) ?? []
+        } else { recentTracks = [] }
+    }
+
+    func recordRecent(_ track: Track) {
+        let normalized = track.normalizedForLXPlayback()
+        recentTracks.removeAll { $0.playbackKey == normalized.playbackKey }
+        recentTracks.insert(normalized, at: 0)
+        recentTracks = Array(recentTracks.prefix(100))
+        guard let data = try? JSONEncoder().encode(recentTracks) else { return }
+        UserDefaults.standard.set(data, forKey: recentTracksKey)
     }
 
     func playlist(id: UUID) -> LocalPlaylist? {
         playlists.first { $0.id == id }
+    }
+
+    func isFavorite(_ track: Track) -> Bool {
+        favoriteTracks.contains { $0.playbackKey == track.playbackKey }
+    }
+
+    func toggleFavorite(_ track: Track) {
+        if let index = favoriteTracks.firstIndex(where: { $0.playbackKey == track.playbackKey }) {
+            favoriteTracks.remove(at: index)
+        } else {
+            favoriteTracks.insert(track.normalizedForLXPlayback(), at: 0)
+        }
+        persistFavorites()
+    }
+
+    @discardableResult
+    func mergeFavorites(_ tracks: [Track]) -> Int {
+        var knownKeys = Set(favoriteTracks.map(\.playbackKey))
+        let additions = tracks
+            .map { $0.normalizedForLXPlayback() }
+            .filter { knownKeys.insert($0.playbackKey).inserted }
+        guard !additions.isEmpty else { return 0 }
+        favoriteTracks.append(contentsOf: additions)
+        persistFavorites()
+        return additions.count
+    }
+
+    /// Assign stable LX list identifiers once so local lists remain addressable
+    /// after another device merges them through the sync server.
+    func preparePlaylistsForLXSync() -> [LocalPlaylist] {
+        var changed = false
+        for index in playlists.indices where playlists[index].lxSyncID == nil {
+            playlists[index].lxSyncID = playlists[index].id.uuidString
+            changed = true
+        }
+        if changed { persist() }
+        return playlists
+    }
+
+    func replaceFromLXSync(playlists syncedPlaylists: [LXSyncUserPlaylist], favorites: [Track]) {
+        let currentBySyncID = Dictionary(
+            playlists.compactMap { playlist in playlist.lxSyncID.map { ($0, playlist) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+        playlists = syncedPlaylists.map { remote in
+            let current = currentBySyncID[remote.id]
+            let coverURL = remote.iMusicCoverURL
+                ?? remote.list.first(where: { $0.meta.picUrl != nil })?.meta.picUrl
+            let updatedAt = remote.locationUpdateTime.map {
+                Date(timeIntervalSince1970: TimeInterval($0) / 1_000)
+            } ?? current?.updatedAt ?? current?.createdAt ?? .now
+            return LocalPlaylist(
+                id: current?.id ?? UUID(),
+                name: remote.name,
+                coverURL: coverURL,
+                sourceName: remote.iMusicSourceName ?? remote.source,
+                tracks: remote.list.map { $0.track.normalizedForLXPlayback() },
+                createdAt: current?.createdAt ?? updatedAt,
+                updatedAt: updatedAt,
+                remoteSource: remote.source,
+                remotePlaylistID: remote.sourceListId,
+                remoteRevision: remote.locationUpdateTime,
+                lxSyncID: remote.id
+            )
+        }
+        favoriteTracks = favorites.map { $0.normalizedForLXPlayback() }
+        persist(notifySync: false)
+        persistFavorites(notifySync: false)
     }
 
     func containsRemotePlaylist(source: String, id: Int) -> Bool {
@@ -106,6 +197,7 @@ final class LocalPlaylistStore: ObservableObject {
             playlists[index].sourceName = sourceName
             playlists[index].tracks = normalizedTracks
             playlists[index].remoteRevision = revision
+            playlists[index].updatedAt = .now
             persist()
             return (old.id, false, true)
         }
@@ -140,6 +232,23 @@ final class LocalPlaylistStore: ObservableObject {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let index = playlists.firstIndex(where: { $0.id == id }) else { return }
         playlists[index].name = trimmed
+        playlists[index].updatedAt = .now
+        persist()
+    }
+
+    func movePlaylists(fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        Self.move(&playlists, fromOffsets: offsets, toOffset: destination)
+        let modifiedAt = Date()
+        for index in playlists.indices { playlists[index].updatedAt = modifiedAt }
+        persist()
+    }
+
+    func moveTracks(fromOffsets offsets: IndexSet, toOffset destination: Int, in playlistID: UUID) {
+        guard let index = playlists.firstIndex(where: { $0.id == playlistID }) else { return }
+        var tracks = playlists[index].tracks
+        Self.move(&tracks, fromOffsets: offsets, toOffset: destination)
+        playlists[index].tracks = tracks
+        playlists[index].updatedAt = .now
         persist()
     }
 
@@ -156,6 +265,7 @@ final class LocalPlaylistStore: ObservableObject {
             return
         }
         playlists[index].tracks.append(track)
+        playlists[index].updatedAt = .now
         persist()
         ToastCenter.shared.show("已添加到「\(playlists[index].name)」")
     }
@@ -176,7 +286,10 @@ final class LocalPlaylistStore: ObservableObject {
             added += 1
         }
 
-        if added > 0 { persist() }
+        if added > 0 {
+            playlists[index].updatedAt = .now
+            persist()
+        }
         return added
     }
 
@@ -184,6 +297,7 @@ final class LocalPlaylistStore: ObservableObject {
         guard let index = playlists.firstIndex(where: { $0.id == playlistID }) else { return }
         let key = trackKey(track)
         playlists[index].tracks.removeAll { trackKey($0) == key }
+        playlists[index].updatedAt = .now
         persist()
     }
 
@@ -192,6 +306,7 @@ final class LocalPlaylistStore: ObservableObject {
         let keys = Set(tracks.map(trackKey))
         guard !keys.isEmpty else { return }
         playlists[index].tracks.removeAll { keys.contains(trackKey($0)) }
+        playlists[index].updatedAt = .now
         persist()
     }
 
@@ -213,11 +328,22 @@ final class LocalPlaylistStore: ObservableObject {
         return text
     }
 
-    private func persist() {
+    private func persist(notifySync: Bool = true) {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(playlists) else { return }
         UserDefaults.standard.set(data, forKey: key)
+        if notifySync { notifyLXSync() }
+    }
+
+    private func persistFavorites(notifySync: Bool = true) {
+        guard let data = try? JSONEncoder().encode(favoriteTracks) else { return }
+        UserDefaults.standard.set(data, forKey: favoritesKey)
+        if notifySync { notifyLXSync() }
+    }
+
+    private func notifyLXSync() {
+        NotificationCenter.default.post(name: .iMusicLocalLibraryDidChange, object: nil)
     }
 
     private func trackKey(_ track: Track) -> String {
@@ -225,6 +351,25 @@ final class LocalPlaylistStore: ObservableObject {
         let mid = track.sourceMetadata["songmid"] ?? track.sourceMetadata["id"] ?? String(track.id)
         return "\(source)|\(mid)|\(track.name.lowercased())|\(track.artistNames.lowercased())"
     }
+
+    private static func move<Element>(
+        _ elements: inout [Element],
+        fromOffsets offsets: IndexSet,
+        toOffset destination: Int
+    ) {
+        guard !offsets.isEmpty else { return }
+        let validOffsets = offsets.filter { elements.indices.contains($0) }
+        guard !validOffsets.isEmpty else { return }
+        let moving = validOffsets.sorted().map { elements[$0] }
+        for index in validOffsets.sorted(by: >) { elements.remove(at: index) }
+        let movedBeforeDestination = validOffsets.filter { $0 < destination }.count
+        let insertionIndex = min(max(destination - movedBeforeDestination, 0), elements.count)
+        elements.insert(contentsOf: moving, at: insertionIndex)
+    }
+}
+
+extension Notification.Name {
+    static let iMusicLocalLibraryDidChange = Notification.Name("iMusicLocalLibraryDidChange")
 }
 
 private struct ImportedPlaylist {
