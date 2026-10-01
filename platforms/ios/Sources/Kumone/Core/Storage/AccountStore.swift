@@ -133,7 +133,9 @@ final class AccountStore: ObservableObject {
         if let profileUserID = profile?.userId {
             userID = profileUserID
         } else {
-            let remoteProfile = try await NeteaseAPI.userAccount()
+            guard let remoteProfile = try await NeteaseAPI.userAccount() else {
+                throw NeteaseAPIError.missingProfile
+            }
             profile = remoteProfile
             userID = remoteProfile.userId
         }

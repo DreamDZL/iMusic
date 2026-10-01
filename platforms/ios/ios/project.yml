@@ -73,5 +73,6 @@ schemes:
       config: Debug
       targets:
         - KumoneIOSUITests
+        - package: KumoneIOSPackage/KumoneIOSFeatureTests
     archive:
       config: Release

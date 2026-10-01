@@ -5,6 +5,7 @@ enum NeteaseAPIError: LocalizedError {
     case http(Int)
     case business(code: Int, message: String?)
     case needLogin
+    case missingProfile
     case decoding(String)
 
     var errorDescription: String? {
@@ -12,6 +13,7 @@ enum NeteaseAPIError: LocalizedError {
         case .http(let status): return String(localized: "网络错误 (\(status))")
         case .business(let code, let message): return message ?? String(localized: "接口错误 (\(code))")
         case .needLogin: return String(localized: "需要登录")
+        case .missingProfile: return String(localized: "网易云未返回账户资料，请重新登录后重试")
         case .decoding: return String(localized: "数据加载失败，请稍后重试")
         }
     }

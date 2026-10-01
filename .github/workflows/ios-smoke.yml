@@ -26,7 +26,7 @@ jobs:
           brew install xcodegen
           xcodegen generate
 
-      - name: Run iOS package tests on the latest simulator
+      - name: Run package and launch UI tests on the latest simulator
         working-directory: platforms/ios/ios
         run: |
           xcodebuild -list -project KumoneIOS.xcodeproj
@@ -39,27 +39,8 @@ jobs:
           echo "Using iPhone simulator: $SIMULATOR_ID"
           xcodebuild test \
             -project KumoneIOS.xcodeproj \
-            -scheme KumoneIOSFeature \
-            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
-            -derivedDataPath package-test-build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
-
-      - name: Run launch UI test on the latest simulator
-        working-directory: platforms/ios/ios
-        run: |
-          SIMULATOR_ID=$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ { print $2; exit }')
-          if [ -z "$SIMULATOR_ID" ]; then
-            echo "No available iPhone simulator was found"
-            xcrun simctl list devices available
-            exit 1
-          fi
-          echo "Using iPhone simulator: $SIMULATOR_ID"
-          xcodebuild test \
-            -project KumoneIOS.xcodeproj \
             -scheme KumoneIOS \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
             -derivedDataPath smoke-build \
-            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testExample \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
