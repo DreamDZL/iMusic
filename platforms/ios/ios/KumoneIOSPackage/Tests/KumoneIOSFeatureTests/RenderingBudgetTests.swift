@@ -97,6 +97,29 @@ final class RenderingBudgetTests: XCTestCase {
         ))
     }
 
+    func testArtworkPaletteTransitionRequiresForegroundFullVisualBudgetAndNoReduceMotion() {
+        XCTAssertTrue(RenderingBudget.permitsArtworkPaletteTransition(
+            isSceneActive: true,
+            allowsContinuousEffects: true,
+            reduceMotion: false
+        ))
+        XCTAssertFalse(RenderingBudget.permitsArtworkPaletteTransition(
+            isSceneActive: false,
+            allowsContinuousEffects: true,
+            reduceMotion: false
+        ))
+        XCTAssertFalse(RenderingBudget.permitsArtworkPaletteTransition(
+            isSceneActive: true,
+            allowsContinuousEffects: false,
+            reduceMotion: false
+        ))
+        XCTAssertFalse(RenderingBudget.permitsArtworkPaletteTransition(
+            isSceneActive: true,
+            allowsContinuousEffects: true,
+            reduceMotion: true
+        ))
+    }
+
     func testAudioAnalysisStopsWhenSceneOrPowerBudgetDoesNotPermitVisualEffects() {
         XCTAssertTrue(RenderingBudget.permitsAudioAnalysis(
             isSceneActive: true,

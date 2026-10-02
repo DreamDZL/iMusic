@@ -4,24 +4,13 @@ import MediaPlayer
 import UIKit
 #endif
 
-private struct ArtworkPaletteLayer: Identifiable {
-    let id: UUID
-    let colors: ArtworkColors
-    let weight: Double
-
-    init(id: UUID = UUID(), colors: ArtworkColors, weight: Double) {
-        self.id = id
-        self.colors = colors
-        self.weight = weight
-    }
-}
-
 /// Immersive full-window now-playing page: artwork-tinted gradient backdrop,
 /// large artwork on the left, big synced lyrics on the right.
 struct NowPlayingView: View {
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
     @ObservedObject private var localLibrary = LocalPlaylistStore.shared
+    @ObservedObject private var renderingBudget = RenderingBudget.shared
     @EnvironmentObject private var settings: SettingsManager
     #if os(iOS)
     @ObservedObject private var backgroundStore = BackgroundImageStore.shared
@@ -30,11 +19,7 @@ struct NowPlayingView: View {
     #endif
 
     @State private var artworkImage: PlatformImage?
-    @State private var colors: ArtworkColors = .fallback
-    @State private var currentPaletteLayerID = UUID()
-    @State private var previousArtworkLayers: [ArtworkPaletteLayer] = []
-    @State private var artworkPaletteTransitionStartedAt: TimeInterval?
-    @State private var artworkPaletteTransitionID = UUID()
+    @State private var artworkPalette = ArtworkPaletteTransition()
     @State private var activeIndex: Int?
     @State private var isUserScrolling = false
     @State private var resumeTask: Task<Void, Never>?
@@ -123,12 +108,12 @@ struct NowPlayingView: View {
         .task(id: player.currentTrack?.playbackKey) {
             await loadArtwork()
         }
-        .task(id: artworkPaletteTransitionID) {
-            let transitionID = artworkPaletteTransitionID
-            guard artworkPaletteTransitionStartedAt != nil else { return }
-            try? await Task.sleep(for: .milliseconds(800))
-            guard !Task.isCancelled, artworkPaletteTransitionID == transitionID else { return }
-            finishArtworkPaletteTransition(id: transitionID)
+        .task(id: artworkPalette.revision) {
+            let revision = artworkPalette.revision
+            guard artworkPalette.isTransitioning else { return }
+            try? await Task.sleep(for: .seconds(ArtworkPaletteTransition.duration))
+            guard !Task.isCancelled else { return }
+            artworkPalette.finishTransition(revision: revision)
         }
         #if os(iOS)
         .onAppear {
@@ -145,7 +130,17 @@ struct NowPlayingView: View {
         #endif
         .onChange(of: reduceMotion) { _, isEnabled in
             if isEnabled {
-                settleArtworkPaletteTransition()
+                artworkPalette.stopForReducedMotionOrPowerBudget()
+            }
+        }
+        .onChange(of: renderingBudget.allowsContinuousEffects) { _, isEnabled in
+            if !isEnabled {
+                artworkPalette.stopForReducedMotionOrPowerBudget()
+            }
+        }
+        .onChange(of: renderingBudget.isSceneActive) { _, isActive in
+            if !isActive {
+                artworkPalette.stopForReducedMotionOrPowerBudget()
             }
         }
         #if os(macOS)
@@ -228,10 +223,13 @@ struct NowPlayingView: View {
     }
 
     private var artworkBackdrop: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: artworkPaletteTransitionStartedAt == nil)) { _ in
+        TimelineView(.animation(
+            minimumInterval: renderingBudget.minimumAnimationInterval,
+            paused: !artworkPalette.isTransitioning
+        )) { _ in
             ZStack {
                 Color.black
-                ForEach(visibleArtworkPaletteLayers(at: ProcessInfo.processInfo.systemUptime)) { layer in
+                ForEach(artworkPalette.visibleLayers(at: ProcessInfo.processInfo.systemUptime)) { layer in
                     artworkGradient(for: layer.colors)
                         .opacity(layer.weight)
                         .blendMode(.plusLighter)
@@ -262,75 +260,16 @@ struct NowPlayingView: View {
     }
 
     private func transitionArtworkPalette(to next: ArtworkColors) {
-        guard next != colors else { return }
-        let transitionID = UUID()
-        artworkPaletteTransitionID = transitionID
-
-        guard !reduceMotion else {
-            replaceArtworkPaletteImmediately(with: next)
-            return
-        }
-
-        let now = ProcessInfo.processInfo.systemUptime
-        let visibleLayers = visibleArtworkPaletteLayers(at: now)
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            previousArtworkLayers = visibleLayers
-            colors = next
-            currentPaletteLayerID = UUID()
-            artworkPaletteTransitionStartedAt = now
-        }
-    }
-
-    private func visibleArtworkPaletteLayers(at now: TimeInterval) -> [ArtworkPaletteLayer] {
-        guard let startedAt = artworkPaletteTransitionStartedAt else {
-            return [ArtworkPaletteLayer(id: currentPaletteLayerID, colors: colors, weight: 1)]
-        }
-
-        let linearProgress = min(max((now - startedAt) / 0.8, 0), 1)
-        let progress = linearProgress * linearProgress * (3 - 2 * linearProgress)
-        var layers = previousArtworkLayers.map {
-            ArtworkPaletteLayer(id: $0.id, colors: $0.colors, weight: $0.weight * (1 - progress))
-        }
-        if progress > 0 {
-            layers.append(ArtworkPaletteLayer(id: currentPaletteLayerID, colors: colors, weight: progress))
-        }
-
-        let visibleLayers = layers.filter { $0.weight > 0.005 }
-        let totalWeight = visibleLayers.reduce(0) { $0 + $1.weight }
-        guard totalWeight > 0 else {
-            return [ArtworkPaletteLayer(id: currentPaletteLayerID, colors: colors, weight: 1)]
-        }
-        return visibleLayers.map {
-            ArtworkPaletteLayer(id: $0.id, colors: $0.colors, weight: $0.weight / totalWeight)
-        }
-    }
-
-    private func settleArtworkPaletteTransition() {
-        artworkPaletteTransitionID = UUID()
-        replaceArtworkPaletteImmediately(with: colors)
-    }
-
-    private func replaceArtworkPaletteImmediately(with palette: ArtworkColors) {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            colors = palette
-            currentPaletteLayerID = UUID()
-            previousArtworkLayers = []
-            artworkPaletteTransitionStartedAt = nil
-        }
-    }
-
-    private func finishArtworkPaletteTransition(id: UUID) {
-        guard artworkPaletteTransitionID == id else { return }
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            previousArtworkLayers = []
-            artworkPaletteTransitionStartedAt = nil
-        }
+        let allowsAnimation = RenderingBudget.permitsArtworkPaletteTransition(
+            isSceneActive: renderingBudget.isSceneActive,
+            allowsContinuousEffects: renderingBudget.allowsContinuousEffects,
+            reduceMotion: reduceMotion
+        )
+        artworkPalette.transition(
+            to: next,
+            at: ProcessInfo.processInfo.systemUptime,
+            allowsAnimation: allowsAnimation
+        )
     }
 
     private func loadArtwork() async {
@@ -745,7 +684,7 @@ struct NowPlayingView: View {
             CompactVolumeControl()
                 .padding(.horizontal, 2)
             MinimalTransportControls(
-                backdrop: colors,
+                backdrop: artworkPalette.colors,
                 showQueue: $showQueueOnMobile
             )
                 .padding(.horizontal, 2)

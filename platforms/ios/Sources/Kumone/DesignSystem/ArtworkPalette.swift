@@ -13,6 +13,166 @@ struct ArtworkColors: Equatable {
     )
 }
 
+@MainActor
+struct ArtworkPaletteLayer: Identifiable, Equatable {
+    let id: UUID
+    let colors: ArtworkColors
+    let weight: Double
+
+    init(id: UUID = UUID(), colors: ArtworkColors, weight: Double) {
+        self.id = id
+        self.colors = colors
+        self.weight = weight
+    }
+}
+
+/// Time-based palette interpolation that can be sampled at any moment. A new
+/// track snapshots the currently visible mixture, so rapid skips never jump
+/// back to the previous target palette.
+@MainActor
+struct ArtworkPaletteTransition {
+    static let duration: TimeInterval = 0.8
+    static let maximumVisibleLayers = 8
+    private static let minimumLayerWeight = 0.005
+
+    private(set) var colors: ArtworkColors = .fallback
+    private(set) var currentLayerID = UUID()
+    private(set) var aggregateLayerID = UUID()
+    private(set) var previousLayers: [ArtworkPaletteLayer] = []
+    private(set) var startedAt: TimeInterval?
+    private(set) var revision = 0
+
+    var isTransitioning: Bool { startedAt != nil }
+
+    mutating func transition(to next: ArtworkColors, at now: TimeInterval, allowsAnimation: Bool) {
+        guard next != colors else { return }
+        revision &+= 1
+
+        guard allowsAnimation else {
+            colors = next
+            currentLayerID = UUID()
+            aggregateLayerID = UUID()
+            previousLayers = []
+            startedAt = nil
+            return
+        }
+
+        previousLayers = visibleLayers(at: now)
+        colors = next
+        currentLayerID = UUID()
+        aggregateLayerID = UUID()
+        startedAt = now
+    }
+
+    func visibleLayers(at now: TimeInterval) -> [ArtworkPaletteLayer] {
+        guard let startedAt else {
+            return [ArtworkPaletteLayer(id: currentLayerID, colors: colors, weight: 1)]
+        }
+
+        let linearProgress = min(max((now - startedAt) / Self.duration, 0), 1)
+        let progress = linearProgress * linearProgress * (3 - 2 * linearProgress)
+        var layers = previousLayers.map {
+            ArtworkPaletteLayer(
+                id: $0.id,
+                colors: $0.colors,
+                weight: $0.weight * (1 - progress)
+            )
+        }
+        if progress > 0 {
+            layers.append(ArtworkPaletteLayer(id: currentLayerID, colors: colors, weight: progress))
+        }
+
+        let visible = layers.filter { $0.weight > Self.minimumLayerWeight }
+        let totalWeight = visible.reduce(0) { $0 + $1.weight }
+        guard totalWeight > 0 else {
+            return [ArtworkPaletteLayer(id: currentLayerID, colors: colors, weight: 1)]
+        }
+        let normalized = visible.map {
+            ArtworkPaletteLayer(id: $0.id, colors: $0.colors, weight: $0.weight / totalWeight)
+        }
+        return bounded(normalized)
+    }
+
+    mutating func finishTransition(revision expectedRevision: Int) {
+        guard isTransitioning, revision == expectedRevision else { return }
+        previousLayers = []
+        startedAt = nil
+    }
+
+    mutating func stopForReducedMotionOrPowerBudget() {
+        guard isTransitioning else { return }
+        revision &+= 1
+        currentLayerID = UUID()
+        aggregateLayerID = UUID()
+        previousLayers = []
+        startedAt = nil
+    }
+
+    private func bounded(_ layers: [ArtworkPaletteLayer]) -> [ArtworkPaletteLayer] {
+        guard layers.count > Self.maximumVisibleLayers else { return layers }
+
+        let ranked = layers.sorted {
+            if $0.weight == $1.weight { return $0.id.uuidString < $1.id.uuidString }
+            return $0.weight > $1.weight
+        }
+        let retained = Array(ranked.prefix(Self.maximumVisibleLayers - 1))
+        let folded = Array(ranked.dropFirst(Self.maximumVisibleLayers - 1))
+        let foldedWeight = folded.reduce(0) { $0 + $1.weight }
+        guard let first = folded.first, foldedWeight > 0 else { return retained }
+
+        var mergedColors = first.colors
+        var mergedWeight = first.weight
+        for layer in folded.dropFirst() {
+            mergedColors = mergedColors.weightedAverage(
+                with: layer.colors,
+                ownWeight: mergedWeight,
+                otherWeight: layer.weight
+            )
+            mergedWeight += layer.weight
+        }
+
+        return retained + [ArtworkPaletteLayer(
+            id: aggregateLayerID,
+            colors: mergedColors,
+            weight: foldedWeight
+        )]
+    }
+}
+
+@MainActor
+private extension ArtworkColors {
+    func weightedAverage(
+        with other: ArtworkColors,
+        ownWeight: Double,
+        otherWeight: Double
+    ) -> ArtworkColors {
+        let total = ownWeight + otherWeight
+        guard total > 0 else { return self }
+        return ArtworkColors(
+            primary: Self.weightedAverage(primary, with: other.primary, ownWeight: ownWeight, otherWeight: otherWeight, total: total),
+            secondary: Self.weightedAverage(secondary, with: other.secondary, ownWeight: ownWeight, otherWeight: otherWeight, total: total)
+        )
+    }
+
+    private static func weightedAverage(
+        _ color: Color,
+        with other: Color,
+        ownWeight: Double,
+        otherWeight: Double,
+        total: Double
+    ) -> Color {
+        let environment = EnvironmentValues()
+        let lhs = color.resolve(in: environment)
+        let rhs = other.resolve(in: environment)
+        return Color(
+            .sRGBLinear,
+            red: (Double(lhs.linearRed) * ownWeight + Double(rhs.linearRed) * otherWeight) / total,
+            green: (Double(lhs.linearGreen) * ownWeight + Double(rhs.linearGreen) * otherWeight) / total,
+            blue: (Double(lhs.linearBlue) * ownWeight + Double(rhs.linearBlue) * otherWeight) / total
+        )
+    }
+}
+
 enum ArtworkPalette {
     private static var cache: [String: ArtworkColors] = [:]
 

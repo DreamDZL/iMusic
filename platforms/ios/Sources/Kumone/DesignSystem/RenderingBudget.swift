@@ -73,6 +73,14 @@ final class RenderingBudget: ObservableObject {
         !lowPowerMode && thermalState == .nominal
     }
 
+    nonisolated static func permitsArtworkPaletteTransition(
+        isSceneActive: Bool,
+        allowsContinuousEffects: Bool,
+        reduceMotion: Bool
+    ) -> Bool {
+        isSceneActive && allowsContinuousEffects && !reduceMotion
+    }
+
     /// Word-by-word lyric highlighting is continuous decorative work. Keep it
     /// live only while playback is visible and the device has its full visual
     /// budget; the coarse playback observer still advances the active lyric
