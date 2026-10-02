@@ -69,6 +69,22 @@ enum PlaybackResolutionPolicy {
     }
 }
 
+/// Consistent stopped state when a selected track cannot reach playable audio.
+/// Keeping the elapsed position lets the user retry after fixing the source.
+struct PausedPlaybackState: Equatable {
+    let elapsed: TimeInterval
+    let nowPlayingRate: Double
+    let isPlaying: Bool
+    let preservesCurrentItemForRetry: Bool
+
+    init(elapsed: TimeInterval, preservingCurrentItemForRetry: Bool = false) {
+        self.elapsed = elapsed.isFinite ? max(0, elapsed) : 0
+        nowPlayingRate = 0
+        isPlaying = false
+        self.preservesCurrentItemForRetry = preservingCurrentItemForRetry
+    }
+}
+
 enum PlaybackQueuePolicy {
     static func insertionIndex(after currentIndex: Int, queueCount: Int) -> Int {
         min(max(currentIndex + 1, 0), max(queueCount, 0))
@@ -407,6 +423,7 @@ final class PlayerService: ObservableObject {
     private var isSceneActive = true
     private var endObserver: NSObjectProtocol?
     private var statusObservation: NSKeyValueObservation?
+    private var itemStatusObservation: NSKeyValueObservation?
     private var resolveGeneration = 0
     private var sourceResolutionTask: Task<Void, Never>?
     private var lyricsResolutionTask: Task<Void, Never>?
@@ -566,6 +583,36 @@ final class PlayerService: ObservableObject {
     private func syncLiveActivity(newTrack: Bool = false) {}
 #endif
 
+    /// Stop every playback surface when a track cannot start or the queue ends.
+    /// Keep the selected track and elapsed position available for retry.
+    private func settlePlaybackAsPaused(preservingCurrentItemForRetry: Bool = false) {
+        let state = PausedPlaybackState(
+            elapsed: progress,
+            preservingCurrentItemForRetry: preservingCurrentItemForRetry
+        )
+        engine.pause()
+#if os(iOS)
+        deactivateAudioSession()
+#endif
+        if !state.preservesCurrentItemForRetry {
+            itemStatusObservation?.invalidate()
+            itemStatusObservation = nil
+        }
+        progress = state.elapsed
+        isPlaying = state.isPlaying
+        NowPlayingManager.shared.updateElapsed(state.elapsed, rate: state.nowPlayingRate)
+        if state.preservesCurrentItemForRetry {
+            // AudioSession activation can fail while the resolved item and its
+            // tap are still ready to resume. Clear frozen bars and keep its
+            // tap mode and status observation intact.
+            AudioSpectrum.shared.reset()
+        } else {
+            AudioSpectrum.shared.markIdle()
+        }
+        syncLiveActivity()
+        persistState()
+    }
+
     /// Set while the user drags the seek bar so the time observer doesn't fight the thumb.
     var isScrubbing = false
 
@@ -696,17 +743,17 @@ final class PlayerService: ObservableObject {
 #endif
             isPlaying = false
             AudioSpectrum.shared.reset()
-        } else if engine.currentItem == nil {
-            // Restored session: re-resolve the source.
-            startPlaying(track, indexUnchanged: true)
+        } else if engine.currentItem == nil || engine.currentItem?.status == .failed {
+            // A restored session or failed resource needs a fresh URL. Retain
+            // the last position so source retries (including quality changes)
+            // resume where the user left off.
+            startPlaying(track, indexUnchanged: true, resumeAt: progress)
             return
         } else {
 #if os(iOS)
             guard activateAudioSession() else {
-                isPlaying = false
                 ToastCenter.shared.show("无法启用音频会话，请稍后重试")
-                NowPlayingManager.shared.updateElapsed(progress, rate: 0)
-                syncLiveActivity()
+                settlePlaybackAsPaused(preservingCurrentItemForRetry: true)
                 return
             }
 #endif
@@ -855,10 +902,8 @@ final class PlayerService: ObservableObject {
     private func resumePlaybackAfterSeek() -> Bool {
 #if os(iOS)
         guard activateAudioSession() else {
-            isPlaying = false
             ToastCenter.shared.show("无法启用音频会话，请稍后重试")
-            NowPlayingManager.shared.updateElapsed(progress, rate: 0)
-            syncLiveActivity()
+            settlePlaybackAsPaused(preservingCurrentItemForRetry: true)
             return false
         }
 #endif
@@ -1096,12 +1141,10 @@ final class PlayerService: ObservableObject {
                 if userInitiated {
                     ToastCenter.shared.show(String(localized: "已经是最后一首了"))
                 } else {
-                    isPlaying = false
 #if os(iOS)
                     deactivateAudioSession()
 #endif
-                    NowPlayingManager.shared.updateElapsed(progress, rate: 0)
-                    syncLiveActivity()
+                    settlePlaybackAsPaused()
                 }
                 return
             }
@@ -1189,6 +1232,8 @@ final class PlayerService: ObservableObject {
             NotificationCenter.default.removeObserver(old)
             endObserver = nil
         }
+        itemStatusObservation?.invalidate()
+        itemStatusObservation = nil
         scrobbleIfNeeded(completed: false)
         currentTrack = track
         LocalPlaylistStore.shared.recordRecent(track)
@@ -1272,17 +1317,13 @@ final class PlayerService: ObservableObject {
             ) {
                 guard generation == resolveGeneration else { return }
                 ToastCenter.shared.show("仅官方音源模式需要登录这首歌曲所属平台的账号")
-                isPlaying = false
-                NowPlayingManager.shared.updateElapsed(progress, rate: 0)
-                AudioSpectrum.shared.markIdle()
-                syncLiveActivity()
+                settlePlaybackAsPaused()
                 return
             }
             guard hasLXSource || (playbackMode != .thirdParty && hasOfficialAccount) else {
                 guard generation == resolveGeneration else { return }
                 ToastCenter.shared.show("请先登录账号或在设置 → LX 音源中选择播放音源")
-                isPlaying = false
-                syncLiveActivity()
+                settlePlaybackAsPaused()
                 return
             }
             if playbackMode != .thirdParty, hasOfficialAccount,
@@ -1327,8 +1368,7 @@ final class PlayerService: ObservableObject {
                 // A source-level error is not fixed by immediately trying five
                 // more queue entries. Keep the current song visible so the user
                 // can adjust the source or retry after reading the real error.
-                isPlaying = false
-                syncLiveActivity()
+                settlePlaybackAsPaused()
                 return
             }
             }
@@ -1369,8 +1409,7 @@ final class PlayerService: ObservableObject {
             if consecutiveFailures < 5 {
                 advanceToNext(userInitiated: false)
             } else {
-                isPlaying = false
-                syncLiveActivity()
+                settlePlaybackAsPaused()
             }
             return
         }
@@ -1414,6 +1453,16 @@ final class PlayerService: ObservableObject {
             }
         }
         engine.replaceCurrentItem(with: item)
+        itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] observedItem, _ in
+            guard observedItem.status == .failed else { return }
+            let itemID = ObjectIdentifier(observedItem)
+            let reason = observedItem.error?.localizedDescription
+            Task { @MainActor [weak self] in
+                self?.handlePlaybackItemFailure(
+                    itemID: itemID, reason: reason, generation: generation
+                )
+            }
+        }
         let seekPosition = seekCoordinator.takePendingPosition()
         if let seekPosition, seekPosition > 0 {
             let initialSeekGeneration = seekCoordinator.beginResolvedItemSeek()
@@ -1430,10 +1479,8 @@ final class PlayerService: ObservableObject {
         } else {
 #if os(iOS)
             guard activateAudioSession() else {
-                isPlaying = false
                 ToastCenter.shared.show("无法启用音频会话，请稍后重试")
-                NowPlayingManager.shared.updateElapsed(progress, rate: 0)
-                syncLiveActivity()
+                settlePlaybackAsPaused(preservingCurrentItemForRetry: true)
                 return
             }
 #endif
@@ -1453,12 +1500,35 @@ final class PlayerService: ObservableObject {
 #endif
         }
 
+        // A local file or signed provider URL may resolve successfully while
+        // AVFoundation rejects the actual resource. Check once after playback
+        // setup as well as observing later status changes, so a very fast
+        // failure cannot leave system playback controls stuck on "playing".
+        if item.status == .failed {
+            handlePlaybackItemFailure(
+                itemID: ObjectIdentifier(item),
+                reason: item.error?.localizedDescription,
+                generation: generation
+            )
+        }
+
 #if os(macOS)
         if let time = data?.time, time > 0 {
             duration = TimeInterval(time) / 1000
             NowPlayingManager.shared.updateMetadata(for: track, duration: duration)
         }
 #endif
+    }
+
+    private func handlePlaybackItemFailure(itemID: ObjectIdentifier,
+                                           reason: String?,
+                                           generation: Int) {
+        guard generation == resolveGeneration,
+              let currentItem = engine.currentItem,
+              ObjectIdentifier(currentItem) == itemID,
+              isPlaying else { return }
+        ToastCenter.shared.show("音频源无法播放\(reason.map { "：\($0)" } ?? "")")
+        settlePlaybackAsPaused()
     }
 
 #if os(iOS)
