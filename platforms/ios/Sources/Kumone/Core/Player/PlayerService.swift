@@ -311,6 +311,7 @@ final class PlayerService: ObservableObject {
         return t.isFinite ? t : progress
     }
     private var timeObserver: Any?
+    private var isSceneActive = true
     private var endObserver: NSObjectProtocol?
     private var statusObservation: NSKeyValueObservation?
     private var resolveGeneration = 0
@@ -387,8 +388,42 @@ final class PlayerService: ObservableObject {
         }
         #endif
 
+        installTimeObserver()
+
+        statusObservation = engine.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+            Task { @MainActor in
+                self?.isBuffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            }
+        }
+
+        NowPlayingManager.shared.attach(to: self)
+        restoreState()
+    }
+
+    nonisolated static func playbackTimeObserverInterval(isSceneActive: Bool) -> TimeInterval {
+        isSceneActive ? 0.2 : 1.0
+    }
+
+    /// Keep lyric and scrubber updates responsive in the foreground, while
+    /// reducing non-audio work during background audio playback.
+    func setSceneActive(_ active: Bool) {
+        guard isSceneActive != active else { return }
+        isSceneActive = active
+        guard runtimeStarted else { return }
+        installTimeObserver()
+    }
+
+    private func installTimeObserver() {
+        if let timeObserver {
+            engine.removeTimeObserver(timeObserver)
+            self.timeObserver = nil
+        }
+
         timeObserver = engine.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main
+            forInterval: CMTime(
+                seconds: Self.playbackTimeObserverInterval(isSceneActive: isSceneActive),
+                preferredTimescale: 600
+            ), queue: .main
         ) { [weak self] time in
             MainActor.assumeIsolated {
                 guard let self, !self.isScrubbing else { return }
@@ -412,15 +447,6 @@ final class PlayerService: ObservableObject {
                 }
             }
         }
-
-        statusObservation = engine.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
-            Task { @MainActor in
-                self?.isBuffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-            }
-        }
-
-        NowPlayingManager.shared.attach(to: self)
-        restoreState()
     }
 
 #if os(iOS)

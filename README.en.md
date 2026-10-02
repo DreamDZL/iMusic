@@ -30,7 +30,7 @@ QQ Music and NetEase public playlists are imported as editable local copies. Edi
 - QQ Music and NetEase public playlist imports as local copies
 - Optional LX Sync for compatible favorites and playlists
 - iOS 27 system Liquid Glass, with transparency and tint following iPhone display and accessibility settings
-- Some continuous decorative animations and audio spectrum analysis are throttled or paused for Low Power Mode, thermal pressure and inactive app scenes
+- Continuous decorative animations and audio spectrum analysis are throttled or paused for Low Power Mode, thermal pressure and inactive scenes. During background playback, progress and lyric-cursor callbacks slow from 0.2 to 1 second
 - Automatic New content refresh is throttled to at most once every ten minutes
 
 The default target does not include an in-app audio-download screen, Home Screen widgets or CarPlay integration. Playback Live Activities remain available. The player can reuse local audio files that are already present.

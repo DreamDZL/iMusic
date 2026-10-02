@@ -78,4 +78,17 @@ final class RenderingBudgetTests: XCTestCase {
         XCTAssertTrue(RenderingBudget.permitsAudioAnalysis(isSceneActive: true))
         XCTAssertFalse(RenderingBudget.permitsAudioAnalysis(isSceneActive: false))
     }
+
+    func testPlaybackProgressObserverSlowsDuringBackgroundAudio() {
+        XCTAssertEqual(
+            PlayerService.playbackTimeObserverInterval(isSceneActive: true),
+            0.2,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            PlayerService.playbackTimeObserverInterval(isSceneActive: false),
+            1.0,
+            accuracy: 0.0001
+        )
+    }
 }

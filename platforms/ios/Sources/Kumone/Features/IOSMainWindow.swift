@@ -63,6 +63,7 @@ public struct IOSMainWindow: View {
             })
             .task {
                 RenderingBudget.shared.setSceneActive(scenePhase == .active)
+                player.setSceneActive(scenePhase == .active)
                 await startup.start(
                     player: player,
                     account: account,
@@ -78,6 +79,7 @@ public struct IOSMainWindow: View {
             }
             .onChange(of: scenePhase) { phase in
                 RenderingBudget.shared.setSceneActive(phase == .active)
+                player.setSceneActive(phase == .active)
                 guard phase == .active else { return }
                 Task { @MainActor in
                     await account.refreshForOpen()
