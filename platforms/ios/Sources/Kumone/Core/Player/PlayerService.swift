@@ -410,8 +410,7 @@ final class PlayerService: ObservableObject {
     private var resolveGeneration = 0
     private var sourceResolutionTask: Task<Void, Never>?
     private var lyricsResolutionTask: Task<Void, Never>?
-    private var pendingSeek: TimeInterval?
-    private var seekGeneration = 0
+    private var seekCoordinator = PlaybackSeekCoordinator()
     private var consecutiveFailures = 0
     private var scrobbled = false
     private var startScrobbled = false
@@ -822,9 +821,9 @@ final class PlayerService: ObservableObject {
     }
 
     func seek(to seconds: TimeInterval, completion: (@MainActor () -> Void)? = nil) {
-        seekGeneration += 1
-        let generation = seekGeneration
         let target = seconds.isFinite ? max(0, seconds) : 0
+        let itemAvailable = !isResolvingSource && engine.currentItem != nil
+        let generation = seekCoordinator.beginSeek(to: target, itemAvailable: itemAvailable)
         progress = target
         updateLyricsCursor(at: target)
         NowPlayingManager.shared.updateElapsed(
@@ -833,20 +832,18 @@ final class PlayerService: ObservableObject {
         )
         syncLiveActivity()
 
-        guard !isResolvingSource, engine.currentItem != nil else {
+        guard itemAvailable else {
             // Keep a seek made while a source is resolving for the new item.
             // Calling AVPlayer.seek with no current item would silently lose it.
-            pendingSeek = target
             completion?()
             return
         }
 
-        pendingSeek = nil
         engine.currentItem?.cancelPendingSeeks()
         engine.seek(to: CMTime(seconds: target, preferredTimescale: 600),
                     toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
             Task { @MainActor in
-                if let self, finished, self.seekGeneration == generation, self.isPlaying {
+                if let self, finished, self.seekCoordinator.isCurrent(generation), self.isPlaying {
                     self.resumePlaybackAfterSeek()
                 }
                 completion?()
@@ -1147,6 +1144,7 @@ final class PlayerService: ObservableObject {
             progress = duration
             updateLyricsCursor(at: duration)
             pause()
+            seekCoordinator.invalidate()
             engine.replaceCurrentItem(with: nil)
             return
         }
@@ -1179,13 +1177,14 @@ final class PlayerService: ObservableObject {
         // Stop and detach the previous item before starting an asynchronous
         // URL/lyric resolution. Otherwise a fast next/previous tap leaves the
         // old AVPlayerItem audible until the new source responds.
-        engine.pause()
-        seekGeneration += 1
-        engine.currentItem?.cancelPendingSeeks()
+        PlaybackItemTransition.prepareForTrackChange(
+            player: engine,
+            coordinator: &seekCoordinator,
+            resumingAt: resumeAt
+        )
 #if os(iOS)
         deactivateAudioSession()
 #endif
-        engine.replaceCurrentItem(with: nil)
         if let old = endObserver {
             NotificationCenter.default.removeObserver(old)
             endObserver = nil
@@ -1193,9 +1192,7 @@ final class PlayerService: ObservableObject {
         scrobbleIfNeeded(completed: false)
         currentTrack = track
         LocalPlaylistStore.shared.recordRecent(track)
-        let initialPosition = resumeAt.map { $0.isFinite ? max(0, $0) : 0 }
-        progress = initialPosition ?? 0
-        pendingSeek = initialPosition
+        progress = seekCoordinator.initialPlaybackPosition
         duration = track.duration
         servedQuality = nil
         unblockSource = nil
@@ -1417,17 +1414,15 @@ final class PlayerService: ObservableObject {
             }
         }
         engine.replaceCurrentItem(with: item)
-        let seekPosition = pendingSeek
-        pendingSeek = nil
+        let seekPosition = seekCoordinator.takePendingPosition()
         if let seekPosition, seekPosition > 0 {
-            seekGeneration += 1
-            let initialSeekGeneration = seekGeneration
+            let initialSeekGeneration = seekCoordinator.beginResolvedItemSeek()
             engine.seek(to: CMTime(seconds: seekPosition, preferredTimescale: 600),
                         toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                 Task { @MainActor in
                     guard let self, finished,
                           generation == self.resolveGeneration,
-                          initialSeekGeneration == self.seekGeneration,
+                          self.seekCoordinator.isCurrent(initialSeekGeneration),
                           self.isPlaying else { return }
                     guard self.resumePlaybackAfterSeek() else { return }
                 }
