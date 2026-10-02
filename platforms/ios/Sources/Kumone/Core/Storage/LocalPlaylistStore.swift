@@ -271,19 +271,21 @@ final class LocalPlaylistStore: ObservableObject {
     private let key = "moumusic.localPlaylists.v1"
     private let favoritesKey = "imusic.localFavorites.v1"
     private let recentTracksKey = "imusic.recentTracks.v1"
+    private let defaults: UserDefaults
 
-    private init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        if let data = UserDefaults.standard.data(forKey: key) {
+        if let data = defaults.data(forKey: key) {
             playlists = (try? decoder.decode([LocalPlaylist].self, from: data))
                 ?? (try? JSONDecoder().decode([LocalPlaylist].self, from: data))
                 ?? []
         } else { playlists = [] }
-        if let data = UserDefaults.standard.data(forKey: favoritesKey) {
+        if let data = defaults.data(forKey: favoritesKey) {
             favoriteTracks = (try? JSONDecoder().decode([Track].self, from: data)) ?? []
         } else { favoriteTracks = [] }
-        if let data = UserDefaults.standard.data(forKey: recentTracksKey) {
+        if let data = defaults.data(forKey: recentTracksKey) {
             recentTracks = (try? JSONDecoder().decode([Track].self, from: data)) ?? []
         } else { recentTracks = [] }
     }
@@ -294,7 +296,7 @@ final class LocalPlaylistStore: ObservableObject {
         recentTracks.insert(normalized, at: 0)
         recentTracks = Array(recentTracks.prefix(100))
         guard let data = try? JSONEncoder().encode(recentTracks) else { return }
-        UserDefaults.standard.set(data, forKey: recentTracksKey)
+        defaults.set(data, forKey: recentTracksKey)
     }
 
     func playlist(id: UUID) -> LocalPlaylist? {
@@ -592,7 +594,7 @@ final class LocalPlaylistStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(playlists) else { return }
-        UserDefaults.standard.set(data, forKey: key)
+        defaults.set(data, forKey: key)
         if notifySync { notifyLXSync() }
     }
 
@@ -603,7 +605,7 @@ final class LocalPlaylistStore: ObservableObject {
 
     private func persistFavorites(notifySync: Bool = true) {
         guard let data = try? JSONEncoder().encode(favoriteTracks) else { return }
-        UserDefaults.standard.set(data, forKey: favoritesKey)
+        defaults.set(data, forKey: favoritesKey)
         if notifySync { notifyLXSync() }
     }
 

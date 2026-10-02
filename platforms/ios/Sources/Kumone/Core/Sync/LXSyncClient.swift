@@ -172,6 +172,67 @@ private enum LXSyncSecureStore {
     }
 }
 
+@MainActor
+protocol LXSyncCredentialStore {
+    func load(account: String) -> Data?
+    func save(_ data: Data, account: String)
+    func removeAll()
+}
+
+@MainActor
+private struct LXSyncKeychainCredentialStore: LXSyncCredentialStore {
+    func load(account: String) -> Data? { LXSyncSecureStore.load(account: account) }
+    func save(_ data: Data, account: String) { LXSyncSecureStore.save(data, account: account) }
+    func removeAll() { LXSyncSecureStore.removeAll() }
+}
+
+@MainActor
+protocol LXSyncSocket: AnyObject {
+    var response: URLResponse? { get }
+    var closeCode: URLSessionWebSocketTask.CloseCode { get }
+    func resume()
+    func receive() async throws -> URLSessionWebSocketTask.Message
+    func send(_ message: URLSessionWebSocketTask.Message) async throws
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
+}
+
+@MainActor
+protocol LXSyncTransport: AnyObject {
+    func data(for request: URLRequest) async throws -> (Data, URLResponse)
+    func webSocketTask(with url: URL) -> LXSyncSocket
+}
+
+@MainActor
+private final class LXSyncURLSessionSocket: LXSyncSocket {
+    private let task: URLSessionWebSocketTask
+
+    init(task: URLSessionWebSocketTask) { self.task = task }
+
+    var response: URLResponse? { task.response }
+    var closeCode: URLSessionWebSocketTask.CloseCode { task.closeCode }
+    func resume() { task.resume() }
+    func receive() async throws -> URLSessionWebSocketTask.Message { try await task.receive() }
+    func send(_ message: URLSessionWebSocketTask.Message) async throws { try await task.send(message) }
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        task.cancel(with: closeCode, reason: reason)
+    }
+}
+
+@MainActor
+private final class LXSyncURLSessionTransport: LXSyncTransport {
+    private let session: URLSession
+
+    init(session: URLSession) { self.session = session }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        try await session.data(for: request)
+    }
+
+    func webSocketTask(with url: URL) -> LXSyncSocket {
+        LXSyncURLSessionSocket(task: session.webSocketTask(with: url))
+    }
+}
+
 /// LX Sync Server's v4 list protocol client. It preserves the server's
 /// `defaultList` while mapping iMusic local favorites and playlists to the
 /// compatible `loveList` and `userList` fields.
@@ -181,7 +242,7 @@ final class LXSyncService: ObservableObject {
 
     @Published var endpoint: String {
         didSet {
-            UserDefaults.standard.set(endpoint, forKey: Self.endpointKey)
+            defaults.set(endpoint, forKey: Self.endpointKey)
             if endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 stopNetworkMonitor()
             }
@@ -199,7 +260,7 @@ final class LXSyncService: ObservableObject {
     private static let lastSyncKey = "imusic.lxSync.lastSyncAt"
 
     private var listData: LXSyncListData
-    private var socket: URLSessionWebSocketTask?
+    private var socket: LXSyncSocket?
     private var receiveTask: Task<Void, Never>?
     private var handshakeTimeoutTask: Task<Void, Never>?
     private var pendingSnapshotTask: Task<Void, Never>?
@@ -222,30 +283,62 @@ final class LXSyncService: ObservableObject {
     private var hadNetworkPath: Bool?
     private var userRequestedDisconnect = false
     private var didFinishListSync = false
+    private let defaults: UserDefaults
+    private let localStore: LocalPlaylistStore
+    private let transport: LXSyncTransport
+    private let credentialStore: LXSyncCredentialStore
+    private let observesLibraryChanges: Bool
+    private let startsNetworkMonitor: Bool
 
-    private init() {
-        endpoint = UserDefaults.standard.string(forKey: Self.endpointKey) ?? ""
-        lastSyncAt = UserDefaults.standard.object(forKey: Self.lastSyncKey) as? Date
-        if let saved = UserDefaults.standard.data(forKey: Self.dataKey),
+    private convenience init() {
+        self.init(
+            defaults: .standard,
+            localStore: .shared,
+            transport: LXSyncURLSessionTransport(session: .shared),
+            credentialStore: LXSyncKeychainCredentialStore(),
+            observesLibraryChanges: true,
+            startsNetworkMonitor: true
+        )
+    }
+
+    init(
+        defaults: UserDefaults,
+        localStore: LocalPlaylistStore,
+        transport: LXSyncTransport,
+        credentialStore: LXSyncCredentialStore,
+        observesLibraryChanges: Bool = false,
+        startsNetworkMonitor: Bool = false
+    ) {
+        self.defaults = defaults
+        self.localStore = localStore
+        self.transport = transport
+        self.credentialStore = credentialStore
+        self.observesLibraryChanges = observesLibraryChanges
+        self.startsNetworkMonitor = startsNetworkMonitor
+        endpoint = defaults.string(forKey: Self.endpointKey) ?? ""
+        lastSyncAt = defaults.object(forKey: Self.lastSyncKey) as? Date
+        if let saved = defaults.data(forKey: Self.dataKey),
            let decoded = try? JSONDecoder().decode(LXSyncListData.self, from: saved) {
             listData = decoded
         } else {
             listData = LXSyncListData()
         }
-        if let codeData = LXSyncSecureStore.load(account: "connection-code"),
+        if let codeData = credentialStore.load(account: "connection-code"),
            let code = String(data: codeData, encoding: .utf8) {
             connectionCode = code
         }
-        libraryObserver = NotificationCenter.default.addObserver(
-            forName: .iMusicLocalLibraryDidChange,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.localLibraryDidChange()
+        if observesLibraryChanges {
+            libraryObserver = NotificationCenter.default.addObserver(
+                forName: .iMusicLocalLibraryDidChange,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.localLibraryDidChange()
+                }
             }
         }
-        updateNetworkMonitor()
+        if startsNetworkMonitor { updateNetworkMonitor() }
     }
 
     nonisolated static func permitsNetworkMonitoring(
@@ -263,6 +356,7 @@ final class LXSyncService: ObservableObject {
     }
 
     private func updateNetworkMonitor() {
+        guard startsNetworkMonitor else { return }
         let isConfigured = !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         guard Self.permitsNetworkMonitoring(
             endpointConfigured: isConfigured,
@@ -338,7 +432,7 @@ final class LXSyncService: ObservableObject {
         }
         let code = connectionCode.trimmingCharacters(in: .whitespacesAndNewlines)
         if code.isEmpty,
-           LXSyncSecureStore.load(account: "connection-code") == nil {
+           credentialStore.load(account: "connection-code") == nil {
             let error = LXSyncError.invalidConnectionCode
             lastError = error.localizedDescription
             statusMessage = "连接失败"
@@ -358,10 +452,10 @@ final class LXSyncService: ObservableObject {
             guard isCurrentConnection(generation) else { throw LXSyncError.disconnected }
             serverID = serviceID
             let savedCode = code.isEmpty
-                ? String(data: LXSyncSecureStore.load(account: "connection-code") ?? Data(), encoding: .utf8) ?? ""
+                ? String(data: credentialStore.load(account: "connection-code") ?? Data(), encoding: .utf8) ?? ""
                 : code
             let storedCode = String(
-                data: LXSyncSecureStore.load(account: "connection-code") ?? Data(),
+                data: credentialStore.load(account: "connection-code") ?? Data(),
                 encoding: .utf8
             ) ?? ""
             let key = try await authenticate(
@@ -373,18 +467,18 @@ final class LXSyncService: ObservableObject {
             guard isCurrentConnection(generation) else { throw LXSyncError.disconnected }
             keyInfo = key
             if !savedCode.isEmpty {
-                LXSyncSecureStore.save(Data(savedCode.utf8), account: "connection-code")
+                credentialStore.save(Data(savedCode.utf8), account: "connection-code")
             }
             let encoder = JSONEncoder()
             if let data = try? encoder.encode(key) {
-                LXSyncSecureStore.save(data, account: "key:\(serviceID)")
+                credentialStore.save(data, account: "key:\(serviceID)")
             }
 
             var authKey = try Self.decodeKey(key.key)
             let ticket = try Self.aesEncrypt(Data("lx-music connect".utf8), key: authKey)
             authKey.resetBytes(in: 0..<authKey.count)
             let requestURL = try address.socketURL(clientID: key.clientId, encryptedTicket: ticket.base64EncodedString())
-            let task = URLSession.shared.webSocketTask(with: requestURL)
+            let task = transport.webSocketTask(with: requestURL)
             socket = task
             activeSocketGeneration = generation
             task.resume()
@@ -441,13 +535,13 @@ final class LXSyncService: ObservableObject {
 
     func forgetServer() {
         disconnect()
-        LXSyncSecureStore.removeAll()
+        credentialStore.removeAll()
         serverID = nil
         keyInfo = nil
         connectionCode = ""
         endpoint = ""
         lastSyncAt = nil
-        UserDefaults.standard.removeObject(forKey: Self.lastSyncKey)
+        defaults.removeObject(forKey: Self.lastSyncKey)
     }
 
     fileprivate func localLibraryDidChange() {
@@ -462,8 +556,8 @@ final class LXSyncService: ObservableObject {
     }
 
     private func makeLocalListData() -> LXSyncListData {
-        let localPlaylists = LocalPlaylistStore.shared.preparePlaylistsForLXSync()
-        let favorites = LocalPlaylistStore.shared.favoriteTracks.map(LXSyncMusicInfo.init(track:))
+        let localPlaylists = localStore.preparePlaylistsForLXSync()
+        let favorites = localStore.favoriteTracks.map(LXSyncMusicInfo.init(track:))
         let previous = Dictionary(listData.userList.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let synced = localPlaylists.map { playlist -> LXSyncUserPlaylist in
             let syncID = playlist.lxSyncID ?? playlist.id.uuidString
@@ -491,7 +585,7 @@ final class LXSyncService: ObservableObject {
         listData = newData
         persistListData()
         applyingRemoteData = true
-        LocalPlaylistStore.shared.replaceFromLXSync(
+        localStore.replaceFromLXSync(
             playlists: newData.userList,
             favorites: newData.loveList.map(\.track)
         )
@@ -500,7 +594,7 @@ final class LXSyncService: ObservableObject {
 
     private func persistListData() {
         guard let data = try? listData.encodedJSON() else { return }
-        UserDefaults.standard.set(data, forKey: Self.dataKey)
+        defaults.set(data, forKey: Self.dataKey)
     }
 
     private func sendFullListSnapshot() async throws {
@@ -519,7 +613,7 @@ final class LXSyncService: ObservableObject {
     private func markSynced() {
         let now = Date()
         lastSyncAt = now
-        UserDefaults.standard.set(now, forKey: Self.lastSyncKey)
+        defaults.set(now, forKey: Self.lastSyncKey)
         lastError = nil
         statusMessage = "已同步"
     }
@@ -542,7 +636,7 @@ final class LXSyncService: ObservableObject {
         }
     }
 
-    private func startReceiving(from task: URLSessionWebSocketTask, generation: Int) {
+    private func startReceiving(from task: LXSyncSocket, generation: Int) {
         receiveTask?.cancel()
         receiveTask = Task { [weak self] in
             guard let self else { return }
@@ -1025,7 +1119,7 @@ final class LXSyncService: ObservableObject {
         forceConnectionCode: Bool
     ) async throws -> LXSyncKeyInfo {
         if !forceConnectionCode,
-           let cached = LXSyncSecureStore.load(account: "key:\(serverID)"),
+           let cached = credentialStore.load(account: "key:\(serverID)"),
            let savedKey = try? JSONDecoder().decode(LXSyncKeyInfo.self, from: cached) {
             do {
                 try await verifySavedKey(address, key: savedKey)
@@ -1083,7 +1177,7 @@ final class LXSyncService: ObservableObject {
     private func requestData(_ request: URLRequest) async throws -> (data: Data, statusCode: Int) {
         var request = request
         request.timeoutInterval = 15
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await transport.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw LXSyncError.invalidServerResponse }
         if http.statusCode == 403 { throw LXSyncError.server("服务器暂时封锁了此网络地址") }
         if http.statusCode == 401 { throw LXSyncError.authorizationFailed }
