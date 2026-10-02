@@ -86,7 +86,7 @@ struct LXSyncSettingsView: View {
             } footer: {
                 Text(sync.isConnected || sync.isConnecting
                      ? "更换服务器地址或连接码前，请先断开当前连接。首次连接会合并本机歌单与服务器列表。"
-                     : "填写你自行部署的 LX Sync Server 地址和连接码。首次连接会合并本机歌单与服务器列表。")
+                     : "填写你自行部署的 LX Sync Server 地址和连接码。连接局域网服务器时，请允许 iOS 访问本地网络。首次连接会合并本机歌单与服务器列表。")
             }
 
             Section {

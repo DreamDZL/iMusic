@@ -30,6 +30,8 @@
     <true/>
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>iMusic 需要访问本地网络，以连接你部署在局域网内的 LX Sync Server 并同步歌单与收藏。</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

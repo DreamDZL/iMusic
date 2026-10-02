@@ -200,23 +200,22 @@ struct NowPlayingView: View {
     }
 
     private var artworkBackdrop: some View {
-        ZStack {
-            LinearGradient(
-                colors: [colors.primary, colors.secondary],
-                startPoint: .topLeading, endPoint: .bottomTrailing
-            )
-            #if os(iOS)
-            MoumusicAmbientGlow(colors: colors, isPlaying: player.isPlaying)
-            #endif
-            RadialGradient(
-                colors: [.white.opacity(0.12), .clear],
-                center: .topLeading, startRadius: 0, endRadius: 700
-            )
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.35)],
-                startPoint: .top, endPoint: .bottom
-            )
-        }
+        MeshGradient(
+            width: 3,
+            height: 3,
+            points: [
+                [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
+                [0.0, 0.46], [0.52, 0.5], [1.0, 0.54],
+                [0.0, 1.0], [0.48, 1.0], [1.0, 1.0],
+            ],
+            colors: [
+                colors.primary, colors.primary.opacity(0.9), colors.secondary.opacity(0.86),
+                colors.primary.opacity(0.88), colors.secondary, colors.secondary.opacity(0.92),
+                colors.secondary.opacity(0.9), colors.secondary.opacity(0.82), .black,
+            ],
+            background: .black,
+            smoothsColors: true
+        )
     }
 
     private func loadArtwork() async {

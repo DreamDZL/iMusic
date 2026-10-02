@@ -190,43 +190,4 @@ struct MoumusicWallpaperView: View {
     }
 }
 
-/// A low-frequency artwork glow inspired by the ambient background in
-/// Beans-Music. It pauses when audio is stopped or Reduce Motion is enabled.
-struct MoumusicAmbientGlow: View {
-    let colors: ArtworkColors
-    let isPlaying: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ObservedObject private var renderingBudget = RenderingBudget.shared
-
-    var body: some View {
-        TimelineView(.animation(
-            minimumInterval: max(1.0 / 20.0, renderingBudget.minimumAnimationInterval),
-            paused: !isPlaying || reduceMotion || !renderingBudget.isSceneActive
-                || !renderingBudget.allowsContinuousEffects
-        )) { context in
-            let time = context.date.timeIntervalSinceReferenceDate
-            ZStack {
-                Circle()
-                    .fill(colors.primary.opacity(0.26))
-                    .frame(width: 460, height: 460)
-                    .blur(radius: 90)
-                    .offset(
-                        x: CGFloat(sin(time / 9) * 150),
-                        y: CGFloat(cos(time / 11) * 120)
-                    )
-                Circle()
-                    .fill(colors.secondary.opacity(0.32))
-                    .frame(width: 380, height: 380)
-                    .blur(radius: 84)
-                    .offset(
-                        x: CGFloat(cos(time / 10) * 170),
-                        y: CGFloat(sin(time / 8) * 140)
-                    )
-            }
-            .drawingGroup()
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
 #endif
