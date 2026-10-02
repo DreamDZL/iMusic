@@ -254,6 +254,13 @@ final class LXSyncService: ObservableObject {
         endpointConfigured && !userRequestedDisconnect
     }
 
+    nonisolated static func permitsConnectionSettingsEditing(
+        isConnected: Bool,
+        isConnecting: Bool
+    ) -> Bool {
+        !isConnected && !isConnecting
+    }
+
     private func updateNetworkMonitor() {
         let isConfigured = !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         guard Self.permitsNetworkMonitoring(

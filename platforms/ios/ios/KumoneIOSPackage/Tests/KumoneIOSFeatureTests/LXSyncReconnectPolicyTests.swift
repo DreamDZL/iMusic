@@ -81,4 +81,19 @@ final class LXSyncReconnectPolicyTests: XCTestCase {
             )
         )
     }
+
+    func testConnectionSettingsCanOnlyChangeOutsideAnActiveConnection() {
+        XCTAssertTrue(LXSyncService.permitsConnectionSettingsEditing(
+            isConnected: false,
+            isConnecting: false
+        ))
+        XCTAssertFalse(LXSyncService.permitsConnectionSettingsEditing(
+            isConnected: true,
+            isConnecting: false
+        ))
+        XCTAssertFalse(LXSyncService.permitsConnectionSettingsEditing(
+            isConnected: false,
+            isConnecting: true
+        ))
+    }
 }
