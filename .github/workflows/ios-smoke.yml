@@ -38,7 +38,10 @@ jobs:
             exit 1
           fi
           echo "Using iPhone simulator: $SIMULATOR_ID"
-          xcrun simctl boot "$SIMULATOR_ID" || true
+          # Restart the simulator so stale Accessibility/XCTest services do not
+          # leak into the UI navigation smoke test.
+          xcrun simctl shutdown "$SIMULATOR_ID" || true
+          xcrun simctl boot "$SIMULATOR_ID"
           xcrun simctl bootstatus "$SIMULATOR_ID" -b
           xcodebuild test \
             -project KumoneIOS.xcodeproj \
