@@ -261,7 +261,7 @@ struct AccountSyncView: View {
 
                 HStack(spacing: 8) {
                     Image(systemName: qqPlaylists.lastRefreshedAt == nil ? "clock" : "checkmark.circle.fill")
-                        .foregroundStyle(qqPlaylists.lastRefreshedAt == nil ? .secondary : .green)
+                        .foregroundStyle(qqPlaylists.lastRefreshedAt == nil ? Color.secondary : Color.green)
                     Text(qqPlaylists.lastRefreshedAt.map {
                         "上次刷新 " + RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: .now)
                     } ?? "尚未刷新 QQ 歌单")
