@@ -221,6 +221,7 @@ final class LXSyncService: ObservableObject {
     private let networkQueue = DispatchQueue(label: "com.jiajia2222.imusic.lx-sync-network")
     private var hadNetworkPath: Bool?
     private var userRequestedDisconnect = false
+    private var didFinishListSync = false
 
     private init() {
         endpoint = UserDefaults.standard.string(forKey: Self.endpointKey) ?? ""
@@ -326,6 +327,7 @@ final class LXSyncService: ObservableObject {
 
     private func performConnection(generation: Int) async throws {
         guard isCurrentConnection(generation) else { throw LXSyncError.disconnected }
+        didFinishListSync = false
         let address: LXSyncAddress
         do {
             address = try LXSyncAddress(endpoint)
@@ -551,11 +553,22 @@ final class LXSyncService: ObservableObject {
                     switch message {
                     case .string(let value): text = value
                     case .data(let data):
-                        guard let value = String(data: data, encoding: .utf8) else { continue }
+                        guard let value = String(data: data, encoding: .utf8) else {
+                            throw LXSyncWireCodecError.invalidUTF8
+                        }
                         text = value
                     @unknown default: continue
                     }
-                    await self.handleMessage(text, generation: generation)
+                    if LXSyncWireCodec.isHeartbeatFrame(text) { continue }
+                    let decodedText: String
+                    if LXSyncWireCodec.shouldOffloadDecoding(text) {
+                        decodedText = try await Task.detached(priority: .utility) {
+                            try LXSyncWireCodec.decode(text)
+                        }.value
+                    } else {
+                        decodedText = text
+                    }
+                    try await self.handleMessage(decodedText, generation: generation)
                 }
             } catch {
                 guard !Task.isCancelled else { return }
@@ -570,16 +583,20 @@ final class LXSyncService: ObservableObject {
         }
     }
 
-    private func handleMessage(_ text: String, generation: Int) async {
+    private func handleMessage(_ text: String, generation: Int) async throws {
         guard isCurrentConnection(generation) else { return }
         guard let data = text.data(using: .utf8),
               let message = try? JSONSerialization.jsonObject(with: data) as? [Any],
-              let type = message.first as? Int else { return }
+              let type = message.first as? Int else {
+            throw LXSyncError.invalidServerResponse
+        }
         switch type {
         case 0:
             guard message.count >= 4,
                   let eventID = message[1] as? String,
-                  let path = message[2] as? [String] else { return }
+                  let path = message[2] as? [String] else {
+                throw LXSyncError.invalidServerResponse
+            }
             let arguments = message[3] as? [Any] ?? []
             do {
                 let result = try handleClientCall(path: path, arguments: arguments)
@@ -596,19 +613,27 @@ final class LXSyncService: ObservableObject {
                 } else {
                     try await sendMessage([1, eventID, NSNull(), result ?? NSNull()])
                 }
+                if path.last == "list_sync_finished" {
+                    didFinishListSync = true
+                    markSynced()
+                }
             } catch {
                 try? await sendMessage([1, eventID, ["message": error.localizedDescription]])
             }
         case 1, 3:
-            guard message.count >= 3, let eventID = message[1] as? String,
-                  let continuation = pendingCalls.removeValue(forKey: eventID) else { return }
+            guard message.count >= 3, let eventID = message[1] as? String else {
+                throw LXSyncError.invalidServerResponse
+            }
+            guard let continuation = pendingCalls.removeValue(forKey: eventID) else { return }
             if let error = message[2] as? [String: Any], let reason = error["message"] as? String {
                 continuation.resume(throwing: LXSyncError.server(reason))
             } else {
                 continuation.resume(returning: message.count > 3 ? message[3] : nil)
             }
         case 2:
-            guard message.count >= 3, let callbackID = message[1] as? String else { return }
+            guard message.count >= 3, let callbackID = message[1] as? String else {
+                throw LXSyncError.invalidServerResponse
+            }
             try? await sendMessage([3, callbackID, NSNull(), NSNull()])
         default:
             break
@@ -623,8 +648,13 @@ final class LXSyncService: ObservableObject {
         case "finished":
             isConnected = true
             isConnecting = false
-            statusMessage = "已连接"
-            markSynced()
+            if didFinishListSync {
+                statusMessage = "已同步"
+                lastError = nil
+            } else {
+                statusMessage = "已连接，歌单未同步"
+                lastError = "LX Sync Server 已接受连接，但没有完成歌单同步。请确认服务器已启用歌单同步。"
+            }
             handshakeTimeoutTask?.cancel()
             readyContinuation?.resume(returning: ())
             readyContinuation = nil
@@ -827,7 +857,16 @@ final class LXSyncService: ObservableObject {
 
     private func sendRawMessage(_ text: String) async throws {
         guard let socket else { throw LXSyncError.disconnected }
-        try await socket.send(.string(text))
+        let frame: String
+        if LXSyncWireCodec.shouldOffloadEncoding(text) {
+            frame = try await Task.detached(priority: .utility) {
+                try LXSyncWireCodec.encode(text)
+            }.value
+        } else {
+            frame = try LXSyncWireCodec.encode(text)
+        }
+        guard self.socket === socket else { throw LXSyncError.disconnected }
+        try await socket.send(.string(frame))
     }
 
     private func socketDidClose(
