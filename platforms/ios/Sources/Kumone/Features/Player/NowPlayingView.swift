@@ -104,7 +104,7 @@ struct NowPlayingView: View {
         // iOS keeps its safe area: there the inset is the status bar / notch.
         .ignoresSafeArea()
         #endif
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(settings.appearance.colorScheme)
         .task(id: player.currentTrack?.playbackKey) {
             await loadArtwork()
         }
@@ -2582,6 +2582,9 @@ private struct MinimalQueueSheet: View {
                 }
             }
         }
+        // This queue panel has a dark artwork backdrop, so keep its semantic
+        // primary/secondary row labels light even when the app uses Light mode.
+        .preferredColorScheme(.dark)
         .background(queueBackdrop)
     }
 
