@@ -778,32 +778,59 @@ private enum PlaylistImportService {
             URLQueryItem(name: "n", value: "1000"),
         ]
         let root = try await fetchJSONObject(components.url!)
-        if let code = integer(root["code"]), code != 200 {
-            throw PlaylistImportError.invalidFormat
-        }
+        try NeteaseAPI.validatePublicResponseCode(
+            integer(root["code"]),
+            message: string(root["message"]) ?? string(root["msg"])
+        )
         guard let playlist = (root["playlist"] as? [String: Any])
                 ?? ((root["result"] as? [String: Any])?["playlist"] as? [String: Any]) else {
             throw PlaylistImportError.invalidFormat
         }
 
-        var tracks = collectTracks(from: playlist["tracks"] ?? [], defaultSource: "wy")
-        let ids = (playlist["trackIds"] as? [[String: Any]])?
-            .compactMap { string($0["id"]) }
-            .filter { !$0.isEmpty } ?? []
-        // The v6 endpoint deliberately returns only a preview in `tracks`
-        // even when n=1000. Fetch the full trackIds list so a shared playlist
-        // is not silently truncated to ten songs.
-        if tracks.count < ids.count, !ids.isEmpty {
-            var detailComponents = URLComponents(string: "https://music.163.com/api/song/detail")!
-            detailComponents.queryItems = [
-                URLQueryItem(name: "ids", value: "[\(ids.joined(separator: ","))]"),
-            ]
-            if let details = try? await fetchJSONObject(detailComponents.url!) {
-                let detailedTracks = collectTracks(from: details["songs"] ?? details["data"] ?? details,
-                                                    defaultSource: "wy")
-                if !detailedTracks.isEmpty { tracks = detailedTracks }
-            }
+        let previewTracks = collectTracks(from: playlist["tracks"] ?? [], defaultSource: "wy")
+        let trackIDEntries = (playlist["trackIds"] as? [[String: Any]]) ?? []
+        let rawTrackIDs = trackIDEntries.compactMap { string($0["id"]) }
+        guard rawTrackIDs.count == trackIDEntries.count,
+              rawTrackIDs.allSatisfy({ !$0.isEmpty }) else {
+            throw NeteaseAPIError.incompletePlaylist(
+                expected: trackIDEntries.count,
+                received: rawTrackIDs.filter { !$0.isEmpty }.count
+            )
         }
+        let trackIDs = rawTrackIDs.compactMap(Int.init)
+        guard trackIDs.count == rawTrackIDs.count else {
+            throw NeteaseAPIError.incompletePlaylist(
+                expected: rawTrackIDs.count,
+                received: trackIDs.count
+            )
+        }
+
+        // The v6 endpoint deliberately returns only a preview in `tracks`
+        // even when n=1000. Complete and validate every ID before creating a
+        // local copy so a failed or partial detail response is visible as a
+        // failed import instead of a silently truncated playlist.
+        let complete = try await NeteaseAPI.completePlaylistTracks(
+            expectedTrackIDs: trackIDs,
+            declaredTrackCount: integer(playlist["trackCount"]) ?? trackIDs.count,
+            previewTracks: previewTracks,
+            fetchDetails: { missingIDs in
+                var detailComponents = URLComponents(string: "https://music.163.com/api/song/detail")!
+                detailComponents.queryItems = [
+                    URLQueryItem(name: "ids", value: "[\(missingIDs.map(String.init).joined(separator: ","))]"),
+                ]
+                let details = try await fetchJSONObject(detailComponents.url!)
+                try NeteaseAPI.validatePublicResponseCode(
+                    integer(details["code"]),
+                    message: string(details["message"]) ?? string(details["msg"])
+                )
+                let detailedTracks = collectTracks(
+                    from: details["songs"] ?? details["data"] ?? details,
+                    defaultSource: "wy"
+                )
+                return NeteaseAPI.SongDetailResponse(songs: detailedTracks, privileges: nil)
+            }
+        )
+        let tracks = complete.tracks
         guard !tracks.isEmpty else { throw PlaylistImportError.noTracks }
 
         let name = string(playlist["name"]) ?? "网易云歌单 \(playlistID)"
