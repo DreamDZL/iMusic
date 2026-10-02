@@ -411,6 +411,7 @@ final class PlayerService: ObservableObject {
     private var sourceResolutionTask: Task<Void, Never>?
     private var lyricsResolutionTask: Task<Void, Never>?
     private var pendingSeek: TimeInterval?
+    private var seekGeneration = 0
     private var consecutiveFailures = 0
     private var scrobbled = false
     private var startScrobbled = false
@@ -821,6 +822,8 @@ final class PlayerService: ObservableObject {
     }
 
     func seek(to seconds: TimeInterval, completion: (@MainActor () -> Void)? = nil) {
+        seekGeneration += 1
+        let generation = seekGeneration
         let target = seconds.isFinite ? max(0, seconds) : 0
         progress = target
         updateLyricsCursor(at: target)
@@ -841,10 +844,30 @@ final class PlayerService: ObservableObject {
         pendingSeek = nil
         engine.cancelPendingSeeks()
         engine.seek(to: CMTime(seconds: target, preferredTimescale: 600),
-                    toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-            guard let completion else { return }
-            Task { @MainActor in completion() }
+                    toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+            Task { @MainActor in
+                if let self, finished, self.seekGeneration == generation, self.isPlaying {
+                    self.resumePlaybackAfterSeek()
+                }
+                completion?()
+            }
         }
+    }
+
+    @discardableResult
+    private func resumePlaybackAfterSeek() -> Bool {
+#if os(iOS)
+        guard activateAudioSession() else {
+            isPlaying = false
+            ToastCenter.shared.show("无法启用音频会话，请稍后重试")
+            NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+            syncLiveActivity()
+            return false
+        }
+#endif
+        engine.play()
+        engine.rate = playbackRate
+        return true
     }
 
     func toggleShuffle() {
@@ -1157,6 +1180,7 @@ final class PlayerService: ObservableObject {
         // URL/lyric resolution. Otherwise a fast next/previous tap leaves the
         // old AVPlayerItem audible until the new source responds.
         engine.pause()
+        seekGeneration += 1
         engine.cancelPendingSeeks()
 #if os(iOS)
         deactivateAudioSession()
@@ -1396,21 +1420,16 @@ final class PlayerService: ObservableObject {
         let seekPosition = pendingSeek
         pendingSeek = nil
         if let seekPosition, seekPosition > 0 {
+            seekGeneration += 1
+            let initialSeekGeneration = seekGeneration
             engine.seek(to: CMTime(seconds: seekPosition, preferredTimescale: 600),
-                        toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                        toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                 Task { @MainActor in
-                    guard let self, generation == self.resolveGeneration else { return }
-#if os(iOS)
-                    guard self.activateAudioSession() else {
-                        self.isPlaying = false
-                        ToastCenter.shared.show("无法启用音频会话，请稍后重试")
-                        NowPlayingManager.shared.updateElapsed(self.progress, rate: 0)
-                        self.syncLiveActivity()
-                        return
-                    }
-#endif
-                    self.engine.play()
-                    self.engine.rate = self.playbackRate
+                    guard let self, finished,
+                          generation == self.resolveGeneration,
+                          initialSeekGeneration == self.seekGeneration,
+                          self.isPlaying else { return }
+                    guard self.resumePlaybackAfterSeek() else { return }
                 }
             }
         } else {
