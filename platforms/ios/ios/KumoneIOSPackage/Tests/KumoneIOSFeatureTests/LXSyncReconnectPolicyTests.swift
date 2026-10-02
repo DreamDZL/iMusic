@@ -60,4 +60,25 @@ final class LXSyncReconnectPolicyTests: XCTestCase {
             URLError(.timedOut), closeCode: .invalid, responseStatusCode: nil
         ))
     }
+
+    func testNetworkMonitoringRequiresConfiguredNonManualSync() {
+        XCTAssertTrue(
+            LXSyncService.permitsNetworkMonitoring(
+                endpointConfigured: true,
+                userRequestedDisconnect: false
+            )
+        )
+        XCTAssertFalse(
+            LXSyncService.permitsNetworkMonitoring(
+                endpointConfigured: false,
+                userRequestedDisconnect: false
+            )
+        )
+        XCTAssertFalse(
+            LXSyncService.permitsNetworkMonitoring(
+                endpointConfigured: true,
+                userRequestedDisconnect: true
+            )
+        )
+    }
 }

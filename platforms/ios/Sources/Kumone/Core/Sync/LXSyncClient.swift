@@ -180,7 +180,12 @@ final class LXSyncService: ObservableObject {
     static let shared = LXSyncService()
 
     @Published var endpoint: String {
-        didSet { UserDefaults.standard.set(endpoint, forKey: Self.endpointKey) }
+        didSet {
+            UserDefaults.standard.set(endpoint, forKey: Self.endpointKey)
+            if endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                stopNetworkMonitor()
+            }
+        }
     }
     @Published var connectionCode = ""
     @Published private(set) var isConnecting = false
@@ -211,7 +216,8 @@ final class LXSyncService: ObservableObject {
     private var keyInfo: LXSyncKeyInfo?
     private var serverID: String?
     private var libraryObserver: NSObjectProtocol?
-    private let networkMonitor = NWPathMonitor()
+    private var networkMonitor: NWPathMonitor?
+    private var networkMonitorGeneration = 0
     private let networkQueue = DispatchQueue(label: "com.jiajia2222.imusic.lx-sync-network")
     private var hadNetworkPath: Bool?
     private var userRequestedDisconnect = false
@@ -238,9 +244,33 @@ final class LXSyncService: ObservableObject {
                 self?.localLibraryDidChange()
             }
         }
-        networkMonitor.pathUpdateHandler = { [weak self] path in
+        updateNetworkMonitor()
+    }
+
+    nonisolated static func permitsNetworkMonitoring(
+        endpointConfigured: Bool,
+        userRequestedDisconnect: Bool
+    ) -> Bool {
+        endpointConfigured && !userRequestedDisconnect
+    }
+
+    private func updateNetworkMonitor() {
+        let isConfigured = !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard Self.permitsNetworkMonitoring(
+            endpointConfigured: isConfigured,
+            userRequestedDisconnect: userRequestedDisconnect
+        ) else {
+            stopNetworkMonitor()
+            return
+        }
+        guard networkMonitor == nil else { return }
+
+        networkMonitorGeneration += 1
+        let generation = networkMonitorGeneration
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, self.networkMonitorGeneration == generation else { return }
                 let isAvailable = path.status == .satisfied
                 let shouldReconnect = isAvailable && self.hadNetworkPath != true
                 self.hadNetworkPath = isAvailable
@@ -249,7 +279,16 @@ final class LXSyncService: ObservableObject {
                 }
             }
         }
-        networkMonitor.start(queue: networkQueue)
+        networkMonitor = monitor
+        monitor.start(queue: networkQueue)
+    }
+
+    private func stopNetworkMonitor() {
+        guard let networkMonitor else { return }
+        networkMonitorGeneration += 1
+        networkMonitor.cancel()
+        self.networkMonitor = nil
+        hadNetworkPath = nil
     }
 
     func connect() async throws {
@@ -259,6 +298,7 @@ final class LXSyncService: ObservableObject {
             return
         }
         userRequestedDisconnect = false
+        updateNetworkMonitor()
         disconnectSocket(message: "正在连接 LX Sync Server…")
         let generation = connectionGeneration
         let task = Task { @MainActor [weak self] in
@@ -386,6 +426,7 @@ final class LXSyncService: ObservableObject {
     func disconnect() {
         userRequestedDisconnect = true
         cancelScheduledReconnect()
+        updateNetworkMonitor()
         disconnectSocket(message: "已断开")
     }
 
