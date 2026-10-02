@@ -785,14 +785,18 @@ struct HomeView: View {
 
     private func playPlaylist(_ id: Int) {
         Task {
-            guard let detail = try? await NeteaseAPI.playlistDetail(id: id) else { return }
-            var tracks = detail.playlist.tracks
-            if tracks.isEmpty {
-                let ids = detail.playlist.trackIds.map(\.id)
-                tracks = (try? await NeteaseAPI.songDetails(ids: Array(ids.prefix(500))))?.songs ?? []
+            do {
+                let detail = try await NeteaseAPI.playlistDetail(id: id)
+                let complete = try await NeteaseAPI.completePlaylistTracks(from: detail)
+                guard !complete.tracks.isEmpty else {
+                    ToastCenter.shared.show("歌单没有可播放的歌曲")
+                    return
+                }
+                player.play(tracks: complete.tracks, source: .playlist(id),
+                            context: .playlist(id: id, name: detail.playlist.name))
+            } catch {
+                ToastCenter.shared.show(error.localizedDescription)
             }
-            player.play(tracks: tracks, source: .playlist(id),
-                        context: .playlist(id: id, name: detail.playlist.name))
         }
     }
 }

@@ -1900,15 +1900,8 @@ final class PlayerService: ObservableObject {
             return (tracks, .playlist(liked.id))
         case .playlist:
             let response = try await NeteaseAPI.playlistDetail(id: context.id)
-            var tracks = response.playlist.tracks
-            // /v6/playlist/detail only carries the first page of tracks.
-            let remaining = response.playlist.trackIds.map(\.id).dropFirst(tracks.count)
-            for chunk in stride(from: 0, to: remaining.count, by: 500)
-                .map({ Array(remaining.dropFirst($0).prefix(500)) }) {
-                guard let more = try? await NeteaseAPI.songDetails(ids: chunk) else { break }
-                tracks += more.songs
-            }
-            return (tracks, .playlist(context.id))
+            let complete = try await NeteaseAPI.completePlaylistTracks(from: response)
+            return (complete.tracks, .playlist(context.id))
         }
     }
 

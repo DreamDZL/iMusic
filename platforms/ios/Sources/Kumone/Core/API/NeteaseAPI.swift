@@ -292,10 +292,105 @@ enum NeteaseAPI {
         let privileges: [TrackPrivilege]?
     }
 
+    struct CompletePlaylistTracks: Sendable {
+        let tracks: [Track]
+        let privileges: [TrackPrivilege]
+    }
+
     static func songDetails(ids: [Int]) async throws -> SongDetailResponse {
         guard !ids.isEmpty else { return SongDetailResponse(songs: [], privileges: []) }
         let c = "[" + ids.map { "{\"id\":\($0)}" }.joined(separator: ",") + "]"
         return try await weapi(SongDetailResponse.self, "/v3/song/detail", ["c": c])
+    }
+
+    /// Resolves every song referenced by a playlist before callers persist,
+    /// display, or queue the snapshot. The detail endpoint often returns only
+    /// its first page of full song objects while `trackIds` contains the whole
+    /// playlist. Missing chunks must fail the operation instead of silently
+    /// turning a partial response into a successful import or play queue.
+    static func completePlaylistTracks(
+        from response: PlaylistDetailResponse,
+        limit: Int? = nil
+    ) async throws -> CompletePlaylistTracks {
+        let playlist = response.playlist
+        let trackIDs = playlist.trackIds.map(\.id)
+
+        if trackIDs.isEmpty {
+            let knownCount = playlist.trackCount > 0 ? playlist.trackCount : playlist.tracks.count
+            let expectedCount = limit.map { min(max(0, $0), knownCount) } ?? knownCount
+            guard playlist.tracks.count >= expectedCount,
+                  limit != nil || playlist.trackCount == 0 || playlist.tracks.count == playlist.trackCount else {
+                throw NeteaseAPIError.incompletePlaylist(
+                    expected: expectedCount,
+                    received: playlist.tracks.count
+                )
+            }
+            return CompletePlaylistTracks(
+                tracks: Array(playlist.tracks.prefix(expectedCount)),
+                privileges: response.privileges ?? []
+            )
+        }
+
+        let declaredCount = max(playlist.trackCount, trackIDs.count)
+        let expectedCount = limit.map { min(max(0, $0), declaredCount) } ?? declaredCount
+        guard trackIDs.count >= expectedCount else {
+            throw NeteaseAPIError.incompletePlaylist(
+                expected: expectedCount,
+                received: trackIDs.count
+            )
+        }
+        let requestedIDs = Array(trackIDs.prefix(expectedCount))
+
+        if playlist.tracks.count >= expectedCount,
+           zip(playlist.tracks.prefix(expectedCount), requestedIDs).allSatisfy({ $0.0.id == $0.1 }) {
+            return CompletePlaylistTracks(
+                tracks: Array(playlist.tracks.prefix(expectedCount)),
+                privileges: response.privileges ?? []
+            )
+        }
+
+        var tracksByID: [Int: Track] = [:]
+        for track in playlist.tracks where tracksByID[track.id] == nil {
+            tracksByID[track.id] = track
+        }
+
+        var seenMissingIDs = Set<Int>()
+        let missingIDs = requestedIDs.filter { tracksByID[$0] == nil && seenMissingIDs.insert($0).inserted }
+        var privilegesByID: [Int: TrackPrivilege] = [:]
+        for privilege in response.privileges ?? [] {
+            privilegesByID[privilege.id] = privilege
+        }
+
+        for start in stride(from: 0, to: missingIDs.count, by: 500) {
+            let end = min(start + 500, missingIDs.count)
+            let chunk = Array(missingIDs[start..<end])
+            let details = try await songDetails(ids: chunk)
+            for track in details.songs {
+                tracksByID[track.id] = track
+            }
+            for privilege in details.privileges ?? [] {
+                privilegesByID[privilege.id] = privilege
+            }
+
+            guard chunk.allSatisfy({ tracksByID[$0] != nil }) else {
+                let resolvedCount = requestedIDs.reduce(into: 0) { count, id in
+                    if tracksByID[id] != nil { count += 1 }
+                }
+                throw NeteaseAPIError.incompletePlaylist(
+                    expected: expectedCount,
+                    received: resolvedCount
+                )
+            }
+        }
+
+        let tracks = requestedIDs.compactMap { tracksByID[$0] }
+        guard tracks.count == expectedCount else {
+            throw NeteaseAPIError.incompletePlaylist(
+                expected: expectedCount,
+                received: tracks.count
+            )
+        }
+        return CompletePlaylistTracks(tracks: tracks, privileges: Array(privilegesByID.values))
     }
 
     struct TopPlaylistResponse: Decodable {
@@ -831,17 +926,8 @@ enum NeteaseAPI {
     static func hotSongs(limit: Int = 30) async throws -> [Track] {
         do {
             let response = try await playlistDetail(id: 3_778_678)
-            var tracks = response.playlist.tracks
-            let remainingIDs = response.playlist.trackIds.map(\.id).dropFirst(tracks.count)
-            if !remainingIDs.isEmpty {
-                for chunk in stride(from: 0, to: remainingIDs.count, by: 500)
-                    .map({ Array(remainingIDs.dropFirst($0).prefix(500)) }) {
-                    guard let more = try? await songDetails(ids: chunk) else { break }
-                    tracks += more.songs
-                    if tracks.count >= limit { break }
-                }
-            }
-            if !tracks.isEmpty { return Array(tracks.prefix(limit)) }
+            let complete = try await completePlaylistTracks(from: response, limit: limit)
+            if !complete.tracks.isEmpty { return complete.tracks }
         } catch {
             // Fall through to the live new-song feed when the hot chart is
             // temporarily rate-limited or unavailable in the current region.

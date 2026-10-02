@@ -7,7 +7,6 @@ final class PlaylistDetailViewModel: ObservableObject {
     @Published var tracks: [Track] = []
     @Published var privileges: [Int: TrackPrivilege] = [:]
     @Published var isLoading = true
-    @Published var isLoadingMore = false
     @Published var errorMessage: String?
     @Published var filter = ""
 
@@ -30,27 +29,14 @@ final class PlaylistDetailViewModel: ObservableObject {
         errorMessage = nil
         do {
             let response = try await NeteaseAPI.playlistDetail(id: playlistID)
+            let complete = try await NeteaseAPI.completePlaylistTracks(from: response)
             detail = response.playlist
-            tracks = response.playlist.tracks
-            merge(privileges: response.privileges)
+            tracks = complete.tracks
+            merge(privileges: complete.privileges)
             isLoading = false
-            await loadRemainingTracks()
         } catch {
             isLoading = false
             if tracks.isEmpty { errorMessage = error.localizedDescription }
-        }
-    }
-
-    private func loadRemainingTracks() async {
-        guard let detail, tracks.count < detail.trackIds.count else { return }
-        isLoadingMore = true
-        defer { isLoadingMore = false }
-        let remaining = detail.trackIds.map(\.id).dropFirst(tracks.count)
-        for chunk in stride(from: 0, to: remaining.count, by: 500)
-            .map({ Array(remaining.dropFirst($0).prefix(500)) }) {
-            guard let response = try? await NeteaseAPI.songDetails(ids: chunk) else { break }
-            tracks += response.songs
-            merge(privileges: response.privileges)
         }
     }
 
@@ -117,14 +103,6 @@ struct PlaylistDetailView: View {
                     )
                     .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
 
-                    if model.isLoadingMore {
-                        HStack {
-                            Spacer()
-                            ProgressView().controlSize(.small)
-                            Spacer()
-                        }
-                        .padding(.vertical, 12)
-                    }
                 } else if model.isLoading {
                     loadingHeader
                 } else if let message = model.errorMessage {

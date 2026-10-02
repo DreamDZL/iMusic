@@ -144,8 +144,18 @@ final class AccountStore: ObservableObject {
         var tracks: [Track] = []
         for offset in stride(from: 0, to: ids.count, by: 200) {
             let end = min(offset + 200, ids.count)
-            let response = try await NeteaseAPI.songDetails(ids: Array(ids[offset..<end]))
-            tracks.append(contentsOf: response.songs)
+            let chunk = Array(ids[offset..<end])
+            let response = try await NeteaseAPI.songDetails(ids: chunk)
+            let tracksByID = Dictionary(response.songs.map { ($0.id, $0) },
+                                        uniquingKeysWith: { first, _ in first })
+            let resolved = chunk.compactMap { tracksByID[$0] }
+            guard resolved.count == chunk.count else {
+                throw NeteaseAPIError.incompleteSongData(
+                    expected: ids.count,
+                    received: tracks.count + resolved.count
+                )
+            }
+            tracks.append(contentsOf: resolved)
         }
         let addedCount = LocalPlaylistStore.shared.mergeFavorites(tracks)
         return (remoteCount: ids.count, addedCount: addedCount)
@@ -241,10 +251,6 @@ final class AccountStore: ObservableObject {
 
             do {
                 let tracks = try await allTracks(for: summary.id)
-                guard !tracks.isEmpty else {
-                    failed.append("\(summary.name)：没有可同步的歌曲")
-                    continue
-                }
                 let result = LocalPlaylistStore.shared.upsertRemotePlaylist(
                     source: "netease",
                     remoteID: summary.id,
@@ -258,7 +264,7 @@ final class AccountStore: ObservableObject {
                 else if result.changed { updated += 1 }
                 else { unchanged += 1 }
             } catch {
-                failed.append(summary.name)
+                failed.append("\(summary.name)：\(error.localizedDescription)")
             }
         }
 
@@ -275,18 +281,8 @@ final class AccountStore: ObservableObject {
 
     private func allTracks(for playlistID: Int) async throws -> [Track] {
         let response = try await NeteaseAPI.playlistDetail(id: playlistID)
-        var tracks = response.playlist.tracks
-        let allIDs = response.playlist.trackIds.map(\.id)
-
-        if tracks.count < allIDs.count {
-            let remaining = Array(allIDs.dropFirst(tracks.count))
-            for start in stride(from: 0, to: remaining.count, by: 500) {
-                let chunk = Array(remaining.dropFirst(start).prefix(500))
-                guard let details = try? await NeteaseAPI.songDetails(ids: chunk) else { continue }
-                tracks.append(contentsOf: details.songs)
-            }
-        }
-        return tracks.map { $0.normalizedForLXPlayback() }
+        let complete = try await NeteaseAPI.completePlaylistTracks(from: response)
+        return complete.tracks.map { $0.normalizedForLXPlayback() }
     }
 
     /// Refresh the login cookie at most once per calendar day.

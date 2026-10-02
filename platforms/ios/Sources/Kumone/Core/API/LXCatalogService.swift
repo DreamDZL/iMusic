@@ -1511,16 +1511,13 @@ enum LXCatalogService {
         case .wy:
             guard let neteaseID = Int(id) else { throw LXCatalogError.invalidResponse }
             let response = try await NeteaseAPI.playlistDetail(id: neteaseID)
-            var tracks = response.playlist.tracks
-            if tracks.isEmpty {
-                tracks = (try? await NeteaseAPI.songDetails(ids: response.playlist.trackIds.map(\.id))).map { $0.songs } ?? []
-            }
+            let complete = try await NeteaseAPI.completePlaylistTracks(from: response)
             return LXPlaylistDetail(id: id, name: response.playlist.name,
                                     coverURL: response.playlist.coverImgUrl,
                                     description: response.playlist.description,
                                     author: response.playlist.creator?.nickname,
                                     playCount: response.playlist.playCount,
-                                    tracks: tracks.map { $0.withSource("wy") }, source: .wy)
+                                    tracks: complete.tracks.map { $0.withSource("wy") }, source: .wy)
         case .kw:
             let parts = id.components(separatedBy: "__")
             let listID = parts.last ?? id

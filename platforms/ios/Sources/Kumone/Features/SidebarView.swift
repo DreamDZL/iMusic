@@ -110,8 +110,11 @@ struct SidebarView: View {
         .contextMenu {
             Button("播放") {
                 Task {
-                    if let detail = try? await NeteaseAPI.playlistDetail(id: playlist.id) {
+                    do {
+                        let detail = try await NeteaseAPI.playlistDetail(id: playlist.id)
                         await playPlaylist(detail)
+                    } catch {
+                        ToastCenter.shared.show(error.localizedDescription)
                     }
                 }
             }
@@ -135,14 +138,16 @@ struct SidebarView: View {
     }
 
     private func playPlaylist(_ detail: NeteaseAPI.PlaylistDetailResponse) async {
-        var tracks = detail.playlist.tracks
-        if tracks.count < detail.playlist.trackCount {
-            let ids = detail.playlist.trackIds.map(\.id)
-            if let full = try? await NeteaseAPI.songDetails(ids: Array(ids.prefix(1000))) {
-                tracks = full.songs
+        do {
+            let complete = try await NeteaseAPI.completePlaylistTracks(from: detail)
+            guard !complete.tracks.isEmpty else {
+                ToastCenter.shared.show("歌单没有可播放的歌曲")
+                return
             }
+            PlayerService.shared.play(tracks: complete.tracks, source: .playlist(detail.playlist.id))
+        } catch {
+            ToastCenter.shared.show(error.localizedDescription)
         }
-        PlayerService.shared.play(tracks: tracks, source: .playlist(detail.playlist.id))
     }
 
     @ViewBuilder

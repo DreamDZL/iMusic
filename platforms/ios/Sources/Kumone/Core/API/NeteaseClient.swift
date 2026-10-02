@@ -7,6 +7,8 @@ enum NeteaseAPIError: LocalizedError {
     case needLogin
     case missingProfile
     case decoding(String)
+    case incompletePlaylist(expected: Int, received: Int)
+    case incompleteSongData(expected: Int, received: Int)
 
     var errorDescription: String? {
         switch self {
@@ -15,6 +17,10 @@ enum NeteaseAPIError: LocalizedError {
         case .needLogin: return String(localized: "需要登录")
         case .missingProfile: return String(localized: "网易云未返回账户资料，请重新登录后重试")
         case .decoding: return String(localized: "数据加载失败，请稍后重试")
+        case .incompletePlaylist(let expected, let received):
+            return String(localized: "歌单歌曲未完整加载（\(received)/\(expected)），请检查网络后重试")
+        case .incompleteSongData(let expected, let received):
+            return String(localized: "歌曲资料未完整加载（\(received)/\(expected)），请检查网络后重试")
         }
     }
 }
