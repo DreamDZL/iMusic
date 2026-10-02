@@ -612,6 +612,27 @@ private struct ImportedPlaylist {
     }
 }
 
+enum PlaylistImportQuery {
+    /// URL query names are case-insensitive in the importer. Share links can
+    /// repeat parameters, so preserve the first non-empty value without
+    /// assuming that each normalized key is unique.
+    static func firstNonEmptyValues(from items: [URLQueryItem]) -> [String: String] {
+        var values: [String: String] = [:]
+        for item in items {
+            let key = item.name.lowercased()
+            guard values[key] == nil,
+                  let value = item.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else { continue }
+            values[key] = value
+        }
+        return values
+    }
+
+    static func firstIntegerValue(for key: String, from items: [URLQueryItem]) -> Int? {
+        firstNonEmptyValues(from: items)[key.lowercased()].flatMap(Int.init)
+    }
+}
+
 private enum PlaylistImportService {
     static func importPlaylist(from input: String) async throws -> ImportedPlaylist {
         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -811,9 +832,7 @@ private enum PlaylistImportService {
     private static func playlistReference(from url: URL) -> RemotePlaylistReference? {
         guard let host = url.host?.lowercased() else { return nil }
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map {
-            ($0.name.lowercased(), $0.value ?? "")
-        })
+        let query = PlaylistImportQuery.firstNonEmptyValues(from: components?.queryItems ?? [])
         let parts = url.path.split(separator: "/").map(String.init)
 
         func firstID(after markers: [String]) -> String? {
@@ -933,8 +952,7 @@ private enum PlaylistImportService {
 
     private static func neteasePlaylistID(from url: URL) -> Int? {
         func queryID(_ components: URLComponents?) -> Int? {
-            components?.queryItems?.first(where: { $0.name.lowercased() == "id" })?.value
-                .flatMap(Int.init)
+            PlaylistImportQuery.firstIntegerValue(for: "id", from: components?.queryItems ?? [])
         }
 
         if let id = queryID(URLComponents(url: url, resolvingAgainstBaseURL: false)) {
