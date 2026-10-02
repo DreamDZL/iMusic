@@ -21,7 +21,8 @@ final class KumoneIOSUITests: XCTestCase {
 
         for destination in destinations {
             let button = tabs[destination.tab]
-            XCTAssertTrue(button.waitForExistence(timeout: 45), "Missing tab: \(destination.tab)")
+            XCTAssertTrue(button.waitForExistence(timeout: 15), "Missing tab: \(destination.tab)")
+            XCTAssertTrue(button.isHittable, "Tab is not tappable: \(destination.tab)")
             if !button.isSelected {
                 button.tap()
             }
@@ -78,6 +79,31 @@ final class KumoneIOSUITests: XCTestCase {
                 genreAttachment.name = "iMusic-新内容-类型"
                 genreAttachment.lifetime = .keepAlways
                 add(genreAttachment)
+
+                // iOS 27 minimizes its native tab bar while content scrolls.
+                // Scroll back toward the top so every tab label is exposed to
+                // accessibility before navigating to the next destination.
+                let searchTab = tabs["搜索"]
+                var restoreCount = 0
+                while !searchTab.isHittable && restoreCount < 16 {
+                    let start = contentScrollView.coordinate(
+                        withNormalizedOffset: CGVector(dx: 0.5, dy: 0.32)
+                    )
+                    let end = contentScrollView.coordinate(
+                        withNormalizedOffset: CGVector(dx: 0.5, dy: 0.80)
+                    )
+                    start.press(forDuration: 0.05, thenDragTo: end)
+                    restoreCount += 1
+                }
+                let searchTabHittable = XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "hittable == true"),
+                    object: searchTab
+                )
+                XCTAssertEqual(
+                    XCTWaiter.wait(for: [searchTabHittable], timeout: 10),
+                    .completed,
+                    "The iOS 27 tab bar should expose Search again after scrolling back toward the top"
+                )
                 continue
             }
 
