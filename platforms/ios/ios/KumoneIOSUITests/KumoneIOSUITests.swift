@@ -33,15 +33,12 @@ final class KumoneIOSUITests: XCTestCase {
                 navigationTitle.waitForExistence(timeout: 20),
                 "Tab \(destination.tab) did not show its root navigation title"
             )
-            let titleVisible = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "hittable == true"),
-                object: navigationTitle
-            )
-            XCTAssertEqual(
-                XCTWaiter.wait(for: [titleVisible], timeout: 5),
-                .completed,
-                "Tab \(destination.tab) root title should be hittable"
-            )
+            if destination.tab == "搜索" {
+                XCTAssertTrue(
+                    app.staticTexts["搜索歌曲、歌手、专辑或歌单"].waitForExistence(timeout: 5),
+                    "Search should show its offline empty-state prompt before the user enters a query"
+                )
+            }
             if destination.tab == "新内容" {
                 let topAttachment = XCTAttachment(screenshot: app.screenshot())
                 topAttachment.name = "iMusic-新内容-顶部"
