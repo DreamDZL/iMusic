@@ -202,7 +202,6 @@ public struct IOSMainWindow: View {
             }
             tabInterface
                 .background(Color.clear)
-            MidAutumnFestivalEffect()
         }
         .animation(AppAnimation.smooth, value: backgroundStore.image != nil)
     }
