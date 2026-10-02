@@ -399,7 +399,8 @@ final class PlayerService: ObservableObject {
     /// Live playback position straight from the player, for smooth per-frame
     /// karaoke highlighting (the published `progress` is intentionally coarse).
     var livePlaybackTime: TimeInterval {
-        let t = engine.currentTime().seconds
+        guard !isResolvingSource, let item = engine.currentItem else { return progress }
+        let t = item.currentTime().seconds
         return t.isFinite ? t : progress
     }
     private var timeObserver: Any?
@@ -518,10 +519,11 @@ final class PlayerService: ObservableObject {
                 seconds: Self.playbackTimeObserverInterval(isSceneActive: isSceneActive),
                 preferredTimescale: 600
             ), queue: .main
-        ) { [weak self] time in
+        ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !self.isScrubbing else { return }
-                let seconds = time.seconds
+                guard let self, !self.isScrubbing, !self.isResolvingSource,
+                      let item = self.engine.currentItem else { return }
+                let seconds = item.currentTime().seconds
                 guard seconds.isFinite else { return }
 
                 // Lyrics need this cadence to stay in sync; the cursor itself
@@ -819,18 +821,30 @@ final class PlayerService: ObservableObject {
     }
 
     func seek(to seconds: TimeInterval, completion: (@MainActor () -> Void)? = nil) {
-        progress = seconds
-        updateLyricsCursor(at: seconds)
-        engine.seek(to: CMTime(seconds: seconds, preferredTimescale: 600),
+        let target = seconds.isFinite ? max(0, seconds) : 0
+        progress = target
+        updateLyricsCursor(at: target)
+        NowPlayingManager.shared.updateElapsed(
+            target,
+            rate: isPlaying ? Double(playbackRate) : 0
+        )
+        syncLiveActivity()
+
+        guard !isResolvingSource, engine.currentItem != nil else {
+            // Keep a seek made while a source is resolving for the new item.
+            // Calling AVPlayer.seek with no current item would silently lose it.
+            pendingSeek = target
+            completion?()
+            return
+        }
+
+        pendingSeek = nil
+        engine.cancelPendingSeeks()
+        engine.seek(to: CMTime(seconds: target, preferredTimescale: 600),
                     toleranceBefore: .zero, toleranceAfter: .zero) { _ in
             guard let completion else { return }
             Task { @MainActor in completion() }
         }
-        NowPlayingManager.shared.updateElapsed(
-            seconds,
-            rate: isPlaying ? Double(playbackRate) : 0
-        )
-        syncLiveActivity()
     }
 
     func toggleShuffle() {
@@ -1138,10 +1152,12 @@ final class PlayerService: ObservableObject {
     private func startPlaying(_ track: Track, indexUnchanged: Bool = false,
                               resumeAt: TimeInterval? = nil) {
         let track = track.normalizedForLXPlayback()
+        isResolvingSource = true
         // Stop and detach the previous item before starting an asynchronous
         // URL/lyric resolution. Otherwise a fast next/previous tap leaves the
         // old AVPlayerItem audible until the new source responds.
         engine.pause()
+        engine.cancelPendingSeeks()
 #if os(iOS)
         deactivateAudioSession()
 #endif
@@ -1153,11 +1169,11 @@ final class PlayerService: ObservableObject {
         scrobbleIfNeeded(completed: false)
         currentTrack = track
         LocalPlaylistStore.shared.recordRecent(track)
-        progress = resumeAt ?? 0
-        pendingSeek = resumeAt
+        let initialPosition = resumeAt.map { $0.isFinite ? max(0, $0) : 0 }
+        progress = initialPosition ?? 0
+        pendingSeek = initialPosition
         duration = track.duration
         servedQuality = nil
-        isResolvingSource = true
         unblockSource = nil
         isTrial = false
         lyrics = nil
