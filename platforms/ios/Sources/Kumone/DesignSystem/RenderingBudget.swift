@@ -73,6 +73,18 @@ final class RenderingBudget: ObservableObject {
         !lowPowerMode && thermalState == .nominal
     }
 
+    /// Word-by-word lyric highlighting is continuous decorative work. Keep it
+    /// live only while playback is visible and the device has its full visual
+    /// budget; the coarse playback observer still advances the active lyric
+    /// line when this returns `false`.
+    nonisolated static func permitsLiveLyricAnimation(
+        isPlaying: Bool,
+        isSceneActive: Bool,
+        allowsContinuousEffects: Bool
+    ) -> Bool {
+        isPlaying && isSceneActive && allowsContinuousEffects
+    }
+
     nonisolated static func permitsAudioAnalysis(
         isSceneActive: Bool,
         lowPowerMode: Bool,

@@ -74,6 +74,29 @@ final class RenderingBudgetTests: XCTestCase {
         )
     }
 
+    func testLiveLyricAnimationRequiresPlaybackForegroundAndFullVisualBudget() {
+        XCTAssertTrue(RenderingBudget.permitsLiveLyricAnimation(
+            isPlaying: true,
+            isSceneActive: true,
+            allowsContinuousEffects: true
+        ))
+        XCTAssertFalse(RenderingBudget.permitsLiveLyricAnimation(
+            isPlaying: false,
+            isSceneActive: true,
+            allowsContinuousEffects: true
+        ))
+        XCTAssertFalse(RenderingBudget.permitsLiveLyricAnimation(
+            isPlaying: true,
+            isSceneActive: false,
+            allowsContinuousEffects: true
+        ))
+        XCTAssertFalse(RenderingBudget.permitsLiveLyricAnimation(
+            isPlaying: true,
+            isSceneActive: true,
+            allowsContinuousEffects: false
+        ))
+    }
+
     func testAudioAnalysisStopsWhenSceneOrPowerBudgetDoesNotPermitVisualEffects() {
         XCTAssertTrue(RenderingBudget.permitsAudioAnalysis(
             isSceneActive: true,
