@@ -379,9 +379,11 @@ struct HomeView: View {
         }
         #endif
         .task(id: homeTaskID) {
+            guard !IOSUITestMode.isEnabled else { return }
             await loadCurrentHome()
         }
         .onAppear {
+            guard !IOSUITestMode.isEnabled else { return }
             // The shared model keeps scroll state between tabs, but the feed
             // itself must be refreshed after its short cache expires.
             Task {
@@ -389,6 +391,7 @@ struct HomeView: View {
             }
         }
         .refreshable {
+            guard !IOSUITestMode.isEnabled else { return }
             await loadCurrentHome(force: true)
         }
     }

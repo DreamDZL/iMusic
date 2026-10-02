@@ -63,6 +63,7 @@ final class ExploreViewModel: ObservableObject {
     }
 
     func requestMore() {
+        guard !IOSUITestMode.isEnabled else { return }
         guard !isLoading, hasMore, loadTask == nil else { return }
         let generation = requestGeneration
         loadTask = Task {
@@ -263,6 +264,7 @@ struct ExploreView: View {
                 PlayerClearanceSpacer()
             }
         }
+        .accessibilityIdentifier("exploreContentScrollView")
         .navigationTitle("新内容")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -271,15 +273,18 @@ struct ExploreView: View {
         }
         .task(id: "\(settings.homeRecommendationMode.rawValue)-\(settings.homeRecommendationPlatform.rawValue)") {
             model.prepare(platform: settings.homeRecommendationPlatform)
+            guard !IOSUITestMode.isEnabled else { return }
             model.requestMore()
         }
         .onAppear {
+            guard !IOSUITestMode.isEnabled else { return }
             model.refreshIfStale()
         }
         .onDisappear {
             model.cancelLoading()
         }
         .refreshable {
+            guard !IOSUITestMode.isEnabled else { return }
             await model.refreshCurrent(force: true)
         }
 #if os(iOS)

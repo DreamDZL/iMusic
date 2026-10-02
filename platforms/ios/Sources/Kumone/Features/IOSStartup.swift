@@ -1,6 +1,10 @@
 import Foundation
 import SwiftUI
 
+enum IOSUITestMode {
+    static let isEnabled = ProcessInfo.processInfo.arguments.contains("-imusic-ui-testing")
+}
+
 #if os(iOS)
 
 /// Coordinates the short iOS launch transition and the first online warm-up.
@@ -38,6 +42,15 @@ final class IOSStartupCoordinator: ObservableObject {
         didStart = true
         phase = .warming
         message = String(localized: "正在预加载在线内容")
+
+        // UI smoke tests validate native navigation and layout. Keeping their
+        // launch path offline avoids provider availability and request timing
+        // from changing the accessibility tree or delaying the first frame.
+        if IOSUITestMode.isEnabled {
+            phase = .ready
+            message = String(localized: "已进入应用")
+            return
+        }
 
         let startedAt = Date()
         player.startRuntime()

@@ -427,6 +427,7 @@ struct SearchView: View {
         .onChange(of: searchText) { newValue in
             model.setQuery(newValue)
             searchDebounceTask?.cancel()
+            guard !IOSUITestMode.isEnabled else { return }
             #if os(iOS)
             // Keep search responsive while allowing Chinese/third-party IMEs
             // to finish composing before the request is sent.
@@ -448,6 +449,7 @@ struct SearchView: View {
         .navigationTitle(searchText.isEmpty ? "搜索" : searchText)
         .task(id: searchContextTaskID) {
             searchDebounceTask?.cancel()
+            guard !IOSUITestMode.isEnabled else { return }
             if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 await model.loadHotKeywords()
             } else {
@@ -468,6 +470,7 @@ struct SearchView: View {
         resignSearchInput()
         history.add(query)
         model.setQuery(query)
+        guard !IOSUITestMode.isEnabled else { return }
         Task { await model.load(tab: model.tab, force: true) }
     }
 

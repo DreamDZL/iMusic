@@ -48,62 +48,23 @@ final class KumoneIOSUITests: XCTestCase {
                 topAttachment.lifetime = .keepAlways
                 add(topAttachment)
 
-                let genreCard = app.buttons["浏览华语音乐"]
-                let contentScrollView = app.scrollViews.firstMatch
-                XCTAssertTrue(contentScrollView.waitForExistence(timeout: 10))
-                var swipeCount = 0
-                while !genreCard.isHittable && swipeCount < 16 {
-                    let start = contentScrollView.coordinate(
-                        withNormalizedOffset: CGVector(dx: 0.5, dy: 0.80)
-                    )
-                    let end = contentScrollView.coordinate(
-                        withNormalizedOffset: CGVector(dx: 0.5, dy: 0.48)
-                    )
-                    start.press(forDuration: 0.05, thenDragTo: end)
-                    swipeCount += 1
-                }
-                let genreCardHittable = XCTNSPredicateExpectation(
-                    predicate: NSPredicate(format: "hittable == true"),
-                    object: genreCard
-                )
-                XCTAssertEqual(
-                    XCTWaiter.wait(for: [genreCardHittable], timeout: 5),
-                    .completed,
-                    "New should expose a tappable genre card"
+                XCTAssertTrue(
+                    app.staticTexts["按类型浏览"].waitForExistence(timeout: 5),
+                    "New should expose its local genre browser without requiring network content"
                 )
                 XCTAssertTrue(
-                    app.staticTexts["按类型浏览"].exists,
-                    "New should expose its genre browser before the paginated results"
+                    app.scrollViews["exploreContentScrollView"].waitForExistence(timeout: 5),
+                    "New should expose a stable, accessible content scroll view"
                 )
+                let mandarinGenre = app.buttons["浏览华语音乐"]
+                XCTAssertTrue(mandarinGenre.waitForExistence(timeout: 5))
+                XCTAssertTrue(mandarinGenre.isHittable, "The local genre card should be visible at the top")
+                mandarinGenre.tap()
+                XCTAssertTrue(mandarinGenre.isSelected, "Selecting a genre should update its selected state")
                 let genreAttachment = XCTAttachment(screenshot: app.screenshot())
                 genreAttachment.name = "iMusic-新内容-类型"
                 genreAttachment.lifetime = .keepAlways
                 add(genreAttachment)
-
-                // iOS 27 minimizes its native tab bar while content scrolls.
-                // Scroll back toward the top so every tab label is exposed to
-                // accessibility before navigating to the next destination.
-                let searchTab = tabs["搜索"]
-                var restoreCount = 0
-                while !searchTab.isHittable && restoreCount < 16 {
-                    let start = contentScrollView.coordinate(
-                        withNormalizedOffset: CGVector(dx: 0.5, dy: 0.32)
-                    )
-                    let end = contentScrollView.coordinate(
-                        withNormalizedOffset: CGVector(dx: 0.5, dy: 0.80)
-                    )
-                    start.press(forDuration: 0.05, thenDragTo: end)
-                    restoreCount += 1
-                }
-                let searchTabHittable = XCTNSPredicateExpectation(
-                    predicate: NSPredicate(format: "hittable == true"),
-                    object: searchTab
-                )
-                XCTAssertEqual(
-                    XCTWaiter.wait(for: [searchTabHittable], timeout: 10),
-                    .completed,
-                    "The iOS 27 tab bar should expose Search again after scrolling back toward the top"
-                )
                 continue
             }
 
