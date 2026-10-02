@@ -135,7 +135,7 @@ struct LocalPlaylistsView: View {
                         .font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 14)
                         .frame(minHeight: 42)
-                        .background(.thinMaterial, in: Capsule())
+                        .compatGlass(interactive: true, in: Capsule())
                 }
                 .buttonStyle(.plain)
             }
@@ -153,7 +153,7 @@ struct LocalPlaylistsView: View {
                 .font(.subheadline.weight(.semibold))
                 .padding(.horizontal, 14)
                 .frame(minHeight: 42)
-                .background(.thinMaterial, in: Capsule())
+                .compatGlass(interactive: true, in: Capsule())
         }
         .buttonStyle(.plain)
     }
