@@ -2,10 +2,10 @@ import XCTest
 @testable import KumoneCore
 
 final class RenderingBudgetTests: XCTestCase {
-    func testNormalPlaybackUsesThirtyFrameVisualBudget() {
+    func testNormalPlaybackUsesTwentyFourFrameVisualBudget() {
         XCTAssertEqual(
             RenderingBudget.interval(lowPowerMode: false, thermalState: .nominal),
-            1.0 / 30.0,
+            1.0 / 24.0,
             accuracy: 0.0001
         )
     }
@@ -13,25 +13,25 @@ final class RenderingBudgetTests: XCTestCase {
     func testLowPowerModeAndFairThermalStateReduceVisualRefreshRate() {
         XCTAssertEqual(
             RenderingBudget.interval(lowPowerMode: true, thermalState: .nominal),
-            1.0 / 15.0,
+            1.0 / 12.0,
             accuracy: 0.0001
         )
         XCTAssertEqual(
             RenderingBudget.interval(lowPowerMode: false, thermalState: .fair),
-            1.0 / 15.0,
+            1.0 / 12.0,
             accuracy: 0.0001
         )
     }
 
-    func testSeriousThermalStateUsesLowestVisualRefreshRate() {
+    func testSeriousAndCriticalThermalStatesUseProgressivelyLowerVisualRefreshRates() {
         XCTAssertEqual(
             RenderingBudget.interval(lowPowerMode: false, thermalState: .serious),
-            1.0 / 10.0,
+            1.0 / 8.0,
             accuracy: 0.0001
         )
         XCTAssertEqual(
             RenderingBudget.interval(lowPowerMode: true, thermalState: .critical),
-            1.0 / 10.0,
+            1.0 / 6.0,
             accuracy: 0.0001
         )
     }
@@ -74,9 +74,32 @@ final class RenderingBudgetTests: XCTestCase {
         )
     }
 
-    func testAudioAnalysisPausesWhenSceneIsNotActive() {
-        XCTAssertTrue(RenderingBudget.permitsAudioAnalysis(isSceneActive: true))
-        XCTAssertFalse(RenderingBudget.permitsAudioAnalysis(isSceneActive: false))
+    func testAudioAnalysisStopsWhenSceneOrPowerBudgetDoesNotPermitVisualEffects() {
+        XCTAssertTrue(RenderingBudget.permitsAudioAnalysis(
+            isSceneActive: true,
+            lowPowerMode: false,
+            thermalState: .nominal
+        ))
+        XCTAssertFalse(RenderingBudget.permitsAudioAnalysis(
+            isSceneActive: false,
+            lowPowerMode: false,
+            thermalState: .nominal
+        ))
+        XCTAssertFalse(RenderingBudget.permitsAudioAnalysis(
+            isSceneActive: true,
+            lowPowerMode: true,
+            thermalState: .nominal
+        ))
+        XCTAssertFalse(RenderingBudget.permitsAudioAnalysis(
+            isSceneActive: true,
+            lowPowerMode: false,
+            thermalState: .fair
+        ))
+        XCTAssertFalse(RenderingBudget.permitsAudioAnalysis(
+            isSceneActive: true,
+            lowPowerMode: false,
+            thermalState: .critical
+        ))
     }
 
     func testPlaybackProgressObserverSlowsDuringBackgroundAudio() {

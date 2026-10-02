@@ -40,13 +40,18 @@ final class RenderingBudget: ObservableObject {
         lowPowerMode: Bool,
         thermalState: ProcessInfo.ThermalState
     ) -> TimeInterval {
-        if thermalState == .serious || thermalState == .critical {
-            return 1.0 / 10.0
+        if thermalState == .critical {
+            return 1.0 / 6.0
+        }
+        if thermalState == .serious {
+            return 1.0 / 8.0
         }
         if lowPowerMode || thermalState == .fair {
-            return 1.0 / 15.0
+            return 1.0 / 12.0
         }
-        return 1.0 / 30.0
+        // Most display motion is still smooth at 24 fps. Avoid scheduling
+        // decorative SwiftUI work at the panel's full refresh rate.
+        return 1.0 / 24.0
     }
 
     /// Audio is processed in 512-frame windows (~86 windows/sec at 44.1 kHz).
@@ -68,14 +73,21 @@ final class RenderingBudget: ObservableObject {
         !lowPowerMode && thermalState == .nominal
     }
 
-    nonisolated static func permitsAudioAnalysis(isSceneActive: Bool) -> Bool {
-        isSceneActive
+    nonisolated static func permitsAudioAnalysis(
+        isSceneActive: Bool,
+        lowPowerMode: Bool,
+        thermalState: ProcessInfo.ThermalState
+    ) -> Bool {
+        isSceneActive && permitsContinuousEffects(
+            lowPowerMode: lowPowerMode,
+            thermalState: thermalState
+        )
     }
 
     func setSceneActive(_ active: Bool) {
         guard isSceneActive != active else { return }
         isSceneActive = active
-        AudioSpectrum.shared.setAnalysisEnabled(Self.permitsAudioAnalysis(isSceneActive: active))
+        updateAudioAnalysis(processInfo: ProcessInfo.processInfo)
     }
 
     private func refresh() {
@@ -98,5 +110,14 @@ final class RenderingBudget: ObservableObject {
             audioAnalysisStride = stride
             AudioSpectrum.shared.setAnalysisStride(stride)
         }
+        updateAudioAnalysis(processInfo: processInfo)
+    }
+
+    private func updateAudioAnalysis(processInfo: ProcessInfo) {
+        AudioSpectrum.shared.setAnalysisEnabled(Self.permitsAudioAnalysis(
+            isSceneActive: isSceneActive,
+            lowPowerMode: processInfo.isLowPowerModeEnabled,
+            thermalState: processInfo.thermalState
+        ))
     }
 }
