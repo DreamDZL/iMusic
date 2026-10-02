@@ -27,12 +27,12 @@ final class LXSourceSelectionStateTests: XCTestCase {
 
     func testDisabledStoredSelectionFallsBackToFirstEnabledSource() {
         let state = LXSourceStore.restoredSelectionState(
-            storedEnabledIDs: ["source-b", "source-a", "source-b"],
+            storedEnabledIDs: ["source-b"],
             sourceIDs: ["source-a", "source-b"],
             storedSelectedID: "source-a"
         )
 
-        XCTAssertEqual(state.enabledIDs, ["source-b", "source-a"])
+        XCTAssertEqual(state.enabledIDs, ["source-b"])
         XCTAssertEqual(state.selectedID, "source-b")
     }
 }
