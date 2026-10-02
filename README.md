@@ -32,6 +32,7 @@ Users can also copy their NetEase liked songs into iMusic's local favorites from
 - QQ Music and NetEase public playlist imports as local copies
 - Optional LX Sync for compatible favorites and playlists
 - iOS 27 system Liquid Glass, with transparency and tint following iPhone display and accessibility settings
+- Power-aware animation and spectrum analysis adapt to Low Power Mode, thermal pressure and scene visibility; New content refreshes automatically at most every ten minutes
 
 The first release does not include offline audio downloads, Home Screen widgets or CarPlay. Lock Screen playback and Live Activities remain available.
 

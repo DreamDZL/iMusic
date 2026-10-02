@@ -13,6 +13,8 @@ final class ExploreViewModel: ObservableObject {
     @Published var selectedCategory = "推荐"
     @Published var playlists: [LXPlaylistSummary] = []
     @Published var tracks: [Track] = []
+    @Published var newSongs: [Track] = []
+    @Published var newAlbums: [AlbumSummary] = []
     @Published var toplists: [ToplistItem] = []
     @Published var isLoading = false
     @Published var hasMore = true
@@ -21,61 +23,81 @@ final class ExploreViewModel: ObservableObject {
     private var page = 1
     private var loadTask: Task<Void, Never>?
     private var requestGeneration = 0
+    private var lastLoadedAt: Date?
 
     func prepare(platform: LXCatalogPlatform) {
         guard platform != self.platform else { return }
         self.platform = platform
-        requestGeneration += 1
-        loadTask?.cancel()
-        isLoading = false
-        playlists = []
-        tracks = []
-        toplists = []
-        page = 1
-        hasMore = true
-        errorMessage = nil
+        resetContent()
     }
 
     func selectPlatform(_ platform: LXCatalogPlatform) {
         guard platform != self.platform else { return }
         prepare(platform: platform)
-        loadTask?.cancel()
-        loadTask = Task { await loadMore() }
+        requestMore()
     }
 
     func select(_ category: String) {
-        requestGeneration += 1
-        loadTask?.cancel()
-        isLoading = false
+        guard category != selectedCategory else { return }
         selectedCategory = category
-        playlists = []
-        tracks = []
-        toplists = []
-        page = 1
-        hasMore = true
-        errorMessage = nil
-        loadTask = Task { await loadMore() }
+        resetContent()
+        requestMore()
     }
 
-    /// Re-entering the Featured tab is an explicit refresh. Keep the source
-    /// and category, but discard the previous page so the user sees a fresh
-    /// recommendation request instead of the cached first page.
-    func refreshCurrent() {
+    /// Re-entering New refreshes stale catalog content after ten minutes.
+    /// Pull-to-refresh bypasses this window.
+    func refreshCurrent(force: Bool = false) async {
+        if !force, let lastLoadedAt, Date().timeIntervalSince(lastLoadedAt) < 10 * 60 {
+            return
+        }
+        resetContent()
+        requestMore()
+        guard let loadTask else { return }
+        await loadTask.value
+    }
+
+    func refreshIfStale() {
+        guard lastLoadedAt.map({ Date().timeIntervalSince($0) >= 10 * 60 }) ?? false else { return }
+        resetContent()
+        requestMore()
+    }
+
+    func requestMore() {
+        guard !isLoading, hasMore, loadTask == nil else { return }
+        let generation = requestGeneration
+        loadTask = Task {
+            await loadMore()
+            if generation == requestGeneration { loadTask = nil }
+        }
+    }
+
+    func cancelLoading() {
+        guard loadTask != nil else { return }
         requestGeneration += 1
         loadTask?.cancel()
+        loadTask = nil
+        isLoading = false
+    }
+
+    private func resetContent() {
+        requestGeneration += 1
+        loadTask?.cancel()
+        loadTask = nil
         isLoading = false
         playlists = []
         tracks = []
+        newSongs = []
+        newAlbums = []
         toplists = []
         page = 1
         hasMore = true
         errorMessage = nil
-        loadTask = Task { await loadMore() }
+        lastLoadedAt = nil
     }
 
-    func loadMore() async {
-        guard !isLoading, hasMore else { return }
+    private func loadMore() async {
         let generation = requestGeneration
+        guard !Task.isCancelled, generation == requestGeneration, !isLoading, hasMore else { return }
         isLoading = true
         defer {
             if generation == requestGeneration { isLoading = false }
@@ -83,15 +105,25 @@ final class ExploreViewModel: ObservableObject {
 
         do {
             let result: [LXPlaylistSummary]
+            var fetchedTracks: [Track]?
+            var fetchedNewSongs: [Track] = []
+            var fetchedNewAlbums: [AlbumSummary] = []
+            var fetchedToplists: [ToplistItem] = []
             if selectedCategory == "推荐" && page == 1 {
                 let content = await LXCatalogService.recommendedContent(platform: platform, limit: 30)
+                try Task.checkCancellation()
+                guard generation == requestGeneration else { return }
                 result = content.playlists
-                tracks = content.tracks
+                fetchedTracks = content.tracks
                 if platform == .wy {
-                    toplists = Array(((try? await NeteaseAPI.toplists()) ?? []).prefix(10))
-                    let liveTracks = (try? await NeteaseAPI.hotSongs(limit: 30))?
-                        .map { $0.normalizedForLXPlayback() } ?? []
-                    if !liveTracks.isEmpty { tracks = liveTracks }
+                    async let charts = NeteaseAPI.toplists()
+                    async let releases = NeteaseAPI.personalizedNewSongs(limit: 24)
+                    async let albums = NeteaseAPI.newAlbums(limit: 24)
+                    fetchedToplists = Array(((try? await charts) ?? []).prefix(10))
+                    fetchedNewSongs = ((try? await releases) ?? []).map { $0.normalizedForLXPlayback() }
+                    fetchedNewAlbums = (try? await albums) ?? []
+                    try Task.checkCancellation()
+                    guard generation == requestGeneration else { return }
                 }
             } else if (selectedCategory == "最热" || selectedCategory == "最新") && platform != .wy {
                 result = try await LXCatalogService.sortedSonglists(platform: platform,
@@ -108,12 +140,25 @@ final class ExploreViewModel: ObservableObject {
                                                                      page: page, limit: 30)
             }
 
+            try Task.checkCancellation()
             guard generation == requestGeneration else { return }
+            if let fetchedTracks { tracks = fetchedTracks }
+            if selectedCategory == "推荐", page == 1 {
+                toplists = fetchedToplists
+                newSongs = fetchedNewSongs
+                newAlbums = fetchedNewAlbums
+            }
             var seen = Set(playlists.map { "\($0.source.rawValue)|\($0.id)" })
             playlists += result.filter { seen.insert("\($0.source.rawValue)|\($0.id)").inserted }
             page += 1
             hasMore = selectedCategory != "推荐" && result.count >= 30 && page <= 6
-            errorMessage = playlists.isEmpty ? "当前平台暂时没有歌单，请切换平台或稍后重试" : nil
+            errorMessage = playlists.isEmpty && tracks.isEmpty && newSongs.isEmpty
+                && newAlbums.isEmpty && toplists.isEmpty
+                ? "当前平台暂时没有可用内容，请切换平台或稍后重试"
+                : nil
+            lastLoadedAt = .now
+        } catch is CancellationError {
+            return
         } catch {
             guard generation == requestGeneration else { return }
             errorMessage = playlists.isEmpty ? error.localizedDescription : nil
@@ -142,13 +187,30 @@ struct ExploreView: View {
                 platformPicker
                 categoryChips
 
-                if model.isLoading && model.playlists.isEmpty && model.tracks.isEmpty {
+                if model.platform == .wy && !model.newSongs.isEmpty {
+                    SectionHeader(title: "网易云新歌推荐")
+                        .padding(.horizontal, Theme.Layout.contentInset)
+                    TrackListView(tracks: model.newSongs)
+                        .padding(.horizontal, Theme.Layout.contentInset - 10)
+                }
+
+                if model.platform == .wy && !model.newAlbums.isEmpty {
+                    Shelf(title: "网易云新碟", rowHeight: Theme.Layout.coverShelfHeight) {
+                        ForEach(model.newAlbums) { album in
+                            newAlbumCard(album)
+                        }
+                    }
+                }
+
+                if model.isLoading && model.playlists.isEmpty && model.tracks.isEmpty
+                    && model.newSongs.isEmpty && model.newAlbums.isEmpty && model.toplists.isEmpty {
                     ProgressView()
                         .frame(maxWidth: .infinity, minHeight: 300)
                 } else if let errorMessage = model.errorMessage,
-                          model.playlists.isEmpty && model.tracks.isEmpty {
+                          model.playlists.isEmpty && model.tracks.isEmpty
+                            && model.newSongs.isEmpty && model.newAlbums.isEmpty && model.toplists.isEmpty {
                     ErrorStateView(message: errorMessage) {
-                        Task { await model.loadMore() }
+                        Task { await model.refreshCurrent(force: true) }
                     }
                     .frame(minHeight: 300)
                 } else {
@@ -160,7 +222,7 @@ struct ExploreView: View {
                     }
 
                     if !model.tracks.isEmpty {
-                        SectionHeader(title: "\(model.platform.displayName) 热门歌曲")
+                        SectionHeader(title: "\(model.platform.displayName) 精选歌曲")
                             .padding(.horizontal, Theme.Layout.contentInset)
                         TrackListView(tracks: model.tracks)
                             .padding(.horizontal, Theme.Layout.contentInset - 10)
@@ -195,7 +257,7 @@ struct ExploreView: View {
                     } else if model.hasMore {
                         Color.clear
                             .frame(height: 1)
-                            .onAppear { Task { await model.loadMore() } }
+                            .onAppear { model.requestMore() }
                     }
                 }
 
@@ -205,11 +267,16 @@ struct ExploreView: View {
         .navigationTitle("新内容")
         .task(id: "\(settings.homeRecommendationMode.rawValue)-\(settings.homeRecommendationPlatform.rawValue)") {
             model.prepare(platform: settings.homeRecommendationPlatform)
-            await model.loadMore()
+            model.requestMore()
         }
         .onAppear {
-            guard !model.playlists.isEmpty || !model.tracks.isEmpty else { return }
-            model.refreshCurrent()
+            model.refreshIfStale()
+        }
+        .onDisappear {
+            model.cancelLoading()
+        }
+        .refreshable {
+            await model.refreshCurrent(force: true)
         }
 #if os(iOS)
         .fullScreenCover(isPresented: $showBilibili) {
@@ -265,6 +332,17 @@ struct ExploreView: View {
 
     private var visiblePlaylists: [LXPlaylistSummary] {
         model.selectedCategory == "推荐" ? Array(model.playlists.dropFirst()) : model.playlists
+    }
+
+    private func newAlbumCard(_ album: AlbumSummary) -> some View {
+        NavigationLink(value: Destination.album(album.id)) {
+            CoverCardBody(
+                coverURL: album.picUrl?.resizedImageURL(384),
+                title: album.name,
+                subtitle: album.artistName
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private func featuredPlaylistCard(_ playlist: LXPlaylistSummary) -> some View {

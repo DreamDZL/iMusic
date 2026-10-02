@@ -158,7 +158,7 @@ struct PlaylistDetail: Decodable, Hashable {
 
 // MARK: - Album / Artist
 
-struct AlbumSummary: Decodable, Hashable, Identifiable {
+struct AlbumSummary: Decodable, Hashable, Identifiable, Sendable {
     let id: Int
     let name: String
     let picUrl: String?
@@ -269,7 +269,7 @@ struct ArtistSummary: Decodable, Hashable, Identifiable {
 
 // MARK: - Toplist
 
-struct ToplistItem: Decodable, Hashable, Identifiable {
+struct ToplistItem: Decodable, Hashable, Identifiable, Sendable {
     let id: Int
     let name: String
     let coverImgUrl: String?
@@ -292,7 +292,7 @@ struct ToplistItem: Decodable, Hashable, Identifiable {
     }
 }
 
-struct ToplistTrackPreview: Codable, Hashable {
+struct ToplistTrackPreview: Codable, Hashable, Sendable {
     let first: String
     let second: String
 }
