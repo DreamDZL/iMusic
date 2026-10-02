@@ -10,8 +10,11 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
 
     struct ImportReport: Equatable {
         let inserted: Int
+        let updated: Int
         let unchanged: Int
         let failed: [String]
+
+        var changedCount: Int { inserted + updated }
     }
 
     @Published private(set) var playlists: [QQMusicAPI.Playlist] = []
@@ -66,26 +69,45 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
         }
     }
 
-    func importSelected(_ ids: Set<String>) async -> ImportReport {
+    /// Only untouched provider copies can be refreshed. Any local edit freezes
+    /// the list as an iMusic copy and remains safe from a later remote snapshot.
+    func canRefresh(_ playlistID: String) -> Bool {
+        guard let localCopy = LocalPlaylistStore.shared.playlists.first(where: {
+            LocalPlaylistSyncPolicy.matchesProviderPlaylist($0, source: "qq", id: playlistID)
+        }) else { return false }
+        return LocalPlaylistSyncPolicy.canRefreshProviderPlaylist(
+            localCopy,
+            source: "qq",
+            id: playlistID
+        )
+    }
+
+    func importSelected(
+        _ ids: Set<String>,
+        overwriteEdited: Set<String> = [],
+        overwriteSnapshots: [String: LocalPlaylist] = [:]
+    ) async -> ImportReport {
         let session = QQMusicSessionStore.shared
         guard !isImporting else {
-            return ImportReport(inserted: 0, unchanged: 0, failed: [])
+            return ImportReport(inserted: 0, updated: 0, unchanged: 0, failed: [])
         }
         guard session.isLoggedIn, session.cookie != nil else {
-            return ImportReport(inserted: 0, unchanged: 0, failed: ["请先登录 QQ 音乐"])
+            return ImportReport(inserted: 0, updated: 0, unchanged: 0, failed: ["请先登录 QQ 音乐"])
         }
 
         let selected = playlists.filter { ids.contains($0.id) }
         guard !selected.isEmpty else {
-            return ImportReport(inserted: 0, unchanged: 0, failed: [])
+            return ImportReport(inserted: 0, updated: 0, unchanged: 0, failed: [])
         }
 
         let sessionRevision = session.sessionRevision
         isImporting = true
         defer { isImporting = false }
         var inserted = 0
+        var updated = 0
         var unchanged = 0
         var failed: [String] = []
+        let localStore = LocalPlaylistStore.shared
 
         for playlist in selected {
             guard !Task.isCancelled else {
@@ -96,7 +118,13 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                 failed.append("QQ 登录状态已变化，请重新选择歌单")
                 break
             }
-            if isImported(playlist.id) {
+            let overwriteLocalCopy = overwriteEdited.contains(playlist.id)
+            let expectedLocalCopy = overwriteSnapshots[playlist.id]
+            if overwriteLocalCopy, expectedLocalCopy == nil {
+                failed.append("\(playlist.name)：本地副本已变化，请重新选择")
+                continue
+            }
+            if isImported(playlist.id), !canRefresh(playlist.id), !overwriteLocalCopy {
                 unchanged += 1
                 continue
             }
@@ -105,7 +133,7 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                 break
             }
             do {
-                let result = try await QQMusicAPI.shared.playlistTracks(
+                let tracksResult = try await QQMusicAPI.shared.playlistTracks(
                     id: playlist.id,
                     cookie: currentCookie,
                     expectedTrackCount: playlist.trackCount
@@ -115,36 +143,42 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                     failed.append("\(playlist.name)：QQ 登录状态已变化，未保存本地副本")
                     break
                 }
-                session.acceptRefreshedCookie(result.refreshedCookie,
+                session.acceptRefreshedCookie(tracksResult.refreshedCookie,
                                               expectedSessionRevision: sessionRevision,
                                               expectedCookie: currentCookie)
-                let tracks = result.tracks
+                let tracks = tracksResult.tracks
                 guard !tracks.isEmpty || playlist.trackCount == 0 else {
                     failed.append("\(playlist.name)：歌单没有可导入的歌曲")
                     continue
                 }
-                // Imports can await while LX Sync is merging another device's
-                // library. Recheck the provider identity immediately before
-                // creating a local copy so the same playlist is never added
-                // twice in this window.
-                if isImported(playlist.id) {
-                    unchanged += 1
-                    continue
+                if overwriteLocalCopy {
+                    let currentLocalCopy = localStore.playlists.first(where: {
+                        LocalPlaylistSyncPolicy.matchesProviderPlaylist($0, source: "qq", id: playlist.id)
+                    })
+                    guard currentLocalCopy == expectedLocalCopy else {
+                        failed.append("\(playlist.name)：本地副本在更新期间发生变化，没有覆盖；请重试")
+                        continue
+                    }
                 }
-                guard LocalPlaylistStore.shared.create(
+                // Rechecking occurs inside upsert after the network awaits, so
+                // a concurrent edit or LX Sync merge cannot be overwritten.
+                let upsertResult = localStore.upsertRemotePlaylist(
+                    source: "qq",
+                    remoteID: playlist.id,
                     name: playlist.name,
-                    tracks: tracks,
                     coverURL: playlist.coverURL,
                     sourceName: "QQ 音乐",
-                    remoteSource: "qq",
-                    remotePlaylistID: playlist.id,
-                    remoteRevision: playlist.trackCount,
-                    isLocalCopy: true
-                ) != nil else {
-                    failed.append("\(playlist.name)：无法创建本地歌单")
-                    continue
+                    revision: playlist.trackCount,
+                    tracks: tracks,
+                    allowOverwritingLocalEdits: overwriteLocalCopy
+                )
+                if upsertResult.inserted {
+                    inserted += 1
+                } else if upsertResult.changed {
+                    updated += 1
+                } else {
+                    unchanged += 1
                 }
-                inserted += 1
             } catch is CancellationError {
                 failed.append("\(playlist.name)：导入已取消")
                 break
@@ -153,6 +187,6 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
             }
         }
 
-        return ImportReport(inserted: inserted, unchanged: unchanged, failed: failed)
+        return ImportReport(inserted: inserted, updated: updated, unchanged: unchanged, failed: failed)
     }
 }

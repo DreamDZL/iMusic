@@ -50,6 +50,25 @@ enum LocalPlaylistSyncPolicy {
         playlist.isLocalCopy != true
     }
 
+    static func canRefreshProviderPlaylist(
+        _ playlist: LocalPlaylist,
+        source: String,
+        id: String
+    ) -> Bool {
+        matchesProviderPlaylist(playlist, source: source, id: id)
+            && shouldRefreshFromProvider(playlist)
+    }
+
+    static func canApplyProviderSnapshot(
+        to playlist: LocalPlaylist,
+        source: String,
+        id: String,
+        allowOverwritingLocalEdits: Bool = false
+    ) -> Bool {
+        guard matchesProviderPlaylist(playlist, source: source, id: id) else { return false }
+        return shouldApplyProviderSnapshot(to: playlist) || allowOverwritingLocalEdits
+    }
+
     static func shouldPreserveLocalEdits(
         current: LocalPlaylist?,
         incomingLocalCopyFlag: Bool?,
@@ -345,19 +364,52 @@ final class LocalPlaylistStore: ObservableObject {
         revision: Int,
         tracks: [Track]
     ) -> (id: UUID, inserted: Bool, changed: Bool) {
+        upsertRemotePlaylist(
+            source: source,
+            remoteID: String(remoteID),
+            name: name,
+            coverURL: coverURL,
+            sourceName: sourceName,
+            revision: revision,
+            tracks: tracks
+        )
+    }
+
+    /// QQ playlist IDs are provider strings rather than NetEase integer IDs.
+    /// Keeping the string intact also lets an explicit refresh update the same
+    /// local copy without changing its LX Sync identity.
+    @discardableResult
+    func upsertRemotePlaylist(
+        source: String,
+        remoteID: String,
+        name: String,
+        coverURL: String?,
+        sourceName: String,
+        revision: Int,
+        tracks: [Track],
+        allowOverwritingLocalEdits: Bool = false
+    ) -> (id: UUID, inserted: Bool, changed: Bool) {
         let normalizedTracks = tracks.map { $0.normalizedForLXPlayback() }
         if let index = playlists.firstIndex(where: {
-            LocalPlaylistSyncPolicy.matchesProviderPlaylist($0, source: source, id: String(remoteID))
+            LocalPlaylistSyncPolicy.matchesProviderPlaylist($0, source: source, id: remoteID)
         }) {
             let old = playlists[index]
-            guard LocalPlaylistSyncPolicy.shouldApplyProviderSnapshot(to: old) else {
+            let resetLocalCopyMarker = old.isLocalCopy == true
+                && allowOverwritingLocalEdits
+            let canApplySnapshot = LocalPlaylistSyncPolicy.canApplyProviderSnapshot(
+                to: old,
+                source: source,
+                id: remoteID,
+                allowOverwritingLocalEdits: allowOverwritingLocalEdits
+            )
+            guard canApplySnapshot else {
                 return (old.id, false, false)
             }
-            let changed = old.name != name
+            let contentsChanged = old.name != name
                 || old.coverURL != coverURL
                 || old.remoteRevision != revision
                 || old.tracks != normalizedTracks
-            guard changed else {
+            guard contentsChanged || resetLocalCopyMarker else {
                 return (old.id, false, false)
             }
             playlists[index].name = name
@@ -366,6 +418,10 @@ final class LocalPlaylistStore: ObservableObject {
             playlists[index].tracks = normalizedTracks
             playlists[index].remoteRevision = revision
             playlists[index].updatedAt = .now
+            if resetLocalCopyMarker {
+                // A flagged copy reaches this path only after explicit consent.
+                playlists[index].isLocalCopy = nil
+            }
             persist()
             return (old.id, false, true)
         }
@@ -376,7 +432,7 @@ final class LocalPlaylistStore: ObservableObject {
             sourceName: sourceName,
             tracks: normalizedTracks,
             remoteSource: source,
-            remotePlaylistID: String(remoteID),
+            remotePlaylistID: remoteID,
             remoteRevision: revision
         )
         playlists.insert(playlist, at: 0)

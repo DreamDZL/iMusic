@@ -381,10 +381,13 @@ struct AccountSyncView: View {
 /// rows. Import creates a local copy; the app never sends playlist edits back.
 struct QQMusicPlaylistPickerView: View {
     @StateObject private var playlists = QQMusicPlaylistSyncStore.shared
+    @StateObject private var localPlaylists = LocalPlaylistStore.shared
     @Environment(\.dismiss) private var dismiss
     @State private var selectedIDs = Set<String>()
     @State private var importErrors: [String] = []
     @State private var importTask: Task<Void, Never>?
+    @State private var overwriteCandidateID: String?
+    @State private var showOverwriteConfirmation = false
 
     private var likedPlaylists: [QQMusicAPI.Playlist] {
         playlists.playlists.filter(\.isLikedSongs)
@@ -396,6 +399,18 @@ struct QQMusicPlaylistPickerView: View {
 
     private var collectedPlaylists: [QQMusicAPI.Playlist] {
         playlists.playlists.filter { $0.kind == .collected && !$0.isLikedSongs }
+    }
+
+    private var selectedPlaylists: [QQMusicAPI.Playlist] {
+        playlists.playlists.filter { selectedIDs.contains($0.id) }
+    }
+
+    private var primaryActionTitle: String {
+        let updateCount = selectedPlaylists.filter { playlists.canRefresh($0.id) }.count
+        let importCount = selectedPlaylists.filter { !playlists.isImported($0.id) }.count
+        if updateCount == 0 { return "导入 \(importCount)" }
+        if importCount == 0 { return "更新 \(updateCount)" }
+        return "导入 \(importCount) · 更新 \(updateCount)"
     }
 
     var body: some View {
@@ -412,7 +427,7 @@ struct QQMusicPlaylistPickerView: View {
                         .font(.subheadline.weight(.medium))
                         .disabled(playlists.isRefreshing || playlists.isImporting)
                     }
-                    Text("歌单会复制到 iMusic。本地增删与排序不会回写 QQ 账号，并可通过 LX Sync 同步到其他设备。")
+                    Text("选中歌单可导入或更新未编辑的本地副本。对本地副本执行覆盖前会再次确认；任何操作都不会回写 QQ 账号，并可通过 LX Sync 同步本地内容。")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -467,16 +482,52 @@ struct QQMusicPlaylistPickerView: View {
                     if playlists.isImporting {
                         ProgressView()
                     } else {
-                        Text("导入 \(selectedIDs.count)")
+                        Text(primaryActionTitle)
                     }
                 }
-                .disabled(playlists.isImporting || selectedIDs.isEmpty)
+                .disabled(playlists.isImporting || selectedActionCount == 0)
             }
         }
         .interactiveDismissDisabled(playlists.isImporting)
+        .onChange(of: playlists.playlists.map(\.id)) { _, currentIDs in
+            selectedIDs.formIntersection(Set(currentIDs))
+        }
+        .onChange(of: localPlaylists.playlists) { _, currentCopies in
+            selectedIDs = Set(selectedIDs.filter { id in
+                guard let copy = currentCopies.first(where: {
+                    LocalPlaylistSyncPolicy.matchesProviderPlaylist($0, source: "qq", id: id)
+                }) else { return true }
+                return LocalPlaylistSyncPolicy.canRefreshProviderPlaylist(copy, source: "qq", id: id)
+            })
+        }
         .task {
             if playlists.playlists.isEmpty { await playlists.refresh() }
         }
+        .alert("从 QQ 更新这个本地副本？", isPresented: $showOverwriteConfirmation) {
+            Button("覆盖并更新", role: .destructive) {
+                guard let id = overwriteCandidateID else { return }
+                overwriteCandidateID = nil
+                guard let snapshot = localPlaylists.playlists.first(where: {
+                    LocalPlaylistSyncPolicy.matchesProviderPlaylist($0, source: "qq", id: id)
+                }) else {
+                    ToastCenter.shared.show("本地副本已变化，请重新选择")
+                    return
+                }
+                performImport(
+                    ids: [id],
+                    overwriteEdited: [id],
+                    overwriteSnapshots: [id: snapshot],
+                    dismissOnSuccess: false
+                )
+            }
+            Button("取消", role: .cancel) { overwriteCandidateID = nil }
+        } message: {
+            Text("本地歌单可能包含 iMusic 上的更改。确认后，歌曲、名称和封面会替换为 QQ 当前版本；不会修改 QQ 账号。")
+        }
+    }
+
+    private var selectedActionCount: Int {
+        selectedPlaylists.filter { !playlists.isImported($0.id) || playlists.canRefresh($0.id) }.count
     }
 
     @ViewBuilder
@@ -492,11 +543,22 @@ struct QQMusicPlaylistPickerView: View {
     }
 
     private func playlistRow(_ playlist: QQMusicAPI.Playlist) -> some View {
-        let isImported = playlists.isImported(playlist.id)
+        let localCopy = localPlaylists.playlists.first(where: {
+            LocalPlaylistSyncPolicy.matchesProviderPlaylist($0, source: "qq", id: playlist.id)
+        })
+        let isImported = localCopy != nil
+        let canRefresh = localCopy.map {
+            LocalPlaylistSyncPolicy.canRefreshProviderPlaylist($0, source: "qq", id: playlist.id)
+        } ?? false
         let isSelected = selectedIDs.contains(playlist.id)
 
         return Button {
-            guard !isImported else { return }
+            guard !playlists.isImporting else { return }
+            if isImported && !canRefresh {
+                overwriteCandidateID = playlist.id
+                showOverwriteConfirmation = true
+                return
+            }
             if isSelected { selectedIDs.remove(playlist.id) }
             else { selectedIDs.insert(playlist.id) }
         } label: {
@@ -516,7 +578,7 @@ struct QQMusicPlaylistPickerView: View {
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                         if isImported {
-                            Text("已加入")
+                            Text(canRefresh ? "已加入 · 可更新" : "本地副本 · 需确认覆盖")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(Theme.accent)
                         }
@@ -528,35 +590,69 @@ struct QQMusicPlaylistPickerView: View {
                 }
 
                 Spacer(minLength: 0)
-                Image(systemName: isImported ? "checkmark.seal.fill" : (isSelected ? "checkmark.circle.fill" : "circle"))
+                Image(systemName: isSelected
+                      ? "checkmark.circle.fill"
+                      : (isImported ? (canRefresh ? "arrow.clockwise.circle" : "arrow.counterclockwise.circle") : "circle"))
                     .font(.title3)
-                    .foregroundStyle(isImported || isSelected ? Theme.accent : Color.secondary)
+                    .foregroundStyle(isSelected || (isImported && canRefresh) ? Theme.accent : Color.secondary)
                     .frame(width: 44, height: 44)
             }
             .padding(10)
             .background(
-                isImported || isSelected ? Theme.accent.opacity(0.10) : Color.primary.opacity(0.045),
+                isSelected || (isImported && canRefresh) ? Theme.accent.opacity(0.10) : Color.primary.opacity(0.045),
                 in: RoundedRectangle(cornerRadius: 16, style: .continuous)
             )
         }
         .buttonStyle(.plain)
-        .disabled(isImported || playlists.isImporting)
-        .accessibilityLabel("\(playlist.name)，\(isImported ? "已加入本地歌单" : (isSelected ? "已选择" : "未选择"))")
+        .disabled(playlists.isImporting)
+        .accessibilityLabel("\(playlist.name)，\(isImported ? (canRefresh ? "已加入，可更新本地副本" : "本地副本，点按后确认覆盖更新") : (isSelected ? "已选择导入" : "未选择"))")
     }
 
     private func importSelected() {
         guard importTask == nil else { return }
+        let actionIDs = Set(selectedPlaylists.compactMap { playlist in
+            !playlists.isImported(playlist.id) || playlists.canRefresh(playlist.id)
+                ? playlist.id
+                : nil
+        })
+        guard !actionIDs.isEmpty else {
+            ToastCenter.shared.show("当前没有可导入或更新的歌单，请刷新列表后重试")
+            return
+        }
+        performImport(
+            ids: actionIDs,
+            overwriteEdited: [],
+            overwriteSnapshots: [:],
+            dismissOnSuccess: true
+        )
+    }
+
+    private func performImport(
+        ids: Set<String>,
+        overwriteEdited: Set<String>,
+        overwriteSnapshots: [String: LocalPlaylist],
+        dismissOnSuccess: Bool
+    ) {
+        guard importTask == nil else { return }
         importTask = Task { @MainActor in
             defer { importTask = nil }
-            let report = await playlists.importSelected(selectedIDs)
+            let report = await playlists.importSelected(
+                ids,
+                overwriteEdited: overwriteEdited,
+                overwriteSnapshots: overwriteSnapshots
+            )
             if report.failed.isEmpty {
+                guard report.changedCount > 0 || report.unchanged > 0 else {
+                    importErrors = ["当前没有可导入或更新的歌单，请刷新列表后重试"]
+                    return
+                }
                 importErrors = []
-                ToastCenter.shared.show("已导入 \(report.inserted) 个歌单到本地")
-                dismiss()
+                ToastCenter.shared.show("新增 \(report.inserted) 个，更新 \(report.updated) 个，未变化 \(report.unchanged) 个")
+                if dismissOnSuccess { dismiss() }
             } else {
                 importErrors = report.failed
-                ToastCenter.shared.show("已导入 \(report.inserted) 个，\(report.failed.count) 个未完成")
-                selectedIDs = selectedIDs.filter { !playlists.isImported($0) }
+                ToastCenter.shared.show("新增 \(report.inserted) 个，更新 \(report.updated) 个，未变化 \(report.unchanged) 个，\(report.failed.count) 个未完成")
+                selectedIDs = selectedIDs.filter { !playlists.isImported($0) || playlists.canRefresh($0) }
             }
         }
     }

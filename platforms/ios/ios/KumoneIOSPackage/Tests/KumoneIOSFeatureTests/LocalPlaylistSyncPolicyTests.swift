@@ -26,6 +26,81 @@ final class LocalPlaylistSyncPolicyTests: XCTestCase {
         XCTAssertTrue(LocalPlaylistSyncPolicy.shouldApplyProviderSnapshot(to: nil))
     }
 
+    func testQQPlaylistCopyCanRefreshUntilItHasLocalEdits() {
+        let imported = LocalPlaylist(
+            name: "QQ copy",
+            remoteSource: "qq",
+            remotePlaylistID: "playlist-42"
+        )
+        let edited = LocalPlaylist(
+            name: "Edited QQ copy",
+            remoteSource: "qq",
+            remotePlaylistID: "playlist-42",
+            isLocalCopy: true
+        )
+
+        XCTAssertTrue(LocalPlaylistSyncPolicy.canRefreshProviderPlaylist(
+            imported,
+            source: "qq",
+            id: "playlist-42"
+        ))
+        XCTAssertFalse(LocalPlaylistSyncPolicy.canRefreshProviderPlaylist(
+            edited,
+            source: "qq",
+            id: "playlist-42"
+        ))
+        XCTAssertFalse(LocalPlaylistSyncPolicy.canApplyProviderSnapshot(
+            to: edited,
+            source: "qq",
+            id: "playlist-42"
+        ))
+        XCTAssertTrue(LocalPlaylistSyncPolicy.canApplyProviderSnapshot(
+            to: edited,
+            source: "qq",
+            id: "playlist-42",
+            allowOverwritingLocalEdits: true
+        ))
+        XCTAssertFalse(LocalPlaylistSyncPolicy.canApplyProviderSnapshot(
+            to: edited,
+            source: "qq",
+            id: "different-playlist",
+            allowOverwritingLocalEdits: true
+        ))
+        XCTAssertFalse(LocalPlaylistSyncPolicy.canRefreshProviderPlaylist(
+            imported,
+            source: "qq",
+            id: "different-playlist"
+        ))
+    }
+
+    func testLegacyQQCopiesRequireConfirmationWhenEditHistoryIsAmbiguous() {
+        let legacyAccountImport = LocalPlaylist(
+            name: "Legacy QQ copy",
+            sourceName: "QQ 音乐",
+            remoteSource: "qq",
+            remotePlaylistID: "playlist-legacy",
+            isLocalCopy: true
+        )
+        let shareLinkCopy = LocalPlaylist(
+            name: "Legacy shared link",
+            sourceName: "QQ 音乐",
+            remoteSource: "tx",
+            remotePlaylistID: "playlist-legacy",
+            isLocalCopy: true
+        )
+
+        XCTAssertFalse(LocalPlaylistSyncPolicy.canRefreshProviderPlaylist(
+            legacyAccountImport,
+            source: "qq",
+            id: "playlist-legacy"
+        ))
+        XCTAssertFalse(LocalPlaylistSyncPolicy.canRefreshProviderPlaylist(
+            shareLinkCopy,
+            source: "qq",
+            id: "playlist-legacy"
+        ))
+    }
+
     func testOlderLXSyncUpdateCannotClearAnEditedCopyFlag() {
         let localCopy = LocalPlaylist(
             name: "Edited copy",
