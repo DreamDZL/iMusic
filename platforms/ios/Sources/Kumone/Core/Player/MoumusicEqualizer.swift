@@ -2,6 +2,7 @@ import AVFoundation
 import Combine
 import Foundation
 import MediaToolbox
+import Synchronization
 
 /// Ten-band equalizer migrated from Beans-Music 1.8.1 and adapted to
 /// Moumusic's existing AVPlayer processing tap.  The player remains an
@@ -49,6 +50,20 @@ enum MoumusicEqualizerPreset: String, CaseIterable, Identifiable, Equatable {
     }
 }
 
+/// Lock-free hint checked before the realtime callback takes the equalizer
+/// lock. The locked state remains authoritative once the callback enters.
+final class EqualizerProcessingGate {
+    private let enabledSnapshot = Atomic<Bool>(false)
+
+    func setEnabled(_ isEnabled: Bool) {
+        enabledSnapshot.store(isEnabled, ordering: .relaxed)
+    }
+
+    func shouldEnterProcessingLock(frameCount: Int) -> Bool {
+        frameCount > 0 && enabledSnapshot.load(ordering: .relaxed)
+    }
+}
+
 struct MoumusicEqualizerCustomPreset: Identifiable, Codable, Hashable {
     let id: String
     var name: String
@@ -80,6 +95,7 @@ final class MoumusicEqualizer: ObservableObject {
 
     private let defaults = UserDefaults.standard
     private let lock = NSLock()
+    private let processingGate = EqualizerProcessingGate()
     private var processingEnabled = false
     private var processingPreampLinear: Float = 1
     private var processingFormatIsFloat32 = false
@@ -120,6 +136,7 @@ final class MoumusicEqualizer: ObservableObject {
             )
         }
         processingEnabled = isEnabled
+        processingGate.setEnabled(isEnabled)
         processingPreampLinear = Self.linearGain(for: preampGain)
         rebuildCoefficientsLocked(using: normalizedGains)
     }
@@ -129,6 +146,7 @@ final class MoumusicEqualizer: ObservableObject {
         isEnabled = enabled
         lock.lock()
         processingEnabled = enabled
+        processingGate.setEnabled(enabled)
         lock.unlock()
         defaults.set(enabled, forKey: Self.enabledKey)
     }
@@ -213,6 +231,14 @@ final class MoumusicEqualizer: ObservableObject {
 
     // MARK: Audio tap hooks
 
+    nonisolated static func shouldProcessLockedBuffer(
+        frameCount: Int,
+        isEnabled: Bool,
+        supportsFloat32: Bool
+    ) -> Bool {
+        frameCount > 0 && isEnabled && supportsFloat32
+    }
+
     func prepare(with format: AudioStreamBasicDescription) {
         lock.lock()
         sampleRate = max(format.mSampleRate, 8_000)
@@ -225,10 +251,14 @@ final class MoumusicEqualizer: ObservableObject {
     }
 
     func process(bufferList: UnsafeMutablePointer<AudioBufferList>, frameCount: Int) {
-        guard frameCount > 0 else { return }
+        guard processingGate.shouldEnterProcessingLock(frameCount: frameCount) else { return }
         lock.lock()
         defer { lock.unlock() }
-        guard processingEnabled, processingFormatIsFloat32 else { return }
+        guard Self.shouldProcessLockedBuffer(
+            frameCount: frameCount,
+            isEnabled: processingEnabled,
+            supportsFloat32: processingFormatIsFloat32
+        ) else { return }
 
         let buffers = UnsafeMutableAudioBufferListPointer(bufferList)
         var firstChannelIndex = 0
