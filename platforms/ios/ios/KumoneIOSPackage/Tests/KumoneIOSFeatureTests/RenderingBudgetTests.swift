@@ -73,4 +73,9 @@ final class RenderingBudgetTests: XCTestCase {
             RenderingBudget.permitsContinuousEffects(lowPowerMode: false, thermalState: .serious)
         )
     }
+
+    func testAudioAnalysisPausesWhenSceneIsNotActive() {
+        XCTAssertTrue(RenderingBudget.permitsAudioAnalysis(isSceneActive: true))
+        XCTAssertFalse(RenderingBudget.permitsAudioAnalysis(isSceneActive: false))
+    }
 }

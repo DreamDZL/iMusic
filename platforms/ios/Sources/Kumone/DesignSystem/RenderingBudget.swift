@@ -68,10 +68,14 @@ final class RenderingBudget: ObservableObject {
         !lowPowerMode && thermalState == .nominal
     }
 
+    nonisolated static func permitsAudioAnalysis(isSceneActive: Bool) -> Bool {
+        isSceneActive
+    }
+
     func setSceneActive(_ active: Bool) {
         guard isSceneActive != active else { return }
         isSceneActive = active
-        AudioSpectrum.shared.setAnalysisEnabled(active)
+        AudioSpectrum.shared.setAnalysisEnabled(Self.permitsAudioAnalysis(isSceneActive: active))
     }
 
     private func refresh() {

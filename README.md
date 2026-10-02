@@ -15,9 +15,9 @@ SwiftUI · System Liquid Glass · LX User API · LX Sync Server
 
 </div>
 
-iMusic continues the native iOS project from [Moumusic](https://github.com/jiajia2222/Moumusic). Its main destinations are Home, New, Search and Library. The interface uses native SwiftUI navigation and follows the system Liquid Glass appearance. Playback is resolved by LX User API sources imported by the user.
+iMusic continues the native iOS project from [Moumusic](https://github.com/jiajia2222/Moumusic). Its main destinations are Home, New, Search and Library. The interface uses native SwiftUI navigation and follows the system Liquid Glass appearance. Imported LX User API sources provide third-party playback and fallback; automatic mode may first use an eligible signed-in provider account.
 
-QQ Music and NetEase public playlist imports become editable local copies. Library edits and local favorites can sync through a compatible self-hosted [LX Sync Server](https://github.com/lyswhut/lx-music-sync-server); changes are not written back to QQ Music or NetEase accounts. Source scripts are managed locally on each device.
+QQ Music and NetEase public playlist imports become editable local copies. Edits to those copies stay in iMusic and are not written to the originating provider playlist. Local favorites and compatible playlists can sync through a self-hosted [LX Sync Server](https://github.com/lyswhut/lx-music-sync-server). Source scripts are managed locally on each device.
 
 Users can also copy their NetEase liked songs into iMusic's local favorites from the Library. This import is one-way; later changes stay in iMusic and LX Sync.
 
@@ -32,15 +32,15 @@ Users can also copy their NetEase liked songs into iMusic's local favorites from
 - QQ Music and NetEase public playlist imports as local copies
 - Optional LX Sync for compatible favorites and playlists
 - iOS 27 system Liquid Glass, with transparency and tint following iPhone display and accessibility settings
-- Power-aware animation and spectrum analysis adapt to Low Power Mode, thermal pressure and scene visibility; New content refreshes automatically at most every ten minutes
+- Some continuous decorative animations and audio spectrum analysis are throttled or paused for Low Power Mode, thermal pressure and inactive app scenes; New content refreshes automatically at most every ten minutes
 
-The first release does not include offline audio downloads, Home Screen widgets or CarPlay. Lock Screen playback and Live Activities remain available.
+The default target does not include an in-app audio-download screen, Home Screen widgets or CarPlay integration. Playback Live Activities remain available. The player can reuse local audio files that are already present.
 
 ## Sources and synchronization
 
 Open **Library → More → Manage LX Sources** to import a source from a file or URL and run its availability check. No third-party source URLs are bundled.
 
-Open **Library → Sync Library** to enter an LX Sync Server address and connection code. The client syncs compatible favorites and playlists. LX Sync does not carry LX source scripts, so import those on each device. Imported QQ Music and NetEase lists remain local copies and are never modified on the provider account.
+Open **Library → Sync Library** to enter an LX Sync Server address and connection code. The client syncs compatible favorites and playlists. LX Sync does not carry LX source scripts, so import those on each device. Edits to imported QQ Music and NetEase copies remain local to iMusic and do not modify the provider playlists.
 
 ## Build
 
@@ -64,9 +64,9 @@ platforms/ios/
 │   ├── Core/Player/       AVPlayer, queue, lyrics and system playback state
 │   ├── Core/Storage/      Local library, source configuration and account data
 │   ├── Core/Sync/         LX Sync wire models and client
-│   ├── DesignSystem/      SwiftUI theme and Liquid Glass helpers
+│   ├── DesignSystem/      SwiftUI theme, Liquid Glass and rendering budget
 │   └── Features/          Home, New, Search, Library, settings and player
-├── ios/                   iOS app shell, widget and XcodeGen manifest
+├── ios/                   iOS app shell, playback Live Activity extension, tests and XcodeGen manifest
 └── docs/                  Product icon and screenshots
 platforms/android/         Preserved upstream subtree; not part of the iMusic iOS target
 ```

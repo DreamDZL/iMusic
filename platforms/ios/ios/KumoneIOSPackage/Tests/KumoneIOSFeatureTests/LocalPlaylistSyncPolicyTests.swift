@@ -142,6 +142,51 @@ final class LocalPlaylistSyncPolicyTests: XCTestCase {
         ))
     }
 
+    func testQQAccountImportRecognizesLXCatalogSourceAlias() {
+        let linkImportedCopy = LocalPlaylist(
+            name: "QQ 歌单",
+            remoteSource: "tx",
+            remotePlaylistID: "playlist-42",
+            isLocalCopy: true
+        )
+
+        XCTAssertTrue(LocalPlaylistSyncPolicy.matchesProviderPlaylist(
+            linkImportedCopy,
+            source: "qq",
+            id: "playlist-42"
+        ))
+        XCTAssertEqual(
+            LocalPlaylistSyncPolicy.providerIdentityKey(source: "qq", id: "playlist-42"),
+            LocalPlaylistSyncPolicy.providerIdentityKey(source: "tx", id: "playlist-42")
+        )
+    }
+
+    func testLXSyncDeduplicatesQQProviderAliases() {
+        let fromLXCatalog = LXSyncUserPlaylist(
+            id: "sync-tx",
+            name: "QQ 歌单链接导入",
+            source: "tx",
+            sourceListId: "playlist-42",
+            locationUpdateTime: 1_000
+        )
+        let fromQQAccount = LXSyncUserPlaylist(
+            id: "sync-qq",
+            name: "QQ 账号导入",
+            source: "qq",
+            sourceListId: "playlist-42",
+            locationUpdateTime: 2_000
+        )
+
+        let merged = LocalPlaylistSyncPolicy.deduplicateProviderPlaylists([
+            fromLXCatalog, fromQQAccount
+        ])
+
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged[0].name, "QQ 账号导入")
+        XCTAssertEqual(merged[0].id, "sync-qq")
+        XCTAssertEqual(merged[0].source, "qq")
+    }
+
     func testProviderDuplicateAcrossDevicesKeepsOneNewestCopy() {
         let older = LXSyncUserPlaylist(
             id: "sync-b",

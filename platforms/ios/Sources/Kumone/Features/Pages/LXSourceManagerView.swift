@@ -18,6 +18,7 @@ struct LXSourceManagerView: View {
     @State private var sourceToDelete: LXSourceStore.Source?
     @State private var lxError: String?
     @State private var testingSourceID: String?
+    @State private var sourceCheckTask: Task<Void, Never>?
     @State private var sourceCheckResults: [String: LXUserAPIService.SourceCheckResult] = [:]
     @State private var expandedSourceIDs: Set<String> = []
 
@@ -30,6 +31,7 @@ struct LXSourceManagerView: View {
                 Button("完成") { dismiss() }
             }
         }
+        .onDisappear(perform: cancelSourceCheck)
         .fileExporter(
             isPresented: $isExportingSource,
             document: sourceExportDocument,
@@ -232,8 +234,8 @@ struct LXSourceManagerView: View {
                 if let source = lxStore.selectedSource,
                    let result = sourceCheckResults[source.id] {
                     HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: result.isAvailable ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            .foregroundStyle(result.isAvailable ? .green : .red)
+                        Image(systemName: statusIcon(for: result))
+                            .foregroundStyle(statusColor(for: result))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(result.message)
                                 .font(.subheadline.weight(.medium))
@@ -438,11 +440,11 @@ struct LXSourceManagerView: View {
 
             if let result = sourceCheckResults[source.id] {
                 HStack(spacing: 4) {
-                    Image(systemName: result.isAvailable ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    Image(systemName: statusIcon(for: result))
                     Text(result.message)
                 }
                 .font(.caption)
-                .foregroundStyle(result.isAvailable ? .green : .red)
+                .foregroundStyle(statusColor(for: result))
                 .padding(.leading, 54)
             }
 
@@ -532,11 +534,11 @@ struct LXSourceManagerView: View {
                         }
                         if let result = sourceCheckResults[source.id] {
                             HStack(spacing: 4) {
-                                Image(systemName: result.isAvailable ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                Image(systemName: statusIcon(for: result))
                                 Text(result.message)
                             }
                             .font(.caption)
-                            .foregroundStyle(result.isAvailable ? .green : .red)
+                            .foregroundStyle(statusColor(for: result))
                         }
                         if let sourceURL = source.sourceURL, let url = URL(string: sourceURL) {
                             Link(destination: url) {
@@ -719,18 +721,35 @@ struct LXSourceManagerView: View {
 
     private func checkSource(_ source: LXSourceStore.Source) {
         guard testingSourceID == nil else { return }
-        let previousID = lxStore.selectedID
         testingSourceID = source.id
-        if previousID != source.id {
-            lxStore.select(source.id)
-        }
-        Task { @MainActor in
-            let result = await lxAPI.checkSelectedSource()
+        sourceCheckTask = Task { @MainActor in
+            let result = await lxAPI.checkSource(source)
+            guard !Task.isCancelled else { return }
             sourceCheckResults[source.id] = result
-            if previousID != source.id {
-                lxStore.select(previousID)
-            }
             testingSourceID = nil
+            sourceCheckTask = nil
+        }
+    }
+
+    private func cancelSourceCheck() {
+        sourceCheckTask?.cancel()
+        sourceCheckTask = nil
+        testingSourceID = nil
+    }
+
+    private func statusIcon(for result: LXUserAPIService.SourceCheckResult) -> String {
+        return switch result.status {
+        case .available: "checkmark.circle.fill"
+        case .unavailable: "xmark.circle.fill"
+        case .requiresTrack: "questionmark.circle.fill"
+        }
+    }
+
+    private func statusColor(for result: LXUserAPIService.SourceCheckResult) -> Color {
+        return switch result.status {
+        case .available: .green
+        case .unavailable: .red
+        case .requiresTrack: .orange
         }
     }
 

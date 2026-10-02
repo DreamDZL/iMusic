@@ -65,11 +65,35 @@ enum LocalPlaylistSyncPolicy {
     }
 
     static func matchesProviderPlaylist(_ playlist: LocalPlaylist, source: String, id: String) -> Bool {
-        playlist.remoteSource == source && playlist.remotePlaylistID == id
+        canonicalProviderSource(playlist.remoteSource ?? "") == canonicalProviderSource(source)
+            && playlist.remotePlaylistID == id
     }
 
     static func providerIdentityKey(source: String, id: String) -> String {
-        "\(source.lowercased())\u{1F}\(id)"
+        "\(canonicalProviderSource(source))\u{1F}\(id)"
+    }
+
+    /// Account imports and LX catalog links can name the same provider with
+    /// different identifiers (QQ uses `qq` in its account API and `tx` in LX).
+    /// Canonicalizing only identity comparisons prevents duplicate local copies
+    /// while preserving the original source label in synchronized data.
+    private static func canonicalProviderSource(_ source: String) -> String {
+        switch source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "163", "netease", "neteasecloudmusic", "netease-cloud-music", "cloudmusic":
+            return "wy"
+        case "kuwo":
+            return "kw"
+        case "kugou":
+            return "kg"
+        case "qq", "qqmusic", "qq-music":
+            return "tx"
+        case "migu":
+            return "mg"
+        case "soda", "sodamusic", "soda-music", "qishui", "qishui-music":
+            return "sd"
+        default:
+            return source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
     }
 
     static func deduplicateProviderPlaylists(_ playlists: [LXSyncUserPlaylist]) -> [LXSyncUserPlaylist] {

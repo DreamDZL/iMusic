@@ -1,112 +1,79 @@
 <div align="center">
 
-<img src="platforms/ios/docs/icon.png" width="140" alt="Moumusic" />
+<img src="platforms/ios/docs/iMusicIcon.png" width="140" alt="iMusic" />
 
-# Moumusic
+# iMusic
 
-**A source-driven music client for iOS and Android**
+**A native iOS 27 music client with an Apple Music-inspired interface**
 
-SwiftUI on iOS · LX User API sources · LX Music Mobile on Android
+SwiftUI · System Liquid Glass · LX User API · LX Sync Server
 
-[![Platform](https://img.shields.io/badge/platform-iOS%2016%2B%20%7C%20Android-blue?logo=apple)](#build)
+[![Platform](https://img.shields.io/badge/platform-iOS%2027%2B-blue?logo=apple)](#build)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&logoColor=white)](platforms/ios/Package.swift)
 [![LGPL-3.0](https://img.shields.io/badge/license-LGPL--3.0-orange)](LICENSE)
 [![GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-orange)](COPYING)
 
 </div>
 
-[简体中文](README_CN.md) · **English**
+iMusic continues the native iOS project from [Moumusic](https://github.com/jiajia2222/Moumusic). Its main destinations are Home, New, Search and Library. The interface uses native SwiftUI navigation and follows the system Liquid Glass appearance. Imported LX User API sources provide third-party playback and fallback; automatic mode may first use an eligible signed-in provider account.
 
-Moumusic is an independent cross-platform music client. It uses Kumone's native SwiftUI experience as the iOS foundation and LX Music Mobile's source protocol and Android client. Public catalog data is used for discovery; audio playback is resolved through LX User API sources imported and enabled by the user.
-
-> Moumusic does not bundle third-party source URLs or provide NetEase login. Add only sources you are authorized to use and follow the terms and copyright rules of each service.
+QQ Music and NetEase public playlists are imported as editable local copies. Edits to those copies stay in iMusic and are not written to the originating provider playlist. Local favorites and compatible playlists can sync across devices through a self-hosted [LX Sync Server](https://github.com/lyswhut/lx-music-sync-server). Source scripts are managed locally on each device.
 
 ## Features
 
-- LX User API source import from JSON, JavaScript or an online URL
-- Source availability checks, enable/switch/delete management
-- Kuwo, Kugou, QQ Music, NetEase, Migu and aggregate search
-- Source-resolved playback with lyrics, artwork and quality selection
-- Native iOS player, queue, synced lyrics, lock-screen controls and Control Center playback controls; optional CarPlay after Apple approval
-- WidgetKit current-lyrics widget for Home Screen and Lock Screen
-- Public NetEase catalog: recommendations, discovery, playlists, comments and playlist import
-- Native LX Music Mobile Android source management, search, lyrics, downloads and playback
-- Simplified Chinese and English interfaces
+- Apple Music-inspired Home, New, Search and Library destinations
+- Artist, album and playlist details, mini-player, full-screen player, queue and synchronized lyrics
+- Native Lock Screen and Control Center playback controls
+- User-managed LX source import, availability check, enable/disable, switching, export and deletion
+- Multi-platform catalog search and source-resolved playback
+- Local favorites, recently played tracks and editable playlists
+- QQ Music and NetEase public playlist imports as local copies
+- Optional LX Sync for compatible favorites and playlists
+- iOS 27 system Liquid Glass, with transparency and tint following iPhone display and accessibility settings
+- Some continuous decorative animations and audio spectrum analysis are throttled or paused for Low Power Mode, thermal pressure and inactive app scenes
+- Automatic New content refresh is throttled to at most once every ten minutes
 
-## Add a source
+The default target does not include an in-app audio-download screen, Home Screen widgets or CarPlay integration. Playback Live Activities remain available. The player can reuse local audio files that are already present.
 
-On iOS, open **Library → Settings → LX Sources**, choose **Import from File** or **Import from Online URL**, then select and test the source. On Android, use the original LX Music Mobile source-management page.
+## Sources and synchronization
 
-The app intentionally does not ship a default third-party provider URL. Imported sources are user configuration and remain the user's responsibility.
+Open **Library → More → Manage LX Sources** to import a source from a file or URL and check its availability. No third-party source URLs are bundled.
 
-## Installation
-
-Download the latest builds from [Releases](https://github.com/jiajia2222/Moumusic/releases). iOS releases are unsigned IPAs and must be installed with your own certificate, AltStore, SideStore, TrollStore or another sideloading tool.
+Open **Library → Sync Library** to enter an LX Sync Server address and connection code. The client syncs compatible favorites and playlists. LX Sync does not carry LX source scripts, so import those on each device. Edits to imported QQ Music and NetEase copies remain local to iMusic and do not modify the provider playlists.
 
 ## Build
 
-### Android
-
-```sh
-cd platforms/android
-npm ci
-npm run pack:android
-```
-
-### iOS
-
-Requires macOS and Xcode. XcodeGen is used to generate the app and WidgetKit extension targets:
+The iOS application requires macOS and Xcode. XcodeGen generates the app and Live Activity extension targets:
 
 ```sh
 cd platforms/ios/ios
 xcodegen generate
-xcodebuild -project KumoneIOS.xcodeproj -scheme KumoneIOS -configuration Release -sdk iphoneos build
+xcodebuild -project KumoneIOS.xcodeproj -scheme KumoneIOS -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO build
 ```
 
-#### CarPlay (optional)
+The deployment target is iOS 27 and the app is designed for standard iPhone sizes. It does not include a foldable-specific layout.
 
-The iOS target now includes Kumone 0.3.16's CarPlay playback queue, shuffle/repeat controls, and album/artist navigation. Because `com.apple.developer.carplay-audio` is a restricted Apple capability, the default build does not declare CarPlay and ordinary unsigned IPAs are unaffected. Only use this mode with an App ID and provisioning profile that have Apple CarPlay Audio approval:
-
-```sh
-cd platforms/ios
-make configure-carplay
-cd ios
-xcodegen generate
-xcodebuild -project KumoneIOS.xcodeproj -scheme KumoneIOS -configuration Release -sdk iphoneos build
-```
-
-Return to the normal build with:
-
-```sh
-cd platforms/ios
-make configure
-```
-
-## Architecture
+## Project layout
 
 ```text
 platforms/ios/
 ├── Sources/Kumone/
-│   ├── Core/API/          NetEase catalog and LX User API bridge
-│   ├── Core/Models/       Track models and lyric parsers
-│   ├── Core/Player/       Queue, AVPlayer, lyrics and system playback state
-│   ├── Core/Storage/      Settings, account and image cache
-│   ├── DesignSystem/      SwiftUI colors, cards, glass surfaces and layout
-│   └── Features/          Home, search, library, settings and player pages
-├── ios/                   iOS app shell and XcodeGen manifest
-├── ios/MoumusicWidget/    WidgetKit current-lyrics extension
-├── Scripts/               iOS packaging and release helpers
-└── docs/                  Icon and product screenshots
-platforms/android/         LX Music Mobile React Native client
+│   ├── Core/API/          Catalog, playlist import and LX source bridge
+│   ├── Core/Models/       Track, playlist and lyric models
+│   ├── Core/Player/       AVPlayer, queue, lyrics and system playback state
+│   ├── Core/Storage/      Local library, source configuration and account data
+│   ├── Core/Sync/         LX Sync wire models and client
+│   ├── DesignSystem/      SwiftUI theme, Liquid Glass and rendering budget
+│   └── Features/          Home, New, Search, Library, settings and player
+├── ios/                   iOS app shell, playback Live Activity extension and tests
+└── docs/                  Product icon and screenshots
+platforms/android/         Preserved upstream subtree; not part of the iMusic iOS target
 ```
 
-## Upstream projects
+## Upstream and licensing
 
-- [Kumone](https://github.com/missuo/kumone) — native SwiftUI music client foundation and iOS UI direction
-- [LX Music Mobile](https://github.com/lyswhut/lx-music-mobile) — source protocol and Android client
+- [Moumusic](https://github.com/jiajia2222/Moumusic) — native iOS project foundation
+- [LX Music Mobile](https://github.com/lyswhut/lx-music-mobile) — LX source and data protocol reference
+- [LX Sync Server](https://github.com/lyswhut/lx-music-sync-server) — compatible self-hosted sync service
 
-Moumusic-specific changes are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Upstream code and assets retain their original license obligations.
-
-## License
-
-Moumusic includes the complete [LGPL-3.0-only](LICENSE) and [GPL-3.0-only](COPYING) texts. Apply the license stated by each source file or component. Kumone code remains LGPL-3.0-only and LX Music Mobile code remains Apache-2.0; these obligations are not replaced by Moumusic's project documentation.
+Upstream source files, assets and notices retain their original license obligations. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), [LICENSE](LICENSE) and [COPYING](COPYING).

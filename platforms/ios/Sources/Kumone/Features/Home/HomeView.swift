@@ -351,6 +351,25 @@ struct HomeView: View {
         #if os(iOS)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    ForEach(homePlatforms) { platform in
+                        Button {
+                            selectHomePlatform(platform)
+                        } label: {
+                            if isHomePlatform(platform) {
+                                Label(platform.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(platform.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    Label(homeSourceTitle, systemImage: "line.3.horizontal.decrease.circle")
+                }
+                .accessibilityLabel("首页推荐来源：\(homeSourceTitle)")
+                .accessibilityHint("更改首页为你推荐的音乐平台")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink(value: Destination.recents) {
                     Image(systemName: "clock.arrow.circlepath")
                 }
@@ -446,8 +465,6 @@ struct HomeView: View {
 
     private var lxLoadedBody: some View {
         LazyVStack(alignment: .leading, spacing: 22) {
-            homePlatformPicker
-
             HStack(spacing: 10) {
                 Image(systemName: model.activePlatform == .wy ? "flame.fill" : "waveform")
                     .foregroundStyle(Theme.accent)
@@ -477,38 +494,14 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var homePlatformPicker: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("首页推荐平台")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(homePlatforms) { platform in
-                        Button {
-                            selectHomePlatform(platform)
-                        } label: {
-                            Text(platform.displayName)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(isHomePlatform(platform) ? .white : .primary)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .background(isHomePlatform(platform) ? Theme.accent : Color.secondary.opacity(0.12))
-                                .clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .frame(minHeight: 44)
-                    }
-                }
-                .padding(.horizontal, Theme.Layout.contentInset)
-            }
-        }
-        .padding(.top, 4)
-    }
-
     private var homePlatforms: [LXCatalogPlatform] {
         LXCatalogPlatform.catalogueCases.filter { $0 != .aggregate }
+    }
+
+    private var homeSourceTitle: String {
+        settings.homeRecommendationMode == .netease
+            ? "网易云"
+            : settings.homeRecommendationPlatform.displayName
     }
 
     private func isHomePlatform(_ platform: LXCatalogPlatform) -> Bool {
@@ -545,8 +538,6 @@ struct HomeView: View {
 
     private var loadedBody: some View {
         LazyVStack(alignment: .leading, spacing: 34) {
-            homePlatformPicker
-
             if !model.recommendPlaylists.isEmpty {
                 Shelf(title: "推荐歌单", rowHeight: Theme.Layout.coverShelfHeight) {
                     ForEach(Array(model.recommendPlaylists.prefix(12).enumerated()), id: \.element.id) { index, playlist in

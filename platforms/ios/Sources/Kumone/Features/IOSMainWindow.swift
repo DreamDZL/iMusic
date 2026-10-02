@@ -30,6 +30,10 @@ public struct IOSMainWindow: View {
     @State private var searchPath = NavigationPath()
     @State private var libraryPath = NavigationPath()
 
+    private var isRunningUITests: Bool {
+        ProcessInfo.processInfo.arguments.contains("-imusic-ui-testing")
+    }
+
     public init() {}
 
     public var body: some View {
@@ -65,10 +69,11 @@ public struct IOSMainWindow: View {
                     settings: settings
                 )
                 await LXSyncService.shared.reconnectIfConfigured()
-                updateLog.presentIfNeeded()
-
-                if settings.autoCheckUpdates {
-                    IOSUpdater.shared.check(interactive: false)
+                if !isRunningUITests {
+                    updateLog.presentIfNeeded()
+                    if settings.autoCheckUpdates {
+                        IOSUpdater.shared.check(interactive: false)
+                    }
                 }
             }
             .onChange(of: scenePhase) { phase in

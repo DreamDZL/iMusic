@@ -26,6 +26,7 @@ final class LXUserAPIService: ObservableObject {
         enum Status: Equatable {
             case available
             case unavailable
+            case requiresTrack
         }
 
         let status: Status
@@ -33,6 +34,7 @@ final class LXUserAPIService: ObservableObject {
         let detail: String?
 
         var isAvailable: Bool { status == .available }
+        var requiresTrack: Bool { status == .requiresTrack }
     }
 
     private struct MusicURLCandidate {
@@ -51,7 +53,9 @@ final class LXUserAPIService: ObservableObject {
     private var key = ""
     private var loadedID: String?
     private var tasks: [String: URLSessionDataTask] = [:]
+    private var scriptRequestKeys = Set<String>()
     private var pending: [String: CheckedContinuation<[String: Any], Error>] = [:]
+    private var requestTimeoutTasks: [String: Task<Void, Never>] = [:]
     private var sourceInitializationTask: Task<Void, Never>?
     private var pendingInitializationID: String?
     @Published private(set) var capabilities: [String: [String]] = [:]
@@ -428,13 +432,37 @@ final class LXUserAPIService: ObservableObject {
     /// source. The test metadata is bundled locally so health checks never
     /// call a built-in music-platform catalogue endpoint.
     func checkSelectedSource() async -> SourceCheckResult {
-        ensureSelectedSourceLoaded()
-        await waitForSourceReady()
-        guard LXSourceStore.shared.selectedSource != nil else {
+        guard let source = LXSourceStore.shared.selectedSource else {
             return SourceCheckResult(status: .unavailable,
                                      message: "未选择音源",
                                      detail: "请先导入并启用一个 LX User API 音源。")
         }
+        return await checkSource(source)
+    }
+
+    /// Checks any imported source in an isolated JavaScript context. Testing a
+    /// disabled backup must not select it (which would silently enable it),
+    /// and swapping the shared context could interrupt an in-flight lookup.
+    func checkSource(_ source: LXSourceStore.Source) async -> SourceCheckResult {
+        let checker = LXUserAPIService()
+        let result = await withTaskCancellationHandler {
+            defer { checker.cancelPendingRequests() }
+            checker.load(source)
+            await checker.waitForSourceReady()
+            guard !Task.isCancelled else {
+                return SourceCheckResult(status: .unavailable, message: "检测已取消", detail: nil)
+            }
+            return await checker.checkLoadedSource()
+        } onCancel: {
+            Task { @MainActor in checker.cancelPendingRequests() }
+        }
+        if !Task.isCancelled, LXSourceStore.shared.selectedID == source.id {
+            statusMessage = result.detail.map { "\(result.message)：\($0)" } ?? result.message
+        }
+        return result
+    }
+
+    private func checkLoadedSource() async -> SourceCheckResult {
         guard context != nil else {
             return SourceCheckResult(status: .unavailable,
                                      message: "音源脚本加载失败",
@@ -455,21 +483,19 @@ final class LXUserAPIService: ObservableObject {
         }
 
         var failures: [String] = []
+        var requiresTrackPlatforms: [String] = []
         for platform in supportedPlatforms {
+            guard !Task.isCancelled else {
+                return SourceCheckResult(status: .unavailable, message: "检测已取消", detail: nil)
+            }
             let platformName = LXCatalogPlatform.displayName(for: platform)
-            let track: Track
-            if let current = PlayerService.shared.currentTrack, current.source == platform {
-                track = current
-            } else {
-                let catalogPlatform = LXCatalogPlatform(rawValue: platform)
-                let result: [Track]?
-                if let catalogPlatform {
-                    result = try? await LXCatalogService.search("周杰伦 晴天", platform: catalogPlatform,
-                                                               page: 1, limit: 1)
-                } else {
-                    result = nil
-                }
-                track = result?.first ?? sourceCheckTrack(for: platform)
+            let currentTrack = PlayerService.shared.currentTrack
+            let track = currentTrack.flatMap {
+                canonicalPlatform($0.source ?? $0.sourceMetadata["source"]) == platform ? $0 : nil
+            } ?? Self.sourceCheckTrack(for: platform)
+            guard let track else {
+                requiresTrackPlatforms.append(platformName)
+                continue
             }
 
             let supportedQualitys = supportedQualityNames(for: track, platform: platform)
@@ -481,6 +507,9 @@ final class LXUserAPIService: ObservableObject {
             do {
                 let response = try await request(source: platform, action: "musicUrl",
                                                  info: ["type": protocolQualityToken(requestedQuality, platform: platform), "musicInfo": info])
+                guard !Task.isCancelled else {
+                    return SourceCheckResult(status: .unavailable, message: "检测已取消", detail: nil)
+                }
                 guard let data = response["data"] as? [String: Any],
                       let rawURL = data["url"] as? String,
                       let url = URL(string: rawURL),
@@ -504,8 +533,19 @@ final class LXUserAPIService: ObservableObject {
                 statusMessage = "\(result.message)：\(detail)"
                 return result
             } catch {
+                if Task.isCancelled {
+                    return SourceCheckResult(status: .unavailable, message: "检测已取消", detail: nil)
+                }
                 failures.append("\(platformName)：\(error.localizedDescription)")
             }
+        }
+
+        if !requiresTrackPlatforms.isEmpty {
+            let attemptedDetail = failures.isEmpty ? nil : "已尝试的平台：\(failures.joined(separator: "；"))。"
+            let trackDetail = "请先播放一首来自 \(requiresTrackPlatforms.joined(separator: "、")) 的歌曲，再重新检测。"
+            return SourceCheckResult(status: .requiresTrack,
+                                     message: "需要该平台歌曲才能确认",
+                                     detail: [attemptedDetail, trackDetail].compactMap { $0 }.joined())
         }
 
         let detail = failures.isEmpty ? "音源没有返回可播放地址。" : failures.joined(separator: "；")
@@ -696,7 +736,11 @@ final class LXUserAPIService: ObservableObject {
         guard let payloadData = data.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: payloadData) else { return }
         if action == "cancelRequest", let requestKey = object as? String {
-            tasks.removeValue(forKey: requestKey)?.cancel()
+            if scriptRequestKeys.remove(requestKey) != nil {
+                tasks.removeValue(forKey: requestKey)?.cancel()
+            } else {
+                cancelPendingRequest(with: requestKey)
+            }
             return
         }
         guard let payload = object as? [String: Any] else { return }
@@ -733,13 +777,21 @@ final class LXUserAPIService: ObservableObject {
             if let requestKey = payload["requestKey"] as? String,
                let url = payload["url"] as? String,
                let requestURL = URL(string: url) {
+                scriptRequestKeys.insert(requestKey)
                 sendScriptRequest(requestKey: requestKey, url: requestURL,
                                   options: payload["options"] as? [String: Any] ?? [:])
             }
         case "cancelRequest":
-            break
+            if let requestKey = payload["requestKey"] as? String {
+                if scriptRequestKeys.remove(requestKey) != nil {
+                    tasks.removeValue(forKey: requestKey)?.cancel()
+                } else {
+                    cancelPendingRequest(with: requestKey)
+                }
+            }
         case "response":
             guard let requestKey = payload["requestKey"] as? String else { return }
+            requestTimeoutTasks.removeValue(forKey: requestKey)?.cancel()
             if payload["status"] as? Bool == true, let result = payload["result"] as? [String: Any] {
                 pending.removeValue(forKey: requestKey)?.resume(returning: result)
             } else {
@@ -751,6 +803,7 @@ final class LXUserAPIService: ObservableObject {
     }
 
     private func sendScriptRequest(requestKey: String, url: URL, options: [String: Any]) {
+        guard scriptRequestKeys.contains(requestKey) else { return }
         var request = URLRequest(url: url)
         request.httpMethod = (options["method"] as? String ?? "GET").uppercased()
         // Match LX Mobile's request helper. A number of source backends reject
@@ -787,7 +840,7 @@ final class LXUserAPIService: ObservableObject {
 
         let task = session.dataTask(with: request) { [weak self] data, response, error in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.scriptRequestKeys.remove(requestKey) != nil else { return }
                 self.tasks.removeValue(forKey: requestKey)
                 let rawBody = data ?? Data()
                 let body: Any
@@ -825,18 +878,56 @@ final class LXUserAPIService: ObservableObject {
     private func request(source: String, action: String, info: [String: Any]) async throws -> [String: Any] {
         guard context != nil else { throw LXError.noSource }
         let requestKey = "request__\(UUID().uuidString)"
-        return try await withCheckedThrowingContinuation { continuation in
-            pending[requestKey] = continuation
-            callJS(action: "request", data: ["requestKey": requestKey,
-                                                "data": ["source": source, "action": action, "info": info]])
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(20))
-                guard let self,
-                       let pendingRequest = self.pending.removeValue(forKey: requestKey) else { return }
-                self.tasks.removeValue(forKey: requestKey)?.cancel()
-                pendingRequest.resume(throwing: LXError.requestTimedOut)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                pending[requestKey] = continuation
+                callJS(action: "request", data: ["requestKey": requestKey,
+                                                    "data": ["source": source, "action": action, "info": info]])
+                requestTimeoutTasks[requestKey] = Task { @MainActor [weak self] in
+                    do {
+                        try await Task.sleep(for: .seconds(20))
+                    } catch {
+                        return
+                    }
+                    guard let self,
+                          let pendingRequest = self.pending.removeValue(forKey: requestKey) else { return }
+                    self.requestTimeoutTasks.removeValue(forKey: requestKey)
+                    self.tasks.removeValue(forKey: requestKey)?.cancel()
+                    pendingRequest.resume(throwing: LXError.requestTimedOut)
+                }
             }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancelPendingRequest(with: requestKey) }
         }
+    }
+
+    private func cancelPendingRequest(with requestKey: String) {
+        requestTimeoutTasks.removeValue(forKey: requestKey)?.cancel()
+        tasks.removeValue(forKey: requestKey)?.cancel()
+        pending.removeValue(forKey: requestKey)?.resume(throwing: CancellationError())
+    }
+
+    private func cancelPendingRequests() {
+        sourceInitializationTask?.cancel()
+        sourceInitializationTask = nil
+        pendingInitializationID = nil
+        for requestKey in Array(pending.keys) {
+            cancelPendingRequest(with: requestKey)
+        }
+        requestTimeoutTasks.values.forEach { $0.cancel() }
+        requestTimeoutTasks.removeAll()
+        tasks.values.forEach { $0.cancel() }
+        tasks.removeAll()
+        scriptRequestKeys.removeAll()
+        context = nil
+        loadedID = nil
+        capabilities = [:]
+        qualityCapabilities = [:]
+        session.invalidateAndCancel()
     }
 
     /// `init` is delivered through a main-actor callback. A number of user API
@@ -847,8 +938,13 @@ final class LXUserAPIService: ObservableObject {
     private func waitForSourceReady() async {
         guard loadedID != nil else { return }
         for _ in 0..<120 {
+            if Task.isCancelled { return }
             if !capabilities.isEmpty || context == nil || pendingInitializationID == nil { return }
-            try? await Task.sleep(for: .milliseconds(50))
+            do {
+                try await Task.sleep(for: .milliseconds(50))
+            } catch {
+                return
+            }
         }
     }
 
@@ -926,8 +1022,9 @@ final class LXUserAPIService: ObservableObject {
     /// This is only request metadata for the source's health check. It is not
     /// a playback catalogue and it never leaves the device except as part of
     /// the user-selected source's own `musicUrl` request.
-    private func sourceCheckTrack(for platform: String) -> Track {
-        Track(
+    static func sourceCheckTrack(for platform: String) -> Track? {
+        guard platform == "wy" else { return nil }
+        return Track(
             id: 186_016,
             name: "晴天",
             artists: [ArtistRef(id: 1, name: "周杰伦")],

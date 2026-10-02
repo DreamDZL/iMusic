@@ -184,9 +184,6 @@ struct ExploreView: View {
                     featuredPlaylistCard(featured)
                 }
 
-                platformPicker
-                categoryChips
-
                 if model.platform == .wy && !model.newSongs.isEmpty {
                     SectionHeader(title: "网易云新歌推荐")
                         .padding(.horizontal, Theme.Layout.contentInset)
@@ -201,6 +198,8 @@ struct ExploreView: View {
                         }
                     }
                 }
+
+                genreBrowser
 
                 if model.isLoading && model.playlists.isEmpty && model.tracks.isEmpty
                     && model.newSongs.isEmpty && model.newAlbums.isEmpty && model.toplists.isEmpty {
@@ -265,6 +264,11 @@ struct ExploreView: View {
             }
         }
         .navigationTitle("新内容")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                discoveryMenu
+            }
+        }
         .task(id: "\(settings.homeRecommendationMode.rawValue)-\(settings.homeRecommendationPlatform.rawValue)") {
             model.prepare(platform: settings.homeRecommendationPlatform)
             model.requestMore()
@@ -288,46 +292,57 @@ struct ExploreView: View {
 #endif
     }
 
-    private var platformPicker: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("发现平台")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-                Spacer()
-#if os(iOS)
-                if settings.bilibiliContentEnabled {
+    private var discoveryMenu: some View {
+        Menu {
+            Section("音乐平台") {
+                ForEach(LXCatalogPlatform.catalogueCases.filter { $0 != .aggregate }) { platform in
                     Button {
-                        showBilibili = true
+                        model.selectPlatform(platform)
                     } label: {
-                        Label("哔哩哔哩", systemImage: "play.rectangle.fill")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.accent)
-                    .frame(minHeight: 44)
-                }
-#endif
-            }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(LXCatalogPlatform.catalogueCases.filter { $0 != .aggregate }) { platform in
-                        Button { model.selectPlatform(platform) } label: {
+                        if model.platform == platform {
+                            Label(platform.displayName, systemImage: "checkmark")
+                        } else {
                             Text(platform.displayName)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(model.platform == platform ? .white : .primary)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .background(model.platform == platform ? Theme.accent : Color.secondary.opacity(0.12))
-                                .clipShape(Capsule())
                         }
-                        .buttonStyle(.plain)
-                        .frame(minHeight: 44)
                     }
                 }
-                .padding(.horizontal, Theme.Layout.contentInset)
             }
+
+            Section("音乐类型") {
+                ForEach(ExploreViewModel.categories, id: \.self) { category in
+                    Button {
+                        model.select(category)
+                    } label: {
+                        if model.selectedCategory == category {
+                            Label(category, systemImage: "checkmark")
+                        } else {
+                            Text(category)
+                        }
+                    }
+                }
+            }
+#if os(iOS)
+            if settings.bilibiliContentEnabled {
+                Button {
+                    showBilibili = true
+                } label: {
+                    Label("哔哩哔哩", systemImage: "play.rectangle.fill")
+                }
+            }
+#endif
+        } label: {
+            Label(
+                discoveryFilterTitle,
+                systemImage: "line.3.horizontal.decrease.circle"
+            )
         }
+        .accessibilityLabel("筛选新内容：\(model.platform.displayName)、\(model.selectedCategory)")
+    }
+
+    private var discoveryFilterTitle: String {
+        model.selectedCategory == "推荐"
+            ? model.platform.displayName
+            : "\(model.platform.displayName) · \(model.selectedCategory)"
     }
 
     private var visiblePlaylists: [LXPlaylistSummary] {
@@ -400,19 +415,50 @@ struct ExploreView: View {
         dynamicTypeSize.isAccessibilitySize ? 460 : 330
     }
 
-    private var categoryChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                Spacer().frame(width: Theme.Layout.contentInset - 8)
-                ForEach(ExploreViewModel.categories, id: \.self) { category in
-                    Button { model.select(category) } label: {
-                        Text(category)
+    private var genreBrowser: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "按类型浏览")
+                .padding(.horizontal, Theme.Layout.contentInset)
+
+            LazyVGrid(
+                columns: [GridItem(.flexible()), GridItem(.flexible())],
+                spacing: 12
+            ) {
+                ForEach(Array(ExploreViewModel.categories.enumerated()), id: \.element) { index, category in
+                    Button {
+                        model.select(category)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Text(category)
+                                .font(.headline.weight(.semibold))
+                            Spacer(minLength: 0)
+                            Image(systemName: model.selectedCategory == category ? "checkmark" : "arrow.up.right")
+                                .font(.caption.weight(.bold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 15)
+                        .frame(maxWidth: .infinity, minHeight: 70, alignment: .leading)
+                        .background(genreColor(index), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
-                    .buttonStyle(.chip(isSelected: model.selectedCategory == category))
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("浏览\(category)音乐")
+                    .accessibilityAddTraits(model.selectedCategory == category ? .isSelected : [])
                 }
-                Spacer().frame(width: Theme.Layout.contentInset - 8)
             }
-            .padding(.vertical, 2)
+            .padding(.horizontal, Theme.Layout.contentInset)
+        }
+    }
+
+    private func genreColor(_ index: Int) -> Color {
+        return switch index % 8 {
+        case 0: Color(red: 0.55, green: 0.20, blue: 0.38)
+        case 1: Color(red: 0.29, green: 0.34, blue: 0.63)
+        case 2: Color(red: 0.13, green: 0.47, blue: 0.50)
+        case 3: Color(red: 0.62, green: 0.34, blue: 0.17)
+        case 4: Color(red: 0.40, green: 0.28, blue: 0.59)
+        case 5: Color(red: 0.20, green: 0.45, blue: 0.34)
+        case 6: Color(red: 0.61, green: 0.25, blue: 0.24)
+        default: Color(red: 0.29, green: 0.39, blue: 0.51)
         }
     }
 }

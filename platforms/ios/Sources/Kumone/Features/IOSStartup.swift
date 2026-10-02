@@ -72,12 +72,11 @@ final class IOSStartupCoordinator: ObservableObject {
             )
         })
 
-        // Loading the selected LX bridge here makes capabilities and quality
-        // information available before the first tap on a song. The health
-        // request is read-only and continues after the splash if a provider
-        // takes longer than the launch animation.
+        // Initialize the selected LX bridge before the first tap on a song.
+        // Do not issue a synthetic musicUrl health request on every launch;
+        // the bridge waits for provider readiness when playback actually needs it.
         preloadTasks.append(Task { @MainActor in
-            _ = await LXUserAPIService.shared.checkSelectedSource()
+            LXUserAPIService.shared.ensureSelectedSourceLoaded()
         })
 
         // Warm the live search hint independently from the home feed. This is

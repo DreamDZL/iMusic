@@ -1,3 +1,3 @@
-# Moumusic 中文文档
+# iMusic 中文说明
 
-中文 README 已统一为 [README_CN.md](README_CN.md)。
+简体中文项目文档见 [README_CN.md](README_CN.md)。
