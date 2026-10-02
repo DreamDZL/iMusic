@@ -179,8 +179,7 @@ final class LXSyncClientIntegrationTests: XCTestCase {
                 guard let parts = try? JSONSerialization.jsonObject(with: Data(message.utf8)) as? [Any],
                       parts.count > 3,
                       (parts[1] as? String) == id,
-                      let rawData = parts[3],
-                      let data = try? JSONSerialization.data(withJSONObject: rawData),
+                      let data = try? JSONSerialization.data(withJSONObject: parts[3]),
                       let decoded = try? JSONDecoder().decode(LXSyncListData.self, from: data) else { continue }
                 result = decoded
                 return true
