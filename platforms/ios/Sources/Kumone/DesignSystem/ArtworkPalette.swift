@@ -13,32 +13,15 @@ struct ArtworkColors: Equatable {
     )
 }
 
-@MainActor
-struct ArtworkPaletteLayer: Identifiable, Equatable {
-    let id: UUID
-    let colors: ArtworkColors
-    let weight: Double
-
-    init(id: UUID = UUID(), colors: ArtworkColors, weight: Double) {
-        self.id = id
-        self.colors = colors
-        self.weight = weight
-    }
-}
-
 /// Time-based palette interpolation that can be sampled at any moment. A new
-/// track snapshots the currently visible mixture, so rapid skips never jump
-/// back to the previous target palette.
+/// track snapshots the currently visible colors, so rapid skips never jump
+/// back to the previous target palette or stack another background layer.
 @MainActor
 struct ArtworkPaletteTransition {
     static let duration: TimeInterval = 0.8
-    static let maximumVisibleLayers = 8
-    private static let minimumLayerWeight = 0.005
 
     private(set) var colors: ArtworkColors = .fallback
-    private(set) var currentLayerID = UUID()
-    private(set) var aggregateLayerID = UUID()
-    private(set) var previousLayers: [ArtworkPaletteLayer] = []
+    private var startingColors: ArtworkColors?
     private(set) var startedAt: TimeInterval?
     private(set) var revision = 0
 
@@ -50,125 +33,64 @@ struct ArtworkPaletteTransition {
 
         guard allowsAnimation else {
             colors = next
-            currentLayerID = UUID()
-            aggregateLayerID = UUID()
-            previousLayers = []
+            startingColors = nil
             startedAt = nil
             return
         }
 
-        previousLayers = visibleLayers(at: now)
+        startingColors = displayedColors(at: now)
         colors = next
-        currentLayerID = UUID()
-        aggregateLayerID = UUID()
         startedAt = now
     }
 
-    func visibleLayers(at now: TimeInterval) -> [ArtworkPaletteLayer] {
-        guard let startedAt else {
-            return [ArtworkPaletteLayer(id: currentLayerID, colors: colors, weight: 1)]
-        }
-
+    func displayedColors(at now: TimeInterval) -> ArtworkColors {
+        guard let startedAt, let startingColors else { return colors }
         let linearProgress = min(max((now - startedAt) / Self.duration, 0), 1)
         let progress = linearProgress * linearProgress * (3 - 2 * linearProgress)
-        var layers = previousLayers.map {
-            ArtworkPaletteLayer(
-                id: $0.id,
-                colors: $0.colors,
-                weight: $0.weight * (1 - progress)
-            )
-        }
-        if progress > 0 {
-            layers.append(ArtworkPaletteLayer(id: currentLayerID, colors: colors, weight: progress))
-        }
-
-        let visible = layers.filter { $0.weight > Self.minimumLayerWeight }
-        let totalWeight = visible.reduce(0) { $0 + $1.weight }
-        guard totalWeight > 0 else {
-            return [ArtworkPaletteLayer(id: currentLayerID, colors: colors, weight: 1)]
-        }
-        let normalized = visible.map {
-            ArtworkPaletteLayer(id: $0.id, colors: $0.colors, weight: $0.weight / totalWeight)
-        }
-        return bounded(normalized)
+        return startingColors.interpolated(to: colors, fraction: progress)
     }
 
     mutating func finishTransition(revision expectedRevision: Int) {
         guard isTransitioning, revision == expectedRevision else { return }
-        previousLayers = []
+        startingColors = nil
         startedAt = nil
     }
 
     mutating func stopForReducedMotionOrPowerBudget() {
         guard isTransitioning else { return }
         revision &+= 1
-        currentLayerID = UUID()
-        aggregateLayerID = UUID()
-        previousLayers = []
+        startingColors = nil
         startedAt = nil
-    }
-
-    private func bounded(_ layers: [ArtworkPaletteLayer]) -> [ArtworkPaletteLayer] {
-        guard layers.count > Self.maximumVisibleLayers else { return layers }
-
-        let ranked = layers.sorted {
-            if $0.weight == $1.weight { return $0.id.uuidString < $1.id.uuidString }
-            return $0.weight > $1.weight
-        }
-        let retained = Array(ranked.prefix(Self.maximumVisibleLayers - 1))
-        let folded = Array(ranked.dropFirst(Self.maximumVisibleLayers - 1))
-        let foldedWeight = folded.reduce(0) { $0 + $1.weight }
-        guard let first = folded.first, foldedWeight > 0 else { return retained }
-
-        var mergedColors = first.colors
-        var mergedWeight = first.weight
-        for layer in folded.dropFirst() {
-            mergedColors = mergedColors.weightedAverage(
-                with: layer.colors,
-                ownWeight: mergedWeight,
-                otherWeight: layer.weight
-            )
-            mergedWeight += layer.weight
-        }
-
-        return retained + [ArtworkPaletteLayer(
-            id: aggregateLayerID,
-            colors: mergedColors,
-            weight: foldedWeight
-        )]
     }
 }
 
 @MainActor
 private extension ArtworkColors {
-    func weightedAverage(
-        with other: ArtworkColors,
-        ownWeight: Double,
-        otherWeight: Double
+    func interpolated(
+        to other: ArtworkColors,
+        fraction: Double
     ) -> ArtworkColors {
-        let total = ownWeight + otherWeight
-        guard total > 0 else { return self }
+        let fraction = min(max(fraction, 0), 1)
         return ArtworkColors(
-            primary: Self.weightedAverage(primary, with: other.primary, ownWeight: ownWeight, otherWeight: otherWeight, total: total),
-            secondary: Self.weightedAverage(secondary, with: other.secondary, ownWeight: ownWeight, otherWeight: otherWeight, total: total)
+            primary: Self.interpolate(primary, with: other.primary, fraction: fraction),
+            secondary: Self.interpolate(secondary, with: other.secondary, fraction: fraction)
         )
     }
 
-    private static func weightedAverage(
+    private static func interpolate(
         _ color: Color,
         with other: Color,
-        ownWeight: Double,
-        otherWeight: Double,
-        total: Double
+        fraction: Double
     ) -> Color {
         let environment = EnvironmentValues()
         let lhs = color.resolve(in: environment)
         let rhs = other.resolve(in: environment)
         return Color(
             .sRGBLinear,
-            red: (Double(lhs.linearRed) * ownWeight + Double(rhs.linearRed) * otherWeight) / total,
-            green: (Double(lhs.linearGreen) * ownWeight + Double(rhs.linearGreen) * otherWeight) / total,
-            blue: (Double(lhs.linearBlue) * ownWeight + Double(rhs.linearBlue) * otherWeight) / total
+            red: Double(lhs.linearRed) + (Double(rhs.linearRed) - Double(lhs.linearRed)) * fraction,
+            green: Double(lhs.linearGreen) + (Double(rhs.linearGreen) - Double(lhs.linearGreen)) * fraction,
+            blue: Double(lhs.linearBlue) + (Double(rhs.linearBlue) - Double(lhs.linearBlue)) * fraction,
+            opacity: Double(lhs.opacity) + (Double(rhs.opacity) - Double(lhs.opacity)) * fraction
         )
     }
 }

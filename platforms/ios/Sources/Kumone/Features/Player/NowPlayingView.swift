@@ -227,35 +227,20 @@ struct NowPlayingView: View {
             minimumInterval: renderingBudget.minimumAnimationInterval,
             paused: !artworkPalette.isTransitioning
         )) { _ in
-            ZStack {
-                Color.black
-                ForEach(artworkPalette.visibleLayers(at: ProcessInfo.processInfo.systemUptime)) { layer in
-                    artworkGradient(for: layer.colors)
-                        .opacity(layer.weight)
-                        .blendMode(.plusLighter)
-                }
-            }
-            .compositingGroup()
-            .background(.black)
+            artworkGradient(for: artworkPalette.displayedColors(at: ProcessInfo.processInfo.systemUptime))
         }
     }
 
-    private func artworkGradient(for palette: ArtworkColors) -> MeshGradient {
-        MeshGradient(
-            width: 3,
-            height: 3,
-            points: [
-                [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
-                [0.0, 0.46], [0.52, 0.5], [1.0, 0.54],
-                [0.0, 1.0], [0.48, 1.0], [1.0, 1.0],
+    private func artworkGradient(for palette: ArtworkColors) -> LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: palette.primary.opacity(0.96), location: 0),
+                .init(color: palette.secondary.opacity(0.88), location: 0.48),
+                .init(color: palette.secondary.opacity(0.48), location: 0.76),
+                .init(color: .black, location: 1),
             ],
-            colors: [
-                palette.primary, palette.primary.opacity(0.9), palette.secondary.opacity(0.86),
-                palette.primary.opacity(0.88), palette.secondary, palette.secondary.opacity(0.92),
-                palette.secondary.opacity(0.9), palette.secondary.opacity(0.82), .black,
-            ],
-            background: .black,
-            smoothsColors: true
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
         )
     }
 
