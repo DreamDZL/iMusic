@@ -30,6 +30,8 @@ struct TrackRow: View {
     @ScaledMetric(relativeTo: .body) private var compactArtworkSize: CGFloat = 48
     @ScaledMetric(relativeTo: .body) private var compactRowHeight: CGFloat = 64
     @ScaledMetric(relativeTo: .body) private var compactAlbumRowHeight: CGFloat = 50
+    @ScaledMetric(relativeTo: .body) private var regularRowHeight: CGFloat = 52
+    @ScaledMetric(relativeTo: .body) private var regularAlbumRowHeight: CGFloat = 46
     @State private var isHovering = false
     @State private var showAddToPlaylist = false
     #if os(iOS)
@@ -76,12 +78,12 @@ struct TrackRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(track.name)
-                        .font(isCompact ? .callout.weight(.medium) : .system(size: 13, weight: .medium))
+                        .font(isCompact ? .callout.weight(.medium) : .subheadline.weight(.medium))
                         .foregroundStyle(isCurrent ? Theme.accent : .primary)
                         .lineLimit(1)
                     if let subtitle = track.subtitle, !isCompact {
                         Text("(\(subtitle))")
-                            .font(.system(size: 12))
+                            .font(.caption2)
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
                     }
@@ -90,7 +92,7 @@ struct TrackRow: View {
                     }
                 }
                 Text(track.artistNames)
-                    .font(isCompact ? .footnote : .system(size: 11.5))
+                    .font(isCompact ? .footnote : .caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 HStack(spacing: 4) {
@@ -98,7 +100,7 @@ struct TrackRow: View {
                     Text("·")
                     Text("音质：\(qualityName)")
                 }
-                .font(.system(size: 10))
+                .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
             }
@@ -106,7 +108,7 @@ struct TrackRow: View {
 
             if style == .full && !isCompact {
                 Text(track.album.name)
-                    .font(.system(size: 12))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .frame(maxWidth: 220, alignment: .leading)
@@ -114,7 +116,7 @@ struct TrackRow: View {
 
             if let reason = playability.reason {
                 Text(reason)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.caption2.weight(.medium))
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
@@ -123,7 +125,7 @@ struct TrackRow: View {
 
             if let trailingText {
                 Text(trailingText)
-                    .font(.system(size: 11).monospacedDigit())
+                    .font(.caption2.monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
 
@@ -185,9 +187,9 @@ struct TrackRow: View {
 
     private var rowHeight: CGFloat {
         if style == .albumTrack {
-            return isCompact ? compactAlbumRowHeight : 46
+            return isCompact ? compactAlbumRowHeight : regularAlbumRowHeight
         }
-        return isCompact ? compactRowHeight : 52
+        return isCompact ? compactRowHeight : regularRowHeight
     }
 
     @ViewBuilder
@@ -198,13 +200,13 @@ struct TrackRow: View {
             } else if isHovering, isPlayable {
                 Button(action: onPlay) {
                     Image(systemName: "play.fill")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.caption2.weight(.semibold))
                         .foregroundStyle(.primary)
                 }
                 .buttonStyle(.pressable)
             } else {
                 Text(String(index))
-                    .font(.system(size: 12).monospacedDigit())
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
         }
@@ -214,7 +216,7 @@ struct TrackRow: View {
     private var likeAndDuration: some View {
         HStack(spacing: 8) {
             Text(Formatters.duration(track.duration))
-                .font(.system(size: 11.5).monospacedDigit())
+                .font(.caption2.monospacedDigit())
                 .foregroundStyle(.tertiary)
                 .frame(width: 36, alignment: .trailing)
         }
