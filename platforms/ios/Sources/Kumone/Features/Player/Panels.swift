@@ -179,14 +179,14 @@ struct QueuePanel: View {
                 ScrollView(showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         sectionLabel("正在播放")
-                        QueueRow(track: current, isCurrent: true)
+                        QueueRow(track: current, upcomingIndex: nil, isCurrent: true)
 
                         if !player.upcomingTracks.isEmpty {
                             sectionLabel("即将播放")
                                 .padding(.top, 10)
                             ForEach(Array(player.upcomingTracks.prefix(100).enumerated()),
-                                    id: \.offset) { _, track in
-                                QueueRow(track: track, isCurrent: false)
+                                    id: \.offset) { index, track in
+                                QueueRow(track: track, upcomingIndex: index, isCurrent: false)
                             }
                         }
                     }
@@ -241,6 +241,7 @@ struct QueuePanel: View {
 
 private struct QueueRow: View {
     let track: Track
+    let upcomingIndex: Int?
     let isCurrent: Bool
 
     @EnvironmentObject private var player: PlayerService
@@ -249,7 +250,11 @@ private struct QueueRow: View {
     var body: some View {
         Button {
             guard !isCurrent else { return }
-            player.jumpTo(track)
+            if let upcomingIndex {
+                player.jumpToUpcoming(at: upcomingIndex)
+            } else {
+                player.jumpTo(track)
+            }
         } label: {
             HStack(spacing: 10) {
                 CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)
@@ -270,7 +275,11 @@ private struct QueueRow: View {
                     PlayingIndicator(animating: player.isPlaying)
                 } else if isHovering {
                     Button {
-                        player.removeFromUpcoming(track)
+                        if let upcomingIndex {
+                            player.removeFromUpcoming(at: upcomingIndex)
+                        } else {
+                            player.removeFromUpcoming(track)
+                        }
                     } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 9, weight: .semibold))

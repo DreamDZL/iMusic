@@ -1781,8 +1781,8 @@ private struct CompactQueueContent: View {
                         ForEach(
                             Array(player.upcomingTracks.prefix(100).enumerated()),
                             id: \.offset
-                        ) { _, track in
-                            CompactQueueRow(track: track)
+                        ) { index, track in
+                            CompactQueueRow(track: track, upcomingIndex: index)
                         }
                     }
                 }
@@ -1829,12 +1829,13 @@ private struct CompactQueueContent: View {
 
 private struct CompactQueueRow: View {
     let track: Track
+    let upcomingIndex: Int
 
     @EnvironmentObject private var player: PlayerService
 
     var body: some View {
         Button {
-            player.jumpTo(track)
+            player.jumpToUpcoming(at: upcomingIndex)
         } label: {
             HStack(spacing: 11) {
                 CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(120), animated: false)
@@ -2472,7 +2473,7 @@ private struct MinimalQueueSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     if let current = player.currentTrack {
                         MinimalQueueSectionLabel("正在播放")
-                        MinimalQueueRow(track: current, isCurrent: true)
+                        MinimalQueueRow(track: current, upcomingIndex: nil, isCurrent: true)
 
                         if !player.upcomingTracks.isEmpty {
                             MinimalQueueSectionLabel("即将播放")
@@ -2480,8 +2481,12 @@ private struct MinimalQueueSheet: View {
                             ForEach(
                                 Array(player.upcomingTracks.prefix(100).enumerated()),
                                 id: \.offset
-                            ) { _, track in
-                                MinimalQueueRow(track: track, isCurrent: false)
+                            ) { index, track in
+                                MinimalQueueRow(
+                                    track: track,
+                                    upcomingIndex: index,
+                                    isCurrent: false
+                                )
                             }
                         }
                     } else {
@@ -2541,6 +2546,7 @@ private struct MinimalQueueSectionLabel: View {
 
 private struct MinimalQueueRow: View {
     let track: Track
+    let upcomingIndex: Int?
     let isCurrent: Bool
 
     @EnvironmentObject private var player: PlayerService
@@ -2548,7 +2554,11 @@ private struct MinimalQueueRow: View {
     var body: some View {
         Button {
             guard !isCurrent else { return }
-            player.jumpTo(track)
+            if let upcomingIndex {
+                player.jumpToUpcoming(at: upcomingIndex)
+            } else {
+                player.jumpTo(track)
+            }
         } label: {
             HStack(spacing: 10) {
                 CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)

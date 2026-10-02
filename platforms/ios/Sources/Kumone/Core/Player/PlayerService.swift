@@ -69,6 +69,63 @@ enum PlaybackResolutionPolicy {
     }
 }
 
+enum PlaybackQueuePolicy {
+    static func insertionIndex(after currentIndex: Int, queueCount: Int) -> Int {
+        min(max(currentIndex + 1, 0), max(queueCount, 0))
+    }
+
+    static func activeQueueIndex(
+        forUpcomingIndex upcomingIndex: Int,
+        playNextCount: Int,
+        currentIndex: Int
+    ) -> Int? {
+        guard upcomingIndex >= playNextCount else { return nil }
+        return currentIndex + 1 + upcomingIndex - playNextCount
+    }
+
+    static func canonicalQueueIndex(for itemID: String, itemIDs: [String]) -> Int? {
+        itemIDs.firstIndex(of: itemID)
+    }
+
+    static func canonicalInsertionIndex(
+        after currentItemID: String?,
+        itemIDs: [String],
+        fallbackIndex: Int
+    ) -> Int {
+        if let currentItemID,
+           let currentIndex = itemIDs.firstIndex(of: currentItemID) {
+            return currentIndex + 1
+        }
+        return min(max(fallbackIndex, 0), itemIDs.count)
+    }
+
+    static func restoredIndex(
+        persistedIndex: Int?,
+        currentItemID: String?,
+        currentKey: String?,
+        currentID: Int?,
+        in tracks: [Track],
+        itemIDs: [String]
+    ) -> Int? {
+        if let currentItemID,
+           let index = itemIDs.firstIndex(of: currentItemID),
+           tracks.indices.contains(index),
+           currentKey == nil || tracks[index].playbackKey == currentKey {
+            return index
+        }
+        if let persistedIndex,
+           tracks.indices.contains(persistedIndex),
+           currentKey == nil || tracks[persistedIndex].playbackKey == currentKey {
+            return persistedIndex
+        }
+        return currentKey.flatMap { key in
+            tracks.firstIndex(where: { $0.playbackKey == key })
+        } ?? currentID.flatMap { id in
+            tracks.firstIndex(where: { $0.id == id })
+        }
+    }
+}
+
 /// Where the current queue came from — used for scrobbling and UI affordances.
 enum PlaySource: Equatable {
     case playlist(Int)
@@ -135,6 +192,25 @@ struct PlayContext: Codable, Hashable {
     }
 }
 
+/// Queue state written to disk. The temporary "play next" list is optional
+/// so older saved player states still decode without losing the main queue.
+struct PersistedPlaybackState: Codable {
+    var queue: [Track]
+    var queueItemIDs: [String]? = nil
+    var shuffledQueue: [Track]? = nil
+    var shuffledItemIDs: [String]? = nil
+    var playNextItemIDs: [String]? = nil
+    var currentIndex: Int? = nil
+    var currentItemID: String? = nil
+    var currentID: Int?
+    var currentKey: String?
+    var currentTrack: Track? = nil
+    var repeatMode: String
+    var shuffle: Bool
+    var recentContexts: [PlayContext]?
+    var playNextQueue: [Track]? = nil
+}
+
 enum RightPanel {
     case lyrics, queue
 }
@@ -172,6 +248,9 @@ final class PlayerService: ObservableObject {
     @Published private(set) var playNextList: [Track] = []
     @Published private(set) var currentIndex = -1
     @Published private(set) var currentTrack: Track?
+    private var queueItemIDs: [String] = []
+    private var shuffledQueueItemIDs: [String] = []
+    private var playNextItemIDs: [String] = []
     @Published private(set) var source: PlaySource = .none
     @Published private(set) var isPlaying = false
     @Published private(set) var isBuffering = false
@@ -249,6 +328,9 @@ final class PlayerService: ObservableObject {
 
     /// The list the player is walking through (shuffled or ordered).
     var activeQueue: [Track] { shuffleEnabled ? shuffledQueue : queue }
+    private var activeQueueItemIDs: [String] {
+        shuffleEnabled ? shuffledQueueItemIDs : queueItemIDs
+    }
 
     var upcomingTracks: [Track] {
         guard !activeQueue.isEmpty, currentIndex >= 0 else { return playNextList }
@@ -558,17 +640,23 @@ final class PlayerService: ObservableObject {
         if let context { recordRecent(context) }
         isFMMode = false
         queue = tracks
+        queueItemIDs = tracks.map { _ in UUID().uuidString }
         self.source = source
         playNextList.removeAll()
+        playNextItemIDs.removeAll()
         // When shuffle is already enabled, starting a playlist should not
         // silently pin the first catalogue item. An explicit `startAt` still
         // wins when the user tapped a particular song.
-        let startTrack = track ?? (shuffleEnabled ? tracks.randomElement()! : tracks[0])
+        let startIndex = track.flatMap { selected in
+            tracks.firstIndex(where: { $0.playbackKey == selected.playbackKey })
+        } ?? (shuffleEnabled ? tracks.indices.randomElement()! : 0)
+        let startTrack = tracks[startIndex]
+        let startItemID = queueItemIDs[startIndex]
         if shuffleEnabled {
-            reshuffle(keeping: startTrack)
+            reshuffle(keepingItemID: startItemID)
             currentIndex = 0
         } else {
-            currentIndex = tracks.firstIndex(where: { $0.playbackKey == startTrack.playbackKey }) ?? 0
+            currentIndex = startIndex
         }
         startPlaying(activeQueue[currentIndex])
     }
@@ -585,6 +673,8 @@ final class PlayerService: ObservableObject {
     /// Insert a track right after the current one.
     func addToPlayNext(_ track: Track, playNow: Bool = false) {
         playNextList.append(track)
+        playNextItemIDs.append(UUID().uuidString)
+        persistState()
         if playNow || currentTrack == nil {
             advanceToNext(userInitiated: true)
         } else {
@@ -734,21 +824,30 @@ final class PlayerService: ObservableObject {
 
     func toggleShuffle() {
         guard !isFMMode else { return }
+        let currentItemID = activeQueueItemIDs.indices.contains(currentIndex)
+            ? activeQueueItemIDs[currentIndex]
+            : nil
         shuffleEnabled.toggle()
         if shuffleEnabled {
-            if let current = currentTrack {
-                reshuffle(keeping: current)
+            if currentTrack != nil, let itemID = currentItemID {
+                reshuffle(keepingItemID: itemID)
                 currentIndex = 0
             } else if !queue.isEmpty {
                 // A restored queue can exist before the current item is
                 // resolved. Build the shuffled order now instead of leaving
                 // `activeQueue` empty until the next play request.
-                shuffledQueue = queue.shuffled()
+                let entries = Array(zip(queueItemIDs, queue)).shuffled()
+                shuffledQueueItemIDs = entries.map { $0.0 }
+                shuffledQueue = entries.map { $0.1 }
                 currentIndex = -1
             }
         } else {
-            if let current = currentTrack {
-                currentIndex = queue.firstIndex(where: { $0.playbackKey == current.playbackKey }) ?? 0
+            if currentTrack != nil {
+                currentIndex = currentItemID.flatMap {
+                    PlaybackQueuePolicy.canonicalQueueIndex(for: $0, itemIDs: queueItemIDs)
+                }
+                    ?? queue.firstIndex(where: { $0.playbackKey == currentTrack?.playbackKey })
+                    ?? 0
             } else {
                 currentIndex = -1
             }
@@ -779,28 +878,72 @@ final class PlayerService: ObservableObject {
 
     /// Jump to a track in the upcoming list (queue panel click).
     func jumpTo(_ track: Track) {
-        if let nextIdx = playNextList.firstIndex(where: { $0.playbackKey == track.playbackKey }) {
-            playNextList.removeSubrange(0...nextIdx)
-            startPlaying(track, indexUnchanged: true)
+        guard let index = upcomingTracks.firstIndex(where: { $0.playbackKey == track.playbackKey }) else {
             return
         }
-        if let idx = activeQueue.firstIndex(where: { $0.playbackKey == track.playbackKey }) {
-            currentIndex = idx
-            startPlaying(track)
-        }
+        jumpToUpcoming(at: index)
     }
 
     func removeFromUpcoming(_ track: Track) {
-        if let idx = playNextList.firstIndex(where: { $0.playbackKey == track.playbackKey }) {
-            playNextList.remove(at: idx)
+        guard let index = upcomingTracks.firstIndex(where: { $0.playbackKey == track.playbackKey }) else {
             return
         }
-        if let idx = queue.firstIndex(where: { $0.playbackKey == track.playbackKey }), idx != currentIndex || shuffleEnabled {
-            queue.remove(at: idx)
+        removeFromUpcoming(at: index)
+    }
+
+    func jumpToUpcoming(at upcomingIndex: Int) {
+        guard upcomingTracks.indices.contains(upcomingIndex) else { return }
+        if upcomingIndex < playNextList.count {
+            let track = playNextList[upcomingIndex]
+            let itemID = playNextItemIDs[upcomingIndex]
+            playNextList.removeSubrange(0...upcomingIndex)
+            playNextItemIDs.removeSubrange(0...upcomingIndex)
+            playInsertedNextTrack(track, itemID: itemID)
+            return
         }
-        if let idx = shuffledQueue.firstIndex(where: { $0.playbackKey == track.playbackKey }) {
-            shuffledQueue.remove(at: idx)
+        guard let idx = PlaybackQueuePolicy.activeQueueIndex(
+            forUpcomingIndex: upcomingIndex,
+            playNextCount: playNextList.count,
+            currentIndex: currentIndex
+        ), activeQueue.indices.contains(idx) else { return }
+        currentIndex = idx
+        startPlaying(activeQueue[idx])
+    }
+
+    func removeFromUpcoming(at upcomingIndex: Int) {
+        guard upcomingTracks.indices.contains(upcomingIndex) else { return }
+        if upcomingIndex < playNextList.count {
+            playNextList.remove(at: upcomingIndex)
+            playNextItemIDs.remove(at: upcomingIndex)
+            persistState()
+            return
         }
+
+        guard let activeIndex = PlaybackQueuePolicy.activeQueueIndex(
+            forUpcomingIndex: upcomingIndex,
+            playNextCount: playNextList.count,
+            currentIndex: currentIndex
+        ), activeQueue.indices.contains(activeIndex) else { return }
+
+        let itemID = activeQueueItemIDs[activeIndex]
+        guard let queueIndex = PlaybackQueuePolicy.canonicalQueueIndex(
+            for: itemID,
+            itemIDs: queueItemIDs
+        ) else { return }
+        if shuffleEnabled {
+            shuffledQueue.remove(at: activeIndex)
+            shuffledQueueItemIDs.remove(at: activeIndex)
+            queue.remove(at: queueIndex)
+            queueItemIDs.remove(at: queueIndex)
+        } else {
+            queue.remove(at: activeIndex)
+            queueItemIDs.remove(at: activeIndex)
+            if let shuffledIndex = shuffledQueueItemIDs.firstIndex(of: itemID) {
+                shuffledQueue.remove(at: shuffledIndex)
+                shuffledQueueItemIDs.remove(at: shuffledIndex)
+            }
+        }
+        persistState()
     }
 
     // MARK: - Personal FM
@@ -819,8 +962,11 @@ final class PlayerService: ObservableObject {
         shuffleEnabled = false
         repeatMode = .off
         queue = []
+        queueItemIDs = []
         shuffledQueue = []
+        shuffledQueueItemIDs = []
         playNextList = []
+        playNextItemIDs = []
         currentIndex = -1
         source = .none
         Task { await fmAdvance() }
@@ -894,7 +1040,8 @@ final class PlayerService: ObservableObject {
         }
         if !playNextList.isEmpty {
             let track = playNextList.removeFirst()
-            startPlaying(track, indexUnchanged: true)
+            let itemID = playNextItemIDs.removeFirst()
+            playInsertedNextTrack(track, itemID: itemID)
             return
         }
         guard !activeQueue.isEmpty else { return }
@@ -919,6 +1066,32 @@ final class PlayerService: ObservableObject {
         startPlaying(activeQueue[idx])
     }
 
+    /// Promote a temporary "play next" entry into the durable playback queue
+    /// before starting it. This keeps navigation and restoration correct once
+    /// the inserted song becomes current, including while shuffle is active.
+    private func playInsertedNextTrack(_ track: Track, itemID: String) {
+        let insertionIndex = PlaybackQueuePolicy.insertionIndex(
+            after: currentIndex,
+            queueCount: activeQueue.count
+        )
+        let currentItemID = activeQueueItemIDs.indices.contains(currentIndex)
+            ? activeQueueItemIDs[currentIndex]
+            : nil
+        let canonicalInsertionIndex = PlaybackQueuePolicy.canonicalInsertionIndex(
+            after: currentItemID,
+            itemIDs: queueItemIDs,
+            fallbackIndex: currentIndex + 1
+        )
+        queue.insert(track, at: canonicalInsertionIndex)
+        queueItemIDs.insert(itemID, at: canonicalInsertionIndex)
+        if shuffleEnabled {
+            shuffledQueue.insert(track, at: min(insertionIndex, shuffledQueue.count))
+            shuffledQueueItemIDs.insert(itemID, at: min(insertionIndex, shuffledQueueItemIDs.count))
+        }
+        currentIndex = insertionIndex
+        startPlaying(track, indexUnchanged: true)
+    }
+
     private func handleItemEnded() {
         guard isPlaying else { return }
         scrobbleIfNeeded(completed: true)
@@ -929,7 +1102,7 @@ final class PlayerService: ObservableObject {
             engine.replaceCurrentItem(with: nil)
             return
         }
-        if repeatMode == .one, !isFMMode {
+        if repeatMode == .one, !isFMMode, playNextList.isEmpty {
             scrobbled = false
             seek(to: 0)
 #if os(iOS)
@@ -1628,15 +1801,24 @@ final class PlayerService: ObservableObject {
 
     // MARK: - Shuffle helpers
 
-    private func reshuffle(keeping first: Track) {
-        var rest = queue.filter { $0.playbackKey != first.playbackKey }
+    private func reshuffle(keepingItemID itemID: String) {
+        guard let firstIndex = queueItemIDs.firstIndex(of: itemID),
+              queue.indices.contains(firstIndex) else { return }
+        let first = queue[firstIndex]
+        var rest = Array(zip(queueItemIDs, queue))
+        rest.remove(at: firstIndex)
         rest.shuffle()
-        shuffledQueue = [first] + rest
+        shuffledQueueItemIDs = [itemID] + rest.map { $0.0 }
+        shuffledQueue = [first] + rest.map { $0.1 }
     }
 
     // MARK: - Persistence
 
     private static let recentContextsLimit = 6
+    private static let stateWriteQueue = DispatchQueue(
+        label: "com.kumone.player-state-persistence",
+        qos: .utility
+    )
 
     private func recordRecent(_ context: PlayContext) {
         recentContexts.removeAll { $0 == context }
@@ -1701,57 +1883,116 @@ final class PlayerService: ObservableObject {
         }
     }
 
-    private struct PersistedState: Codable {
-        var queue: [Track]
-        var currentID: Int?
-        var currentKey: String?
-        var repeatMode: String
-        var shuffle: Bool
-        /// Optional so state files written before recents existed still decode.
-        var recentContexts: [PlayContext]?
-    }
-
     private func persistState() {
-        let state = PersistedState(
-            queue: Array(queue.prefix(1000)),
-            currentID: currentTrack?.id,
-            currentKey: currentTrack?.playbackKey,
+        let persistedQueue = Array(queue.prefix(1000))
+        let persistedQueueItemIDs = Array(queueItemIDs.prefix(1000))
+        let persistedItemIDSet = Set(persistedQueueItemIDs)
+        let persistedShuffleEntries = shuffleEnabled
+            ? Array(zip(shuffledQueueItemIDs, shuffledQueue)
+                .filter { persistedItemIDSet.contains($0.0) }
+                .prefix(1000))
+            : []
+        let persistedShuffledItemIDs: [String]?
+        let persistedShuffledQueue: [Track]?
+        if shuffleEnabled {
+            persistedShuffledItemIDs = persistedShuffleEntries.map { $0.0 }
+            persistedShuffledQueue = persistedShuffleEntries.map { $0.1 }
+        } else {
+            persistedShuffledItemIDs = nil
+            persistedShuffledQueue = nil
+        }
+        let currentItemID = !isFMMode && activeQueueItemIDs.indices.contains(currentIndex)
+            ? activeQueueItemIDs[currentIndex]
+            : nil
+        let persistedActiveItemIDs = shuffleEnabled
+            ? (persistedShuffledItemIDs ?? [])
+            : persistedQueueItemIDs
+        let persistedCurrentIndex = currentItemID.flatMap {
+            persistedActiveItemIDs.firstIndex(of: $0)
+        }
+        let currentItemIsPersisted = persistedCurrentIndex != nil
+        let state = PersistedPlaybackState(
+            queue: persistedQueue,
+            queueItemIDs: persistedQueueItemIDs,
+            shuffledQueue: persistedShuffledQueue,
+            shuffledItemIDs: persistedShuffledItemIDs,
+            playNextItemIDs: Array(playNextItemIDs.prefix(200)),
+            currentIndex: persistedCurrentIndex,
+            currentItemID: currentItemIsPersisted ? currentItemID : nil,
+            currentID: currentItemIsPersisted ? currentTrack?.id : nil,
+            currentKey: currentItemIsPersisted ? currentTrack?.playbackKey : nil,
+            currentTrack: isFMMode ? nil : currentTrack,
             repeatMode: repeatMode.rawValue,
             shuffle: shuffleEnabled,
-            recentContexts: recentContexts
+            recentContexts: recentContexts,
+            playNextQueue: Array(playNextList.prefix(200))
         )
         guard let data = try? JSONEncoder().encode(state) else { return }
         let url = Self.stateFileURL
-        Task.detached {
+        Self.stateWriteQueue.async {
             try? data.write(to: url, options: .atomic)
         }
     }
 
     private func restoreState() {
         guard let data = try? Data(contentsOf: Self.stateFileURL),
-              let state = try? JSONDecoder().decode(PersistedState.self, from: data)
+              let state = try? JSONDecoder().decode(PersistedPlaybackState.self, from: data)
         else { return }
         // Recents outlive the queue: restore them before bailing out on an
         // empty queue, or the next played track persists an empty list over
         // them and the Dock menu loses its history for good.
         recentContexts = Array((state.recentContexts ?? []).prefix(Self.recentContextsLimit))
-        guard !state.queue.isEmpty else { return }
+        let restoredPlayNext = Array((state.playNextQueue ?? []).prefix(200))
+        guard !state.queue.isEmpty || state.currentTrack != nil || !restoredPlayNext.isEmpty else { return }
         queue = state.queue
+        queueItemIDs = Self.validItemIDs(state.queueItemIDs, count: queue.count)
+        playNextList = restoredPlayNext
+        playNextItemIDs = Self.validItemIDs(
+            state.playNextItemIDs,
+            count: playNextList.count
+        )
         shuffleEnabled = state.shuffle
         if shuffleEnabled {
-            shuffledQueue = queue.shuffled()
+            shuffledQueue = state.shuffledQueue ?? queue.shuffled()
+            let restoredShuffleIDs = state.shuffledItemIDs
+            let restoredShuffleMatchesTracks = restoredShuffleIDs.map { ids in
+                zip(ids, shuffledQueue).allSatisfy { entry in
+                    let (itemID, track) = entry
+                    guard let queueIndex = queueItemIDs.firstIndex(of: itemID),
+                          queue.indices.contains(queueIndex) else { return false }
+                    return queue[queueIndex].playbackKey == track.playbackKey
+                }
+            } ?? false
+            if let restoredShuffleIDs,
+               restoredShuffleIDs.count == shuffledQueue.count,
+               Set(restoredShuffleIDs) == Set(queueItemIDs),
+               Set(restoredShuffleIDs).count == restoredShuffleIDs.count,
+               restoredShuffleMatchesTracks {
+                shuffledQueueItemIDs = restoredShuffleIDs
+            } else {
+                shuffledQueueItemIDs = Self.rebuildItemIDs(
+                    for: shuffledQueue,
+                    queue: queue,
+                    queueItemIDs: queueItemIDs
+                )
+            }
         }
-        if let idx = state.currentKey.flatMap({ key in
-            activeQueue.firstIndex(where: { $0.playbackKey == key })
-        }) ?? state.currentID.flatMap({ id in
-            activeQueue.firstIndex(where: { $0.id == id })
-        }) {
-            currentIndex = idx
-            currentTrack = activeQueue[idx]
-            duration = activeQueue[idx].duration
-            NowPlayingManager.shared.updateMetadata(for: activeQueue[idx], duration: duration)
+        let restoredIndex = PlaybackQueuePolicy.restoredIndex(
+            persistedIndex: state.currentIndex,
+            currentItemID: state.currentItemID,
+            currentKey: state.currentKey,
+            currentID: state.currentID,
+            in: activeQueue,
+            itemIDs: activeQueueItemIDs
+        )
+        let restoredTrack = restoredIndex.map { activeQueue[$0] } ?? state.currentTrack
+        if let restoredTrack {
+            currentIndex = restoredIndex ?? -1
+            currentTrack = restoredTrack
+            duration = restoredTrack.duration
+            NowPlayingManager.shared.updateMetadata(for: restoredTrack, duration: duration)
             Task {
-                await loadLyrics(for: activeQueue[idx], generation: resolveGeneration)
+                await loadLyrics(for: restoredTrack, generation: resolveGeneration)
             }
         }
     }
@@ -1761,5 +2002,33 @@ final class PlayerService: ObservableObject {
             .appendingPathComponent("Kumone", isDirectory: true)
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         return support.appendingPathComponent("player-state.json")
+    }
+
+    private static func validItemIDs(_ values: [String]?, count: Int) -> [String] {
+        guard let values,
+              values.count == count,
+              Set(values).count == count else {
+            return (0..<count).map { _ in UUID().uuidString }
+        }
+        return values
+    }
+
+    private static func rebuildItemIDs(
+        for orderedTracks: [Track],
+        queue: [Track],
+        queueItemIDs: [String]
+    ) -> [String] {
+        var candidates: [String: [String]] = [:]
+        for (track, itemID) in zip(queue, queueItemIDs) {
+            candidates[track.playbackKey, default: []].append(itemID)
+        }
+        var consumed: [String: Int] = [:]
+        return orderedTracks.map { track in
+            let key = track.playbackKey
+            let occurrence = consumed[key, default: 0]
+            consumed[key] = occurrence + 1
+            return candidates[key].flatMap { $0.indices.contains(occurrence) ? $0[occurrence] : nil }
+                ?? UUID().uuidString
+        }
     }
 }
