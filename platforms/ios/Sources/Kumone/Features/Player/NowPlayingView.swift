@@ -4,6 +4,18 @@ import MediaPlayer
 import UIKit
 #endif
 
+private struct ArtworkPaletteLayer: Identifiable {
+    let id: UUID
+    let colors: ArtworkColors
+    let weight: Double
+
+    init(id: UUID = UUID(), colors: ArtworkColors, weight: Double) {
+        self.id = id
+        self.colors = colors
+        self.weight = weight
+    }
+}
+
 /// Immersive full-window now-playing page: artwork-tinted gradient backdrop,
 /// large artwork on the left, big synced lyrics on the right.
 struct NowPlayingView: View {
@@ -19,12 +31,17 @@ struct NowPlayingView: View {
 
     @State private var artworkImage: PlatformImage?
     @State private var colors: ArtworkColors = .fallback
+    @State private var currentPaletteLayerID = UUID()
+    @State private var previousArtworkLayers: [ArtworkPaletteLayer] = []
+    @State private var artworkPaletteTransitionStartedAt: TimeInterval?
+    @State private var artworkPaletteTransitionID = UUID()
     @State private var activeIndex: Int?
     @State private var isUserScrolling = false
     @State private var resumeTask: Task<Void, Never>?
     @State private var showLyricsOnMobile = false
     @State private var showQualityPicker = false
     @State private var showComments = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     #if os(iOS)
     @State private var showQueueOnMobile = false
     #endif
@@ -106,6 +123,13 @@ struct NowPlayingView: View {
         .task(id: player.currentTrack?.playbackKey) {
             await loadArtwork()
         }
+        .task(id: artworkPaletteTransitionID) {
+            let transitionID = artworkPaletteTransitionID
+            guard artworkPaletteTransitionStartedAt != nil else { return }
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled, artworkPaletteTransitionID == transitionID else { return }
+            finishArtworkPaletteTransition(id: transitionID)
+        }
         #if os(iOS)
         .onAppear {
             syncModePresentation()
@@ -119,6 +143,11 @@ struct NowPlayingView: View {
             }
         }
         #endif
+        .onChange(of: reduceMotion) { _, isEnabled in
+            if isEnabled {
+                settleArtworkPaletteTransition()
+            }
+        }
         #if os(macOS)
         .onExitCommand {
             close()
@@ -196,10 +225,24 @@ struct NowPlayingView: View {
 #endif
         }
         .ignoresSafeArea()
-        .animation(.easeInOut(duration: 0.8), value: colors)
     }
 
     private var artworkBackdrop: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: artworkPaletteTransitionStartedAt == nil)) { _ in
+            ZStack {
+                Color.black
+                ForEach(visibleArtworkPaletteLayers(at: ProcessInfo.processInfo.systemUptime)) { layer in
+                    artworkGradient(for: layer.colors)
+                        .opacity(layer.weight)
+                        .blendMode(.plusLighter)
+                }
+            }
+            .compositingGroup()
+            .background(.black)
+        }
+    }
+
+    private func artworkGradient(for palette: ArtworkColors) -> MeshGradient {
         MeshGradient(
             width: 3,
             height: 3,
@@ -209,37 +252,118 @@ struct NowPlayingView: View {
                 [0.0, 1.0], [0.48, 1.0], [1.0, 1.0],
             ],
             colors: [
-                colors.primary, colors.primary.opacity(0.9), colors.secondary.opacity(0.86),
-                colors.primary.opacity(0.88), colors.secondary, colors.secondary.opacity(0.92),
-                colors.secondary.opacity(0.9), colors.secondary.opacity(0.82), .black,
+                palette.primary, palette.primary.opacity(0.9), palette.secondary.opacity(0.86),
+                palette.primary.opacity(0.88), palette.secondary, palette.secondary.opacity(0.92),
+                palette.secondary.opacity(0.9), palette.secondary.opacity(0.82), .black,
             ],
             background: .black,
             smoothsColors: true
         )
     }
 
+    private func transitionArtworkPalette(to next: ArtworkColors) {
+        guard next != colors else { return }
+        let transitionID = UUID()
+        artworkPaletteTransitionID = transitionID
+
+        guard !reduceMotion else {
+            replaceArtworkPaletteImmediately(with: next)
+            return
+        }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        let visibleLayers = visibleArtworkPaletteLayers(at: now)
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            previousArtworkLayers = visibleLayers
+            colors = next
+            currentPaletteLayerID = UUID()
+            artworkPaletteTransitionStartedAt = now
+        }
+    }
+
+    private func visibleArtworkPaletteLayers(at now: TimeInterval) -> [ArtworkPaletteLayer] {
+        guard let startedAt = artworkPaletteTransitionStartedAt else {
+            return [ArtworkPaletteLayer(id: currentPaletteLayerID, colors: colors, weight: 1)]
+        }
+
+        let linearProgress = min(max((now - startedAt) / 0.8, 0), 1)
+        let progress = linearProgress * linearProgress * (3 - 2 * linearProgress)
+        var layers = previousArtworkLayers.map {
+            ArtworkPaletteLayer(id: $0.id, colors: $0.colors, weight: $0.weight * (1 - progress))
+        }
+        if progress > 0 {
+            layers.append(ArtworkPaletteLayer(id: currentPaletteLayerID, colors: colors, weight: progress))
+        }
+
+        let visibleLayers = layers.filter { $0.weight > 0.005 }
+        let totalWeight = visibleLayers.reduce(0) { $0 + $1.weight }
+        guard totalWeight > 0 else {
+            return [ArtworkPaletteLayer(id: currentPaletteLayerID, colors: colors, weight: 1)]
+        }
+        return visibleLayers.map {
+            ArtworkPaletteLayer(id: $0.id, colors: $0.colors, weight: $0.weight / totalWeight)
+        }
+    }
+
+    private func settleArtworkPaletteTransition() {
+        artworkPaletteTransitionID = UUID()
+        replaceArtworkPaletteImmediately(with: colors)
+    }
+
+    private func replaceArtworkPaletteImmediately(with palette: ArtworkColors) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            colors = palette
+            currentPaletteLayerID = UUID()
+            previousArtworkLayers = []
+            artworkPaletteTransitionStartedAt = nil
+        }
+    }
+
+    private func finishArtworkPaletteTransition(id: UUID) {
+        guard artworkPaletteTransitionID == id else { return }
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            previousArtworkLayers = []
+            artworkPaletteTransitionStartedAt = nil
+        }
+    }
+
     private func loadArtwork() async {
+        guard !Task.isCancelled else { return }
         artworkImage = nil
-        colors = .fallback
         guard let track = player.currentTrack else {
+            transitionArtworkPalette(to: .fallback)
             return
         }
         let playbackKey = track.playbackKey
         var urlString = track.album.picUrl
         if urlString == nil {
             let query = [track.name, track.artistNames].filter { !$0.isEmpty }.joined(separator: " ")
-            if let result = try? await NeteaseAPI.search(query, type: .songs, limit: 6),
+            let result = try? await NeteaseAPI.search(query, type: .songs, limit: 6)
+            guard !Task.isCancelled, player.currentTrack?.playbackKey == playbackKey else { return }
+            if let result,
                let match = result.songs?.first(where: { $0.name == track.name }) ?? result.songs?.first {
                 urlString = match.album.picUrl
             }
         }
         guard let urlString, let url = urlString.resizedImageURL(768) else {
+            guard !Task.isCancelled, player.currentTrack?.playbackKey == playbackKey else { return }
+            transitionArtworkPalette(to: .fallback)
             return
         }
-        if let image = await ImageCache.shared.image(for: url) {
-            guard player.currentTrack?.playbackKey == playbackKey else { return }
+        let cachedImage = await ImageCache.shared.image(for: url)
+        guard !Task.isCancelled, player.currentTrack?.playbackKey == playbackKey else { return }
+        if let image = cachedImage {
             artworkImage = image
-            colors = ArtworkPalette.extract(from: image, cacheKey: urlString)
+            transitionArtworkPalette(to: ArtworkPalette.extract(from: image, cacheKey: urlString))
+        } else {
+            guard player.currentTrack?.playbackKey == playbackKey else { return }
+            transitionArtworkPalette(to: .fallback)
         }
     }
 
