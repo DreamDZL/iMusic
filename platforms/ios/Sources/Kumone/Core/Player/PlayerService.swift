@@ -842,7 +842,7 @@ final class PlayerService: ObservableObject {
         }
 
         pendingSeek = nil
-        engine.cancelPendingSeeks()
+        engine.currentItem?.cancelPendingSeeks()
         engine.seek(to: CMTime(seconds: target, preferredTimescale: 600),
                     toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
             Task { @MainActor in
@@ -1181,7 +1181,7 @@ final class PlayerService: ObservableObject {
         // old AVPlayerItem audible until the new source responds.
         engine.pause()
         seekGeneration += 1
-        engine.cancelPendingSeeks()
+        engine.currentItem?.cancelPendingSeeks()
 #if os(iOS)
         deactivateAudioSession()
 #endif

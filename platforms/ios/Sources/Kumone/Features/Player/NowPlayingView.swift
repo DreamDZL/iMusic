@@ -1888,6 +1888,7 @@ private struct IOSMinimalLyricsColumn: View {
     @State private var lineCenters: [Int: CGFloat] = [:]
     @State private var isDragging = false
     @State private var suppressesAutoScroll = false
+    @State private var pendingLyricSeekID: UUID?
     @State private var scrollSettleTask: Task<Void, Never>?
     @State private var selectionTimeoutTask: Task<Void, Never>?
 
@@ -1916,8 +1917,12 @@ private struct IOSMinimalLyricsColumn: View {
                                         }
                                         selectionTimeoutTask?.cancel()
                                         selectionTimeoutTask = nil
+                                        let seekID = UUID()
+                                        pendingLyricSeekID = seekID
                                         suppressesAutoScroll = true
                                         player.seek(to: line.time) {
+                                            guard pendingLyricSeekID == seekID else { return }
+                                            pendingLyricSeekID = nil
                                             suppressesAutoScroll = false
                                         }
                                         activeIndex = line.id
@@ -1989,6 +1994,7 @@ private struct IOSMinimalLyricsColumn: View {
                             activeIndex = nil
                             selectedIndex = nil
                             nearestIndex = nil
+                            pendingLyricSeekID = nil
                             suppressesAutoScroll = false
                             scrollSettleTask?.cancel()
                             scrollSettleTask = nil
