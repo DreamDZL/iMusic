@@ -60,6 +60,15 @@ enum PlaybackMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum PlaybackResolutionPolicy {
+    static func requiresOfficialAccount(
+        mode: PlaybackSourceMode,
+        hasMatchingAccount: Bool
+    ) -> Bool {
+        mode == .official && !hasMatchingAccount
+    }
+}
+
 /// Where the current queue came from — used for scrobbling and UI affordances.
 enum PlaySource: Equatable {
     case playlist(Int)
@@ -1020,6 +1029,18 @@ final class PlayerService: ObservableObject {
                 || (isQQMusic && QQMusicSessionStore.shared.isLoggedIn)
                 || (isKugou && KugouSessionStore.shared.isLoggedIn)
             let hasLXSource = !LXSourceStore.shared.playbackSources.isEmpty
+            if PlaybackResolutionPolicy.requiresOfficialAccount(
+                mode: playbackMode,
+                hasMatchingAccount: hasOfficialAccount
+            ) {
+                guard generation == resolveGeneration else { return }
+                ToastCenter.shared.show("仅官方音源模式需要登录这首歌曲所属平台的账号")
+                isPlaying = false
+                NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+                AudioSpectrum.shared.markIdle()
+                syncLiveActivity()
+                return
+            }
             guard hasLXSource || (playbackMode != .thirdParty && hasOfficialAccount) else {
                 guard generation == resolveGeneration else { return }
                 ToastCenter.shared.show("请先登录账号或在设置 → LX 音源中选择播放音源")
