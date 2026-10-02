@@ -184,19 +184,41 @@ globalThis.lx_setup = (key, id, name, description, version, author, homepage, ra
   }
 
   const requestQueue = new Map()
+  const sourceRequestKeysByParent = new Map()
+  const cancelledSourceRequestKeys = new Set()
+  let activeSourceRequestKey = null
   let isInitedApi = false
   let isShowedUpdateAlert = false
 
+  const removeRequestFromParent = (requestKey, parentRequestKey) => {
+    if (!parentRequestKey) return
+    const requestKeys = sourceRequestKeysByParent.get(parentRequestKey)
+    requestKeys?.delete(requestKey)
+    if (requestKeys?.size === 0) sourceRequestKeysByParent.delete(parentRequestKey)
+  }
+
   const sendNativeRequest = (url, options, callback) => {
     const requestKey = Math.random().toString()
+    const parentRequestKey = activeSourceRequestKey
     const requestInfo = {
       aborted: false,
       abort: () => {
+        if (requestInfo.aborted) return
+        requestInfo.aborted = true
         nativeCall(NATIVE_EVENTS_NAMES.cancelRequest, requestKey)
+        requestQueue.delete(requestKey)
+        removeRequestFromParent(requestKey, parentRequestKey)
+        callback(new Error('Request cancelled'), null)
       },
+    }
+    if (parentRequestKey && cancelledSourceRequestKeys.has(parentRequestKey)) {
+      requestInfo.aborted = true
+      callback(new Error('Request cancelled'), null)
+      return requestInfo
     }
     requestQueue.set(requestKey, {
       callback,
+      parentRequestKey,
       // timeout: setTimeout(() => {
       //   const req = requestQueue.get(requestKey)
       //   if (req) req.timeout = null
@@ -205,24 +227,52 @@ globalThis.lx_setup = (key, id, name, description, version, author, homepage, ra
       requestInfo,
     })
 
-    nativeCall(NATIVE_EVENTS_NAMES.request, { requestKey, url, options })
+    if (parentRequestKey) {
+      const requestKeys = sourceRequestKeysByParent.get(parentRequestKey) ?? new Set()
+      requestKeys.add(requestKey)
+      sourceRequestKeysByParent.set(parentRequestKey, requestKeys)
+    }
+    nativeCall(NATIVE_EVENTS_NAMES.request, { requestKey, parentRequestKey, url, options })
     return requestInfo
   }
   const handleNativeResponse = ({ requestKey, error, response }) => {
     const targetRequest = requestQueue.get(requestKey)
     if (!targetRequest) return
     requestQueue.delete(requestKey)
+    removeRequestFromParent(requestKey, targetRequest.parentRequestKey)
     targetRequest.requestInfo.aborted = true
     // if (targetRequest.timeout) clearTimeout(targetRequest.timeout)
     if (error == null) targetRequest.callback(null, response)
     else targetRequest.callback(new Error(error), null)
   }
 
+  const cancelSourceRequest = (requestKey) => {
+    if (typeof requestKey !== 'string') return
+    cancelledSourceRequestKeys.add(requestKey)
+    const requestKeys = sourceRequestKeysByParent.get(requestKey)
+    if (!requestKeys) return
+    for (const childKey of requestKeys) {
+      requestQueue.get(childKey)?.requestInfo.abort()
+    }
+    sourceRequestKeysByParent.delete(requestKey)
+  }
+  const finishSourceRequest = (requestKey, previousRequestKey) => {
+    if (activeSourceRequestKey === requestKey) activeSourceRequestKey = previousRequestKey
+    const requestKeys = sourceRequestKeysByParent.get(requestKey)
+    if (requestKeys) {
+      for (const childKey of requestKeys) requestQueue.get(childKey)?.requestInfo.abort()
+      sourceRequestKeysByParent.delete(requestKey)
+    }
+    cancelledSourceRequestKeys.delete(requestKey)
+  }
+
   const handleRequest = ({ requestKey, data }) => {
     // console.log(data)
     if (!events.request) return nativeCall(NATIVE_EVENTS_NAMES.response, { requestKey, status: false, errorMessage: 'Request event is not defined' })
+    const previousRequestKey = activeSourceRequestKey
+    activeSourceRequestKey = requestKey
     try {
-      events.request.call(globalThis.lx, { source: data.source, action: data.action, info: data.info }).then(response => {
+      Promise.resolve(events.request.call(globalThis.lx, { source: data.source, action: data.action, info: data.info })).then(response => {
         let result
         switch (data.action) {
           case 'musicUrl':
@@ -252,14 +302,23 @@ globalThis.lx_setup = (key, id, name, description, version, author, homepage, ra
             }
             break
         }
-        nativeCall(NATIVE_EVENTS_NAMES.response, { requestKey, status: true, result })
+        if (!cancelledSourceRequestKeys.has(requestKey)) {
+          nativeCall(NATIVE_EVENTS_NAMES.response, { requestKey, status: true, result })
+        }
       }).catch(err => {
         // console.log('handleRequest err', err)
-        nativeCall(NATIVE_EVENTS_NAMES.response, { requestKey, status: false, errorMessage: err.message })
+        if (!cancelledSourceRequestKeys.has(requestKey)) {
+          nativeCall(NATIVE_EVENTS_NAMES.response, { requestKey, status: false, errorMessage: err.message })
+        }
+      }).finally(() => {
+        finishSourceRequest(requestKey, previousRequestKey)
       })
     } catch (err) {
       // console.log('handleRequest call err', err)
-      nativeCall(NATIVE_EVENTS_NAMES.response, { requestKey, status: false, errorMessage: err.message })
+      if (!cancelledSourceRequestKeys.has(requestKey)) {
+        nativeCall(NATIVE_EVENTS_NAMES.response, { requestKey, status: false, errorMessage: err.message })
+      }
+      finishSourceRequest(requestKey, previousRequestKey)
     }
   }
 
@@ -274,6 +333,9 @@ globalThis.lx_setup = (key, id, name, description, version, author, homepage, ra
         return
       case 'request':
         handleRequest(data)
+        return
+      case 'cancelRequest':
+        cancelSourceRequest(data?.requestKey)
         return
       case 'response':
         handleNativeResponse(data)

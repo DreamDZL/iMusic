@@ -225,13 +225,14 @@ struct TrackRow: View {
     }
 
     private var qualityName: String {
-        if isCurrent, let served = player.servedQuality {
-            return AudioQuality(lxType: served)?.sourceDisplayName ?? served.uppercased()
+        if isCurrent {
+            if let served = player.servedQuality {
+                return AudioQuality(lxType: served)?.sourceDisplayName ?? served.uppercased()
+            }
+            return player.isResolvingSource ? "检测中" : "音质未知"
         }
-        // A global playback preference is only a request. It must not be
-        // shown as this song's actual quality before the LX source resolves
-        // the URL. Catalogue metadata can provide a conservative hint; if it
-        // cannot, wait until playback reports the served quality.
+        // A global playback preference is only a request. For queued tracks,
+        // catalogue metadata can provide a conservative available-tier hint.
         for lxType in ["flac24bit", "flac", "320k", "128k"]
             where hasQualitySize(lxType) {
             return AudioQuality(lxType: lxType)?.sourceDisplayName ?? lxType

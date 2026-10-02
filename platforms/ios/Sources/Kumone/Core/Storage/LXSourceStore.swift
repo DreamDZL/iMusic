@@ -26,6 +26,7 @@ final class LXSourceStore: ObservableObject {
     @Published private(set) var sources: [Source] = []
     @Published private(set) var selectedID: String?
     @Published private(set) var enabledIDs: [String] = []
+    private(set) var configurationRevision = 0
 
     var selectedSource: Source? {
         guard let selectedID else { return nil }
@@ -47,25 +48,52 @@ final class LXSourceStore: ObservableObject {
     private static let enabledKey = "lx.enabledSources"
 
     private init() {
-        selectedID = UserDefaults.standard.string(forKey: Self.selectedKey)
+        let storedSelectedID = UserDefaults.standard.string(forKey: Self.selectedKey)
         let data = try? Data(contentsOf: Self.fileURL)
         sources = (data.flatMap { try? JSONDecoder().decode([Source].self, from: $0) }) ?? []
-        if selectedID != nil, selectedSource == nil {
-            selectedID = sources.first?.id
+        let hasStoredEnabledList = UserDefaults.standard.object(forKey: Self.enabledKey) != nil
+        let selection = Self.restoredSelectionState(
+            storedEnabledIDs: hasStoredEnabledList
+                ? (UserDefaults.standard.stringArray(forKey: Self.enabledKey) ?? [])
+                : nil,
+            sourceIDs: sources.map(\.id),
+            storedSelectedID: storedSelectedID
+        )
+        enabledIDs = selection.enabledIDs
+        selectedID = selection.selectedID
+        if let selectedID {
+            UserDefaults.standard.set(selectedID, forKey: Self.selectedKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.selectedKey)
+        }
+        persistEnabled()
+    }
+
+    static func restoredSelectionState(
+        storedEnabledIDs: [String]?,
+        sourceIDs: [String],
+        storedSelectedID: String?
+    ) -> (enabledIDs: [String], selectedID: String?) {
+        let available = Set(sourceIDs)
+        var enabledIDs: [String]
+        if let storedEnabledIDs {
+            var seen = Set<String>()
+            enabledIDs = storedEnabledIDs.filter {
+                available.contains($0) && seen.insert($0).inserted
+            }
+        } else {
+            let legacySelection = storedSelectedID.flatMap { available.contains($0) ? $0 : nil }
+            enabledIDs = legacySelection.map { [$0] } ?? sourceIDs.first.map { [$0] } ?? []
         }
 
-        let storedEnabled = UserDefaults.standard.stringArray(forKey: Self.enabledKey) ?? []
-        enabledIDs = storedEnabled.filter { id in sources.contains { $0.id == id } }
-        if enabledIDs.isEmpty {
-            enabledIDs = selectedID.map { [$0] } ?? sources.first.map { [$0.id] } ?? []
-        }
-        if let selectedID, !enabledIDs.contains(selectedID) {
-            enabledIDs.insert(selectedID, at: 0)
+        var selectedID = storedSelectedID.flatMap { available.contains($0) ? $0 : nil }
+        if let selected = selectedID, !enabledIDs.contains(selected) {
+            selectedID = enabledIDs.first
         }
         if selectedID == nil {
             selectedID = enabledIDs.first
         }
-        persistEnabled()
+        return (enabledIDs, selectedID)
     }
 
     func importScript(_ data: Data, suggestedName: String, sourceURL: String? = nil) throws {
@@ -85,7 +113,7 @@ final class LXSourceStore: ObservableObject {
         selectedID = source.id
         UserDefaults.standard.set(source.id, forKey: Self.selectedKey)
         persist()
-        LXUserAPIService.shared.loadSelectedSource()
+        sourceConfigurationDidChange()
     }
 
     /// Parses the same JSON or source-header formats used by import, without
@@ -171,6 +199,8 @@ final class LXSourceStore: ObservableObject {
             from: nil,
             for: nil
         )
+        let previousSelection = selectedID
+        let previousEnabledIDs = enabledIDs
         if let id, !enabledIDs.contains(id) {
             enabledIDs.insert(id, at: 0)
         }
@@ -181,7 +211,9 @@ final class LXSourceStore: ObservableObject {
             UserDefaults.standard.removeObject(forKey: Self.selectedKey)
         }
         persistEnabled()
-        LXUserAPIService.shared.loadSelectedSource()
+        if selectedID != previousSelection || enabledIDs != previousEnabledIDs {
+            sourceConfigurationDidChange()
+        }
     }
 
     func isEnabled(_ id: String) -> Bool {
@@ -189,8 +221,8 @@ final class LXSourceStore: ObservableObject {
     }
 
     /// Enables or disables a source without changing the preferred source.
-    /// Keep at least one source enabled so playback cannot silently fall back
-    /// to a source the user turned off.
+    /// The toggle keeps one enabled source available; deleting the final
+    /// source remains allowed and persists as an explicit empty configuration.
     func setEnabled(_ id: String, enabled: Bool) {
         guard sources.contains(where: { $0.id == id }) else { return }
         if enabled {
@@ -207,22 +239,20 @@ final class LXSourceStore: ObservableObject {
             }
         }
         persistEnabled()
-        if selectedID == id || !enabled {
-            LXUserAPIService.shared.loadSelectedSource()
-        }
+        sourceConfigurationDidChange()
     }
 
     func remove(_ source: Source) {
+        let previousSelectedID = selectedID
+        let sourceExisted = sources.contains { $0.id == source.id }
         sources.removeAll { $0.id == source.id }
         enabledIDs.removeAll { $0 == source.id }
         if selectedID == source.id {
-            selectedID = enabledIDs.first ?? sources.first?.id
+            selectedID = enabledIDs.first
         }
-        if let selectedID, !enabledIDs.contains(selectedID) {
-            enabledIDs.insert(selectedID, at: 0)
-        }
-        if enabledIDs.isEmpty, let selectedID {
-            enabledIDs = [selectedID]
+        if let currentSelection = selectedID,
+           !sources.contains(where: { $0.id == currentSelection }) {
+            selectedID = enabledIDs.first
         }
         persist()
         if let selectedID {
@@ -231,7 +261,9 @@ final class LXSourceStore: ObservableObject {
             UserDefaults.standard.removeObject(forKey: Self.selectedKey)
         }
         persistEnabled()
-        LXUserAPIService.shared.loadSelectedSource()
+        if sourceExisted || selectedID != previousSelectedID {
+            sourceConfigurationDidChange()
+        }
     }
 
     enum ImportError: LocalizedError {
@@ -710,6 +742,11 @@ final class LXSourceStore: ObservableObject {
 
     private func persistEnabled() {
         UserDefaults.standard.set(enabledIDs, forKey: Self.enabledKey)
+    }
+
+    private func sourceConfigurationDidChange() {
+        configurationRevision &+= 1
+        LXUserAPIService.sourceConfigurationDidChange()
     }
 
     private static var directoryURL: URL {

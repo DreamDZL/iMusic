@@ -71,7 +71,7 @@ struct SettingsView: View {
                             .tag(quality)
                     }
                 }
-                Text("自动模式先尝试对应平台已登录账号的官方音源；账号不可用时再按顺序回退到 LX。最终显示以接口实际返回的音质为准，不会把请求档位当成真实音质。")
+                Text("自动模式优先尝试对应平台已登录账号的官方音源，失败后回退到已启用的 LX 音源。官方接口可报告实际返回音质；LX 音源只提供播放地址，可能无法确认实际码率。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

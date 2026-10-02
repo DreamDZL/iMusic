@@ -254,6 +254,7 @@ final class PlayerService: ObservableObject {
     @Published private(set) var source: PlaySource = .none
     @Published private(set) var isPlaying = false
     @Published private(set) var isBuffering = false
+    @Published private(set) var isResolvingSource = false
     @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var servedQuality: String?
     @Published private(set) var unblockSource: String?
@@ -406,6 +407,8 @@ final class PlayerService: ObservableObject {
     private var endObserver: NSObjectProtocol?
     private var statusObservation: NSKeyValueObservation?
     private var resolveGeneration = 0
+    private var sourceResolutionTask: Task<Void, Never>?
+    private var lyricsResolutionTask: Task<Void, Never>?
     private var pendingSeek: TimeInterval?
     private var consecutiveFailures = 0
     private var scrobbled = false
@@ -714,6 +717,14 @@ final class PlayerService: ObservableObject {
     }
 
     func pause() {
+        if sourceResolutionTask != nil {
+            sourceResolutionTask?.cancel()
+            sourceResolutionTask = nil
+            lyricsResolutionTask?.cancel()
+            lyricsResolutionTask = nil
+            resolveGeneration += 1
+            isResolvingSource = false
+        }
         engine.pause()
 #if os(iOS)
         deactivateAudioSession()
@@ -1146,6 +1157,7 @@ final class PlayerService: ObservableObject {
         pendingSeek = resumeAt
         duration = track.duration
         servedQuality = nil
+        isResolvingSource = true
         unblockSource = nil
         isTrial = false
         lyrics = nil
@@ -1158,21 +1170,36 @@ final class PlayerService: ObservableObject {
         // letting them fall back to the decorative animation for the moment it
         // takes to find out whether this source can be tapped.
         AudioSpectrum.shared.beginPreparing()
+        sourceResolutionTask?.cancel()
+        lyricsResolutionTask?.cancel()
         resolveGeneration += 1
         let generation = resolveGeneration
 
         NowPlayingManager.shared.updateMetadata(for: track, duration: track.duration)
         persistState()
 
-        Task {
-            await resolveAndLoad(track, generation: generation)
+        sourceResolutionTask = Task { [weak self] in
+            guard let self else { return }
+            await self.resolveAndLoad(track, generation: generation)
+            if generation == self.resolveGeneration {
+                self.sourceResolutionTask = nil
+            }
         }
-        Task {
-            await loadLyrics(for: track, generation: generation)
+        lyricsResolutionTask = Task { [weak self] in
+            guard let self else { return }
+            await self.loadLyrics(for: track, generation: generation)
+            if generation == self.resolveGeneration {
+                self.lyricsResolutionTask = nil
+            }
         }
     }
 
     private func resolveAndLoad(_ track: Track, generation: Int) async {
+        defer {
+            if generation == resolveGeneration {
+                isResolvingSource = false
+            }
+        }
         let quality = SettingsManager.shared.audioQuality.rawValue
 #if os(macOS)
         let isLXCatalogTrack = track.source != nil
@@ -1189,7 +1216,7 @@ final class PlayerService: ObservableObject {
         if let local = DownloadManager.shared.record(for: track),
            FileManager.default.fileExists(atPath: local.fileURL.path) {
             resolvedURL = local.fileURL
-            servedByLXQuality = local.quality
+            servedByLXQuality = local.qualityVerified == true ? local.quality : nil
         } else {
             let sourceValue = (track.source ?? track.sourceMetadata["source"] ?? "")
                 .lowercased()
@@ -1238,11 +1265,13 @@ final class PlayerService: ObservableObject {
                 // reporting a playback failure; advancing the queue here
                 // would make an intermittent QQ result look like a wrong song.
                 for attempt in 0..<2 {
+                    guard !Task.isCancelled, generation == resolveGeneration else { return }
                     do {
                         resolved = try await LXUserAPIService.shared.resolveMusicURL(
                             for: track, quality: quality)
                         break
                     } catch {
+                        guard generation == resolveGeneration, !Task.isCancelled else { return }
                         lastError = error
                         if attempt == 0 {
                             try? await Task.sleep(for: .milliseconds(350))
@@ -1253,7 +1282,7 @@ final class PlayerService: ObservableObject {
                     throw lastError ?? LXUserAPIService.LXError.resolveFailed([])
                 }
                 resolvedURL = resolved.url
-                servedByLXQuality = resolved.quality
+                servedByLXQuality = resolved.qualityIsVerified ? resolved.quality : nil
             } catch {
                 guard generation == resolveGeneration else { return }
                 consecutiveFailures += 1

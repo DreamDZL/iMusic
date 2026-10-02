@@ -2,15 +2,15 @@
 import Combine
 import Foundation
 
-/// Downloads audio through the selected LX User API.  A download is resolved
-/// at the quality chosen by the user; the provider's returned quality is
-/// stored so the library never claims a quality the source did not serve.
+/// Downloads audio through the configured playback provider. Official APIs
+/// report the returned tier; LX User API sources only accept a requested tier.
 @MainActor
 final class DownloadManager: NSObject, ObservableObject {
     struct Record: Codable, Identifiable, Hashable {
         let id: String
         let track: Track
         let quality: String
+        let qualityVerified: Bool?
         let fileName: String
         let createdAt: Date
 
@@ -89,7 +89,7 @@ final class DownloadManager: NSObject, ObservableObject {
                 self.tasks[key] = nil
             }
             do {
-                let resolved = try await LXUserAPIService.shared.resolveMusicURL(
+                let resolved = try await LXUserAPIService.shared.resolveDownloadMusicURL(
                     for: normalized, quality: requestedQuality.rawValue)
                 let (temporaryURL, response) = try await self.downloadFile(from: resolved.url,
                                                                             key: key)
@@ -106,12 +106,16 @@ final class DownloadManager: NSObject, ObservableObject {
                 try? FileManager.default.removeItem(at: destination)
                 try FileManager.default.moveItem(at: temporaryURL, to: destination)
                 let item = Record(id: key, track: normalized, quality: resolved.quality,
+                                  qualityVerified: resolved.qualityIsVerified,
                                   fileName: fileName, createdAt: Date())
                 records.insert(item, at: 0)
                 save()
                 ToastCenter.shared.show("已下载 \(normalized.name)")
             } catch is CancellationError {
                 // A cancelled task is silent; the user can start it again.
+                if !Task.isCancelled {
+                    ToastCenter.shared.show("音源配置已更改，请重新开始下载")
+                }
             } catch {
                 ToastCenter.shared.show("下载失败：\(error.localizedDescription)")
             }

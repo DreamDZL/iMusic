@@ -1156,6 +1156,11 @@ private struct QualityPickerSheet: View {
                         }
                         .font(.footnote)
                         .foregroundStyle(.orange)
+                    } else if player.currentTrack != nil, !player.isResolvingSource {
+                        Label("当前音源未报告实际音质；选择项只表示请求档位。",
+                              systemImage: "info.circle")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -2688,7 +2693,8 @@ struct NowPlayingScrubber: View {
         if let served = player.servedQuality {
             return AudioQuality(lxType: served)?.sourceDisplayName ?? served.uppercased()
         }
-        return "检测中"
+        if player.isResolvingSource { return "检测中" }
+        return player.currentTrack == nil ? "未播放" : "音质未知"
     }
 }
 
