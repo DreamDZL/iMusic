@@ -1657,7 +1657,14 @@ enum LXCatalogService {
         }
     }
 
-    private static func track(from item: [String: Any], source: LXCatalogPlatform) -> Track? {
+    /// Shared by the catalogue and authenticated account-playlist importer so
+    /// QQ tracks keep the same stable IDs and source metadata in both paths.
+    static func track(from rawItem: [String: Any], source: LXCatalogPlatform) -> Track? {
+        let item = (rawItem["track_info"] as? [String: Any])
+            ?? (rawItem["songInfo"] as? [String: Any])
+            ?? (rawItem["songinfo"] as? [String: Any])
+            ?? (rawItem["song"] as? [String: Any])
+            ?? rawItem
         let nestedAlbum = item["album"] as? [String: Any]
         let nestedFile = item["file"] as? [String: Any]
         let nestedAudio = item["audio_info"] as? [String: Any]
@@ -1723,12 +1730,17 @@ enum LXCatalogService {
             if let albumImageURL { metadata["coverURL"] = albumImageURL }
         case .tx:
             rawID = text(item["mid"]) ?? text(item["songmid"]) ?? text(item["id"])
-            name = text(item["title"]) ?? text(item["name"]) ?? ""
+            name = text(item["title"]) ?? text(item["name"]) ?? text(item["songname"]) ?? ""
+            let singerNames = ((item["singer"] ?? item["singers"]) as? [[String: Any]] ?? [])
+                .compactMap { text($0["name"]) }
             artistText = text(item["singer"]) ?? text(item["singername"])
-            albumID = int(nestedAlbum?["id"]) ?? int(nestedAlbum?["mid"]) ?? 0
-            albumName = text(nestedAlbum?["name"]) ?? text(item["albumname"]) ?? ""
+                ?? text(item["artist"])
+                ?? (singerNames.isEmpty ? nil : singerNames.joined(separator: " / "))
+            albumID = int(nestedAlbum?["id"]) ?? int(nestedAlbum?["mid"]) ?? int(item["albumid"]) ?? 0
+            albumName = text(nestedAlbum?["name"]) ?? text(nestedAlbum?["title"])
+                ?? text(item["albumname"]) ?? ""
             durationValue = item["interval"] ?? item["duration"]
-            let albumMid = text(nestedAlbum?["mid"]) ?? ""
+            let albumMid = text(nestedAlbum?["mid"]) ?? text(item["albummid"]) ?? ""
             albumImageURL = albumMid.isEmpty ? nil
                 : normalizedImageURL("https://y.gtimg.cn/music/photo_new/T002R500x500M000\(albumMid).jpg")
             if let rawID { metadata["songmid"] = rawID }

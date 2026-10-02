@@ -33,11 +33,37 @@ actor QQMusicAPI {
         case expired
     }
 
-    struct Profile {
+    struct Profile: Sendable {
         let id: String
         let name: String
         let avatarURL: String?
         /// A provider-issued session replacement, if the response rotated it.
+        let refreshedCookie: String?
+    }
+
+    struct Playlist: Hashable, Identifiable, Sendable {
+        enum Kind: String, Hashable, Sendable {
+            case created
+            case collected
+        }
+
+        let id: String
+        let name: String
+        let coverURL: String?
+        let trackCount: Int
+        let creatorName: String
+        let kind: Kind
+
+        var isLikedSongs: Bool { id == "qq-liked:201" }
+    }
+
+    struct PlaylistListResult: Sendable {
+        let playlists: [Playlist]
+        let refreshedCookie: String?
+    }
+
+    struct PlaylistTracksResult: Sendable {
+        let tracks: [Track]
         let refreshedCookie: String?
     }
 
@@ -51,6 +77,9 @@ actor QQMusicAPI {
         case unavailable
         case qrCodeUnavailable
         case oauthFailed
+        case tooManyPlaylists
+        case tooManyTracks
+        case incompletePlaylist
 
         var errorDescription: String? {
             switch self {
@@ -58,6 +87,9 @@ actor QQMusicAPI {
             case .unavailable: return "QQ 音乐登录已失效或 Cookie 已过期"
             case .qrCodeUnavailable: return "QQ 当前拒绝了二维码请求，请稍后重试"
             case .oauthFailed: return "QQ 扫码成功，但音乐登录凭证获取失败，请重新扫码"
+            case .tooManyPlaylists: return "QQ 歌单数量超过安全分页上限，请减少后重试"
+            case .tooManyTracks: return "QQ 歌单歌曲数量超过安全分页上限，未保存不完整副本"
+            case .incompletePlaylist: return "QQ 歌单内容未能完整获取，请重试；未保存部分副本"
             }
         }
     }
@@ -397,6 +429,291 @@ actor QQMusicAPI {
                        ))
     }
 
+    /// Reads created and collected playlists. QQ exposes no supported personal
+    /// playlist API, so this follows the same read-only web endpoints used by
+    /// the QQ Music client and never calls account mutation endpoints.
+    func userPlaylists(cookie: String) async throws -> PlaylistListResult {
+        let profile = try await profile(cookie: cookie)
+        let requestCookie = profile.refreshedCookie ?? cookie
+        let cookieValues = Self.cookieFields(requestCookie)
+        let authKey = cookieValues["qm_keyst"] ?? cookieValues["qqmusic_key"]
+            ?? cookieValues["p_skey"] ?? cookieValues["skey"] ?? ""
+        guard !authKey.isEmpty else { throw APIError.unavailable }
+        let csrf = String(Self.hash5381(authKey))
+        let createdURL = "https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss"
+        let collectedURL = "https://c.y.qq.com/fav/fcgi-bin/fcg_get_profile_order_asset.fcg"
+
+        async let createdRows = fetchPlaylistPages(
+            endpoint: createdURL,
+            query: [
+                "hostUin": "0", "hostuin": profile.id, "g_tk": csrf,
+                "loginUin": profile.id, "format": "json", "inCharset": "utf8",
+                "outCharset": "utf-8", "notice": "0", "platform": "yqq.json",
+                "needNewCode": "0"
+            ],
+            listKey: "disslist", pageSize: 200, inclusiveEnd: false,
+            cookie: requestCookie
+        )
+        async let collectedRows = fetchPlaylistPages(
+            endpoint: collectedURL,
+            query: [
+                "ct": "20", "cid": "205360956", "userid": profile.id,
+                "reqtype": "3", "g_tk": csrf
+            ],
+            listKey: "cdlist", pageSize: 80, inclusiveEnd: true,
+            cookie: requestCookie
+        )
+        let (created, collected) = try await (createdRows, collectedRows)
+        let createdPlaylists = created.map { Self.mapPlaylist($0, kind: .created) }
+        let collectedPlaylists = collected.map { Self.mapPlaylist($0, kind: .collected) }
+
+        var seen = Set<String>()
+        let playlists = (createdPlaylists + collectedPlaylists)
+            .filter {
+                let text = "\($0.name) \($0.creatorName)".lowercased()
+                return !$0.id.isEmpty && !$0.name.isEmpty
+                    && !text.contains("qzone") && !text.contains("空间") && !text.contains("背景音乐")
+                    && seen.insert($0.id).inserted
+            }
+            .sorted {
+                if $0.isLikedSongs != $1.isLikedSongs { return $0.isLikedSongs }
+                if $0.kind != $1.kind { return $0.kind == .created }
+                return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            }
+        return PlaylistListResult(playlists: playlists, refreshedCookie: profile.refreshedCookie)
+    }
+
+    /// Loads one selected playlist with the signed-in cookie and pages its
+    /// tracks. The UI calls this only after the user taps Import.
+    func playlistTracks(id: String, cookie: String) async throws -> PlaylistTracksResult {
+        let profile = try await profile(cookie: cookie)
+        let requestCookie = profile.refreshedCookie ?? cookie
+        let isLikedSongs = id == "qq-liked:201"
+        let playlistID: Int64
+        if isLikedSongs {
+            playlistID = 0
+        } else if id.range(of: #"^\d+$"#, options: .regularExpression) != nil,
+                  let parsedID = Int64(id) {
+            playlistID = parsedID
+        } else {
+            throw APIError.invalidResponse
+        }
+
+        let cookieValues = Self.cookieFields(requestCookie)
+        let authKey = cookieValues["qm_keyst"] ?? cookieValues["qqmusic_key"]
+            ?? cookieValues["p_skey"] ?? cookieValues["skey"] ?? ""
+        guard !authKey.isEmpty else { throw APIError.unavailable }
+        let csrf = Self.hash5381(authKey)
+        var tracks: [Track] = []
+        var offset = 0
+        var expectedCount = 0
+        var completed = false
+        let pageSize = 100
+        let maximumPages = 100
+
+        for page in 0..<maximumPages {
+            try Task.checkCancellation()
+            let payload: [String: Any] = [
+                "comm": [
+                    "ct": 24, "cv": 4_747_474, "platform": "yqq.json",
+                    "uin": profile.id, "g_tk": csrf,
+                    "g_tk_new_20200303": csrf, "authst": authKey,
+                    "format": "json", "inCharset": "utf-8",
+                    "outCharset": "utf-8", "notice": 0, "need_new_code": 1
+                ],
+                "playlist": [
+                    "module": "music.srfDissInfo.DissInfo",
+                    "method": "CgiGetDiss",
+                    "param": [
+                        "disstid": playlistID,
+                        "dirid": isLikedSongs ? 201 : 0,
+                        "tag": true, "song_begin": offset, "song_num": pageSize,
+                        "userinfo": true, "orderlist": true, "onlysonglist": false
+                    ]
+                ]
+            ]
+            let body = try JSONSerialization.data(withJSONObject: payload)
+            var request = URLRequest(url: URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg")!)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 20
+            request.httpBody = body
+            request.setValue(requestCookie, forHTTPHeaderField: "Cookie")
+            request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+            request.setValue("https://y.qq.com/", forHTTPHeaderField: "Referer")
+            request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+
+            let (data, response) = try await session.data(for: request)
+            guard Self.isSuccess(response),
+                  let root = Self.jsonObject(from: data),
+                  let block = root["playlist"] as? [String: Any],
+                  Self.integer(in: block, keys: ["code", "result"]) == 0,
+                  let result = block["data"] as? [String: Any] else {
+                throw APIError.unavailable
+            }
+            if let rawTotal = Self.integer(in: result, keys: ["total_song_num", "songlist_size", "totalNum"]) {
+                expectedCount = max(expectedCount, rawTotal)
+            }
+            let rows = result["songlist"] as? [[String: Any]] ?? []
+            let hasMoreKeys = ["hasmore", "hasMore", "has_more"]
+            let reportedHasMore = Self.boolean(in: result, keys: hasMoreKeys)
+                ?? Self.boolean(in: block, keys: hasMoreKeys)
+            if rows.isEmpty {
+                guard reportedHasMore != true, expectedCount <= offset else {
+                    throw APIError.incompletePlaylist
+                }
+                completed = true
+                break
+            }
+            let mapped = rows.compactMap { LXCatalogService.track(from: $0, source: .tx) }
+                .map { $0.normalizedForLXPlayback() }
+            guard mapped.count == rows.count else { throw APIError.incompletePlaylist }
+            tracks.append(contentsOf: mapped)
+
+            offset += rows.count
+
+            if expectedCount > 0, offset >= expectedCount {
+                completed = true
+                break
+            }
+            if reportedHasMore == false {
+                guard expectedCount == 0 || offset >= expectedCount else {
+                    throw APIError.incompletePlaylist
+                }
+                completed = true
+                break
+            }
+            // When the endpoint omits both total and hasmore, keep paging until
+            // an empty page confirms the end. A full page is never assumed to
+            // be the whole playlist.
+            if page == maximumPages - 1 { throw APIError.tooManyTracks }
+        }
+
+        guard completed, expectedCount == 0 || offset >= expectedCount else {
+            throw APIError.incompletePlaylist
+        }
+        return PlaylistTracksResult(tracks: tracks, refreshedCookie: profile.refreshedCookie)
+    }
+
+    /// The directory's advertised count is independent from the selected
+    /// playlist response, so callers can supply it as a second completeness
+    /// check when the track endpoint omits its own total metadata.
+    func playlistTracks(id: String, cookie: String, expectedTrackCount: Int) async throws -> PlaylistTracksResult {
+        let result = try await playlistTracks(id: id, cookie: cookie)
+        if expectedTrackCount > 0, result.tracks.count < expectedTrackCount {
+            throw APIError.incompletePlaylist
+        }
+        return result
+    }
+
+    private func fetchPlaylistPages(
+        endpoint: String,
+        query baseQuery: [String: String],
+        listKey: String,
+        pageSize: Int,
+        inclusiveEnd: Bool,
+        cookie: String
+    ) async throws -> [[String: Any]] {
+        var rows: [[String: Any]] = []
+        var offset = 0
+        let maxPages = 20
+
+        for page in 0..<maxPages {
+            try Task.checkCancellation()
+            var query = baseQuery
+            query["sin"] = String(offset)
+            if inclusiveEnd {
+                query["ein"] = String(offset + pageSize - 1)
+            } else {
+                query["size"] = String(pageSize)
+            }
+            let url = try Self.url(endpoint, query: query)
+            let root = try await getJSON(url, cookie: cookie)
+            guard let pageRows = Self.playlistRows(root, listKey: listKey) else {
+                throw APIError.invalidResponse
+            }
+            rows.append(contentsOf: pageRows)
+            let data = root["data"] as? [String: Any] ?? root
+            let totalKeys = [
+                "total", "totalCount", "totalcount", "total_num", "totalNum", "count",
+                "dissnum", "diss_num", "disscount", "diss_count", "cdnum", "cd_num",
+                "cdcount", "cd_count", "sum", "playlist_count", "playlistCount"
+            ]
+            let total = Self.integer(in: data, keys: totalKeys)
+                ?? Self.integer(in: root, keys: totalKeys)
+            let hasMoreKeys = ["hasmore", "hasMore", "has_more", "more"]
+            let explicitHasMore = Self.boolean(in: data, keys: hasMoreKeys)
+                ?? Self.boolean(in: root, keys: hasMoreKeys)
+
+            if pageRows.isEmpty {
+                guard explicitHasMore != true, total.map({ rows.count >= $0 }) ?? true else {
+                    throw APIError.invalidResponse
+                }
+                return rows
+            }
+            if let total, total > 0, rows.count >= total { return rows }
+            if explicitHasMore == false {
+                guard total.map({ $0 <= rows.count }) ?? true else { throw APIError.invalidResponse }
+                return rows
+            }
+
+            // Some QQ endpoints cap the returned page below the requested
+            // size and omit a total. Continue by the number actually returned;
+            // the next empty page is the only reliable end marker in that case.
+            offset += pageRows.count
+            if page == maxPages - 1 { throw APIError.tooManyPlaylists }
+        }
+        return rows
+    }
+
+    private func getJSON(_ url: URL, cookie: String) async throws -> [String: Any] {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        request.setValue("https://y.qq.com/portal/profile.html", forHTTPHeaderField: "Referer")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await session.data(for: request)
+        guard Self.isSuccess(response), let root = Self.jsonObject(from: data) else {
+            throw APIError.invalidResponse
+        }
+        if let code = Self.integer(in: root, keys: ["code", "subcode"]), code != 0 {
+            throw APIError.unavailable
+        }
+        return root
+    }
+
+    private static func url(_ raw: String, query: [String: String]) throws -> URL {
+        guard var components = URLComponents(string: raw) else { throw APIError.invalidResponse }
+        components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        guard let url = components.url else { throw APIError.invalidResponse }
+        return url
+    }
+
+    private static func playlistRows(_ root: [String: Any], listKey: String) -> [[String: Any]]? {
+        let data = root["data"] as? [String: Any] ?? root
+        return data[listKey] as? [[String: Any]]
+    }
+
+    private static func mapPlaylist(_ raw: [String: Any], kind: Playlist.Kind) -> Playlist {
+        let rawID = text(raw["dissid"]) ?? text(raw["tid"]) ?? text(raw["dirid"])
+            ?? text(raw["id"]) ?? text(raw["diss_id"]) ?? ""
+        let isLiked = text(raw["dirid"]) == "201" || text(raw["dirId"]) == "201"
+        let id = isLiked ? "qq-liked:201" : rawID
+        let image = text(raw["diss_cover"]) ?? text(raw["logo"])
+            ?? text(raw["picurl"]) ?? text(raw["cover"])
+        let coverURL: String? = {
+            guard let image, !image.isEmpty else { return nil }
+            return image.hasPrefix("//") ? "https:\(image)" : image.replacingOccurrences(of: "http://", with: "https://")
+        }()
+        return Playlist(
+            id: id,
+            name: isLiked ? "我喜欢的音乐" : (text(raw["diss_name"]) ?? text(raw["name"]) ?? text(raw["title"]) ?? "QQ 音乐歌单"),
+            coverURL: coverURL,
+            trackCount: integer(in: raw, keys: ["song_cnt", "songnum", "total_song_num", "song_count"]) ?? 0,
+            creatorName: text(raw["hostname"]) ?? text(raw["nick"]) ?? text(raw["creator"]) ?? "QQ 音乐",
+            kind: kind
+        )
+    }
+
     private static func jsonObject(from data: Data) -> [String: Any]? {
         if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             return object
@@ -424,6 +741,22 @@ actor QQMusicAPI {
         for key in keys {
             if let value = object[key] as? NSNumber { return value.intValue }
             if let value = object[key] as? String, let number = Int(value) { return number }
+        }
+        return nil
+    }
+
+    private static func boolean(in object: [String: Any], keys: [String]) -> Bool? {
+        for key in keys {
+            guard let value = object[key] else { continue }
+            if let value = value as? Bool { return value }
+            if let value = value as? NSNumber { return value.intValue != 0 }
+            if let value = value as? String {
+                switch value.lowercased() {
+                case "true", "1", "yes": return true
+                case "false", "0", "no": return false
+                default: continue
+                }
+            }
         }
         return nil
     }

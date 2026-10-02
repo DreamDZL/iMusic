@@ -38,36 +38,71 @@ final class QQMusicSessionStore: ObservableObject {
         let cookie = ProviderSessionSupport.normalizedCookie(rawCookie)
         guard !cookie.isEmpty else { throw SessionError.emptyCookie }
         guard ProviderSessionSupport.looksLikeCookie(cookie) else { throw SessionError.invalidCookie }
+        sessionRevision &+= 1
+        let requestRevision = sessionRevision
         guard let profile = try? await QQMusicAPI.shared.profile(cookie: cookie) else {
             throw SessionError.validationFailed
         }
+        guard requestRevision == sessionRevision else { throw SessionError.validationFailed }
         do {
             try ProviderSessionSupport.writeCookie(cookie, service: keychainService)
         } catch {
             throw SessionError.validationFailed
         }
-        storedCookie = cookie
+        var persistedCookie = cookie
         if let refreshedCookie = profile.refreshedCookie {
-            try? ProviderSessionSupport.writeCookie(refreshedCookie, service: keychainService)
-            storedCookie = refreshedCookie
+            do {
+                try ProviderSessionSupport.writeCookie(refreshedCookie, service: keychainService)
+                persistedCookie = refreshedCookie
+            } catch {
+                // The validated input cookie is already stored successfully.
+            }
         }
+        storedCookie = persistedCookie
         profileName = profile.name
         isLoggedIn = true
         sessionRevision &+= 1
     }
 
     func refreshProfile() async {
-        guard let storedCookie else { return }
-        guard let profile = try? await QQMusicAPI.shared.profile(cookie: storedCookie) else {
+        guard let requestCookie = storedCookie else { return }
+        let requestRevision = sessionRevision
+        guard let profile = try? await QQMusicAPI.shared.profile(cookie: requestCookie) else {
+            guard requestRevision == sessionRevision, storedCookie == requestCookie else { return }
             signOut()
             return
         }
+        guard requestRevision == sessionRevision, storedCookie == requestCookie else { return }
         profileName = profile.name
         isLoggedIn = true
         if let refreshedCookie = profile.refreshedCookie {
-            try? ProviderSessionSupport.writeCookie(refreshedCookie, service: keychainService)
-            self.storedCookie = refreshedCookie
+            do {
+                try ProviderSessionSupport.writeCookie(refreshedCookie, service: keychainService)
+                self.storedCookie = refreshedCookie
+            } catch {
+                // Keep the current in-memory cookie aligned with Keychain.
+            }
         }
+    }
+
+    /// Applies a provider-rotated cookie returned by a successful read-only
+    /// request. It stays in the existing Keychain item and is never logged.
+    func acceptRefreshedCookie(
+        _ rawCookie: String?,
+        expectedSessionRevision: Int,
+        expectedCookie: String
+    ) {
+        guard expectedSessionRevision == sessionRevision,
+              storedCookie == expectedCookie else { return }
+        guard let rawCookie else { return }
+        let normalized = ProviderSessionSupport.normalizedCookie(rawCookie)
+        guard !normalized.isEmpty, normalized != storedCookie else { return }
+        do {
+            try ProviderSessionSupport.writeCookie(normalized, service: keychainService)
+        } catch {
+            return
+        }
+        storedCookie = normalized
     }
 
     func signOut() {

@@ -1,10 +1,12 @@
 import SwiftUI
 
-/// Optional account page. Login is deliberately isolated from LX source
-/// management: it synchronises account metadata and listening history only.
+/// Optional account page for platform account metadata, listening history, and
+/// one-way playlist copies into iMusic's local library.
 struct AccountSyncView: View {
     @EnvironmentObject private var account: AccountStore
+    @EnvironmentObject private var qqMusic: QQMusicSessionStore
     @StateObject private var syncStore = ListeningSyncStore.shared
+    @StateObject private var qqPlaylists = QQMusicPlaylistSyncStore.shared
     @EnvironmentObject private var player: PlayerService
 
     @State private var showLogin = false
@@ -12,6 +14,8 @@ struct AccountSyncView: View {
     @State private var records: [PlayRecordItem] = []
     @State private var recordsError: String?
     @State private var showPlaylistPicker = false
+    @State private var showQQPlaylistPicker = false
+    @State private var showQQLogin = false
 
     var body: some View {
         ScrollView {
@@ -27,6 +31,8 @@ struct AccountSyncView: View {
                     loginCard
                 }
 
+                qqMusicPlaylistsCard
+
                 PlayerClearanceSpacer()
             }
             .padding(.horizontal, Theme.Layout.contentInset)
@@ -34,10 +40,10 @@ struct AccountSyncView: View {
         }
         .navigationTitle("账号同步")
         .toolbar {
-            if account.isLoggedIn {
+            if account.isLoggedIn || qqMusic.isLoggedIn {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        Task { await refresh() }
+                        Task { await refresh(forceQQ: true) }
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
@@ -48,6 +54,12 @@ struct AccountSyncView: View {
         }
         .task(id: account.isLoggedIn) {
             if account.isLoggedIn { await refresh() }
+        }
+        .task {
+            if qqMusic.isLoggedIn { await qqPlaylists.refresh() }
+        }
+        .onChange(of: qqMusic.sessionRevision) { _ in
+            Task { await qqPlaylists.refresh(force: true) }
         }
         .sheet(isPresented: $showLogin) {
             NavigationStack {
@@ -63,6 +75,18 @@ struct AccountSyncView: View {
                     .environmentObject(account)
             }
             .presentationDetents([.large])
+        }
+        .sheet(isPresented: $showQQPlaylistPicker) {
+            NavigationStack {
+                QQMusicPlaylistPickerView()
+                    .environmentObject(qqMusic)
+            }
+            .presentationDetents([.large])
+        }
+        .sheet(isPresented: $showQQLogin) {
+            QQMusicLoginSheet()
+                .environmentObject(qqMusic)
+                .presentationDetents([.large])
         }
     }
 
@@ -193,8 +217,8 @@ struct AccountSyncView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
-                Button("刷新") {
-                    Task { await refresh() }
+                    Button("刷新") {
+                        Task { await refresh(forceQQ: true) }
                 }
                 .font(.caption.weight(.semibold))
                 .disabled(isRefreshing || account.isSyncingPlaylists)
@@ -212,6 +236,71 @@ struct AccountSyncView: View {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private var qqMusicPlaylistsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Label("QQ 音乐歌单", systemImage: "music.note.list")
+                    .font(.headline)
+                Spacer()
+                if qqPlaylists.isRefreshing {
+                    ProgressView().controlSize(.small)
+                }
+            }
+
+            if qqMusic.isLoggedIn {
+                Text("已获取 \(qqPlaylists.playlists.count) 个歌单。选中的歌单会复制到本地；本地增删只影响 iMusic，并可通过 LX Sync 同步到你的设备。")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 8) {
+                    Image(systemName: qqPlaylists.lastRefreshedAt == nil ? "clock" : "checkmark.circle.fill")
+                        .foregroundStyle(qqPlaylists.lastRefreshedAt == nil ? .secondary : .green)
+                    Text(qqPlaylists.lastRefreshedAt.map {
+                        "上次刷新 " + RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: .now)
+                    } ?? "尚未刷新 QQ 歌单")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Button("刷新") {
+                        Task { await qqPlaylists.refresh(force: true) }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .disabled(qqPlaylists.isRefreshing || qqPlaylists.isImporting)
+                }
+
+                Button {
+                    showQQPlaylistPicker = true
+                } label: {
+                    Label("选择要导入的 QQ 歌单", systemImage: "checklist")
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(qqPlaylists.isRefreshing || qqPlaylists.playlists.isEmpty)
+
+                if let error = qqPlaylists.errorMessage {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("登录 QQ 音乐后，可选择读取你创建或收藏的歌单并导入为本地副本。")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    showQQLogin = true
+                } label: {
+                    Label("登录 QQ 音乐", systemImage: "qrcode.viewfinder")
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
             }
         }
         .padding(16)
@@ -264,24 +353,211 @@ struct AccountSyncView: View {
         }
     }
 
-    private func refresh() async {
-        guard account.isLoggedIn else { return }
+    private func refresh(forceQQ: Bool = false) async {
+        guard account.isLoggedIn || qqMusic.isLoggedIn else { return }
         isRefreshing = true
         recordsError = nil
         defer { isRefreshing = false }
 
-        // Refresh the account first. The previous implementation captured the
-        // user ID before bootstrap(), so a stale profile could be used for the
-        // first records request after login or account switching.
-        await account.bootstrap()
-        guard account.isLoggedIn, let uid = account.profile?.userId else {
-            recordsError = "账号状态已失效，请重新登录后再试。"
-            return
+        if account.isLoggedIn {
+            // Refresh the account first so the first records request after
+            // login or account switching uses the current user ID.
+            await account.bootstrap()
+            if account.isLoggedIn, let uid = account.profile?.userId {
+                do {
+                    records = try await NeteaseAPI.playRecords(uid: uid, week: true)
+                } catch {
+                    recordsError = "播放记录暂时无法获取，稍后可重试。"
+                }
+            } else {
+                recordsError = "账号状态已失效，请重新登录后再试。"
+            }
         }
-        do {
-            records = try await NeteaseAPI.playRecords(uid: uid, week: true)
-        } catch {
-            recordsError = "播放记录暂时无法获取，稍后可重试。"
+        if qqMusic.isLoggedIn { await qqPlaylists.refresh(force: forceQQ) }
+    }
+}
+
+/// Shows the account's created and collected QQ playlists as read-only source
+/// rows. Import creates a local copy; the app never sends playlist edits back.
+struct QQMusicPlaylistPickerView: View {
+    @StateObject private var playlists = QQMusicPlaylistSyncStore.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedIDs = Set<String>()
+    @State private var importErrors: [String] = []
+    @State private var importTask: Task<Void, Never>?
+
+    private var likedPlaylists: [QQMusicAPI.Playlist] {
+        playlists.playlists.filter(\.isLikedSongs)
+    }
+
+    private var createdPlaylists: [QQMusicAPI.Playlist] {
+        playlists.playlists.filter { $0.kind == .created && !$0.isLikedSongs }
+    }
+
+    private var collectedPlaylists: [QQMusicAPI.Playlist] {
+        playlists.playlists.filter { $0.kind == .collected && !$0.isLikedSongs }
+    }
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label("导入 QQ 音乐歌单", systemImage: "arrow.down.circle")
+                            .font(.title3.weight(.semibold))
+                        Spacer(minLength: 4)
+                        Button("刷新列表") {
+                            Task { await playlists.refresh(force: true) }
+                        }
+                        .font(.subheadline.weight(.medium))
+                        .disabled(playlists.isRefreshing || playlists.isImporting)
+                    }
+                    Text("歌单会复制到 iMusic。本地增删与排序不会回写 QQ 账号，并可通过 LX Sync 同步到其他设备。")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 4)
+
+                playlistSection("我喜欢的音乐", playlists: likedPlaylists)
+                playlistSection("我创建的歌单", playlists: createdPlaylists)
+                playlistSection("我收藏的歌单", playlists: collectedPlaylists)
+
+                if let error = playlists.errorMessage {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                if !importErrors.isEmpty {
+                    Label(importErrors.joined(separator: "\n"), systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if playlists.playlists.isEmpty && !playlists.isRefreshing {
+                    EmptyStateView(
+                        icon: "music.note.list",
+                        title: "暂时没有可导入的歌单",
+                        subtitle: "请刷新列表，或确认当前 QQ 账号中有可见歌单。"
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 220)
+                }
+
+                PlayerClearanceSpacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+        }
+        .scrollIndicators(.hidden)
+        .navigationTitle("QQ 歌单")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                if playlists.isImporting {
+                    Button("停止导入", role: .destructive) { importTask?.cancel() }
+                } else {
+                    Button("取消") { dismiss() }
+                }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button {
+                    importSelected()
+                } label: {
+                    if playlists.isImporting {
+                        ProgressView()
+                    } else {
+                        Text("导入 \(selectedIDs.count)")
+                    }
+                }
+                .disabled(playlists.isImporting || selectedIDs.isEmpty)
+            }
+        }
+        .interactiveDismissDisabled(playlists.isImporting)
+        .task {
+            if playlists.playlists.isEmpty { await playlists.refresh() }
+        }
+    }
+
+    @ViewBuilder
+    private func playlistSection(_ title: String, playlists items: [QQMusicAPI.Playlist]) -> some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(title).font(.headline)
+                LazyVStack(spacing: 8) {
+                    ForEach(items) { playlist in playlistRow(playlist) }
+                }
+            }
+        }
+    }
+
+    private func playlistRow(_ playlist: QQMusicAPI.Playlist) -> some View {
+        let isImported = playlists.isImported(playlist.id)
+        let isSelected = selectedIDs.contains(playlist.id)
+
+        return Button {
+            guard !isImported else { return }
+            if isSelected { selectedIDs.remove(playlist.id) }
+            else { selectedIDs.insert(playlist.id) }
+        } label: {
+            HStack(spacing: 12) {
+                CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(128), animated: false) {
+                    Image(systemName: "music.note.list")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(width: 52, height: 52)
+                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(playlist.name)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if isImported {
+                            Text("已加入")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(Theme.accent)
+                        }
+                    }
+                    Text("\(playlist.trackCount) 首 · \(playlist.creatorName)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+                Image(systemName: isImported ? "checkmark.seal.fill" : (isSelected ? "checkmark.circle.fill" : "circle"))
+                    .font(.title3)
+                    .foregroundStyle(isImported || isSelected ? Theme.accent : Color.secondary)
+                    .frame(width: 44, height: 44)
+            }
+            .padding(10)
+            .background(
+                isImported || isSelected ? Theme.accent.opacity(0.10) : Color.primary.opacity(0.045),
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isImported || playlists.isImporting)
+        .accessibilityLabel("\(playlist.name)，\(isImported ? "已加入本地歌单" : (isSelected ? "已选择" : "未选择"))")
+    }
+
+    private func importSelected() {
+        guard importTask == nil else { return }
+        importTask = Task { @MainActor in
+            defer { importTask = nil }
+            let report = await playlists.importSelected(selectedIDs)
+            if report.failed.isEmpty {
+                importErrors = []
+                ToastCenter.shared.show("已导入 \(report.inserted) 个歌单到本地")
+                dismiss()
+            } else {
+                importErrors = report.failed
+                ToastCenter.shared.show("已导入 \(report.inserted) 个，\(report.failed.count) 个未完成")
+                selectedIDs = selectedIDs.filter { !playlists.isImported($0) }
+            }
         }
     }
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-struct ArtistRef: Codable, Hashable, Identifiable {
+struct ArtistRef: Codable, Hashable, Identifiable, Sendable {
     let id: Int
     let name: String
     let picUrl: String?
@@ -33,7 +33,7 @@ struct ArtistRef: Codable, Hashable, Identifiable {
     }
 }
 
-struct AlbumRef: Codable, Hashable, Identifiable {
+struct AlbumRef: Codable, Hashable, Identifiable, Sendable {
     let id: Int
     let name: String
     let picUrl: String?
@@ -54,7 +54,7 @@ struct AlbumRef: Codable, Hashable, Identifiable {
 
 /// A unified track model that decodes both the "v3" song shape (`ar`/`al`/`dt`)
 /// and the legacy shape (`artists`/`album`/`duration`).
-struct Track: Codable, Hashable, Identifiable {
+struct Track: Codable, Hashable, Identifiable, Sendable {
     let id: Int
     let name: String
     let artists: [ArtistRef]
@@ -215,7 +215,7 @@ struct Track: Codable, Hashable, Identifiable {
 }
 
 /// Playability flags per track, returned in parallel `privileges` arrays.
-struct TrackPrivilege: Codable, Hashable {
+struct TrackPrivilege: Codable, Hashable, Sendable {
     let id: Int
     let fee: Int?
     let pl: Int?
