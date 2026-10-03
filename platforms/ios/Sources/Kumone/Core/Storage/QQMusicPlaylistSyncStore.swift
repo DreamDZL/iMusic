@@ -312,6 +312,15 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                 break
             } catch {
                 if let apiError = error as? QQMusicAPI.APIError,
+                   case .providerRejected(let detail) = apiError,
+                   detail.localizedCaseInsensitiveContains("3a44") {
+                    failed.append("\(playlist.name)：\(error.localizedDescription)")
+                    // The same opaque provider response is unlikely to be
+                    // playlist-specific. Stop here without labeling it as a
+                    // missing ticket or invalidating the logged-in session.
+                    break
+                }
+                if let apiError = error as? QQMusicAPI.APIError,
                    case .sessionCredentialRejected = apiError {
                     session.recordPlaylistValidationFailure(
                         error.localizedDescription,

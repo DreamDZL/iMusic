@@ -68,6 +68,12 @@ actor QQMusicAPI {
         let refreshedCookie: String?
     }
 
+    private struct PlaylistTrackPage {
+        let rows: [[String: Any]]
+        let totalCount: Int?
+        let hasMore: Bool?
+    }
+
     struct ResolvedAudio: Sendable {
         let url: URL
         let quality: String
@@ -93,7 +99,7 @@ actor QQMusicAPI {
                 return "QQ 网页已打开，但没有读取到可用的账号凭据。请确认网页已登录后再点“登录完成”"
             case .unavailable: return "QQ 音乐登录已失效或 Cookie 已过期"
             case .providerRejected(let detail):
-                return "QQ 音乐接口拒绝了请求（\(detail)），请重新登录后刷新"
+                return "QQ 音乐接口拒绝了请求（\(detail)），请稍后刷新歌单"
             case .sessionCredentialRejected(let detail, ticketMissing: true):
                 return "QQ 音乐曲目接口拒绝了请求（\(detail)）。当前网页登录 Cookie 未包含 QQ 音乐曲目凭据 qm_keyst/qqmusic_key；请在电脑端 QQ 音乐网页重新登录后，再回到 iMusic 点“登录完成”"
             case .sessionCredentialRejected(let detail, ticketMissing: false):
@@ -619,67 +625,21 @@ actor QQMusicAPI {
 
         for page in 0..<maximumPages {
             try Task.checkCancellation()
-            var comm: [String: Any] = [
-                "ct": 24, "cv": 4_747_474, "platform": "yqq.json",
-                "uin": profile.id, "g_tk": csrf,
-                "g_tk_new_20200303": csrf,
-                "format": "json", "inCharset": "utf-8",
-                "outCharset": "utf-8", "notice": 0, "need_new_code": 1
-            ]
-            // A web skey/p_skey can derive g_tk, but it is not the Music
-            // `authst` ticket. Sending it in that field makes valid desktop
-            // web sessions fail on the song-list CGI.
-            if let ticket = Self.musicAuthTicket(in: cookieValues) {
-                comm["authst"] = ticket
+            let trackPage = try await fetchPlaylistTrackPage(
+                playlistID: playlistID,
+                isLikedSongs: isLikedSongs,
+                profileID: profile.id,
+                csrf: csrf,
+                offset: offset,
+                pageSize: pageSize,
+                cookie: requestCookie,
+                cookieValues: cookieValues
+            )
+            if let totalCount = trackPage.totalCount {
+                expectedCount = max(expectedCount, totalCount)
             }
-            let payload: [String: Any] = [
-                "comm": comm,
-                "playlist": [
-                    "module": "music.srfDissInfo.DissInfo",
-                    "method": "CgiGetDiss",
-                    "param": [
-                        "disstid": playlistID,
-                        "dirid": isLikedSongs ? 201 : 0,
-                        "tag": true, "song_begin": offset, "song_num": pageSize,
-                        "userinfo": true, "orderlist": true, "onlysonglist": false
-                    ]
-                ]
-            ]
-            let body = try JSONSerialization.data(withJSONObject: payload)
-            var request = URLRequest(url: URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg")!)
-            request.httpMethod = "POST"
-            request.timeoutInterval = 20
-            request.httpBody = body
-            request.setValue(requestCookie, forHTTPHeaderField: "Cookie")
-            request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-            request.setValue("https://y.qq.com/", forHTTPHeaderField: "Referer")
-            request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-
-            let (data, response) = try await session.data(for: request)
-            guard Self.isSuccess(response),
-                  let root = Self.jsonObject(from: data),
-                  let block = root["playlist"] as? [String: Any],
-                  let result = block["data"] as? [String: Any] else {
-                throw Self.playlistTracksRejection(
-                    from: data,
-                    response: response,
-                    cookieValues: cookieValues
-                )
-            }
-            guard Self.integer(in: block, keys: ["code", "result"]) == 0 else {
-                throw Self.playlistTracksRejection(
-                    from: data,
-                    response: response,
-                    cookieValues: cookieValues
-                )
-            }
-            if let rawTotal = Self.integer(in: result, keys: ["total_song_num", "songlist_size", "totalNum"]) {
-                expectedCount = max(expectedCount, rawTotal)
-            }
-            let rows = result["songlist"] as? [[String: Any]] ?? []
-            let hasMoreKeys = ["hasmore", "hasMore", "has_more"]
-            let reportedHasMore = Self.boolean(in: result, keys: hasMoreKeys)
-                ?? Self.boolean(in: block, keys: hasMoreKeys)
+            let rows = trackPage.rows
+            let reportedHasMore = trackPage.hasMore
             if rows.isEmpty {
                 guard reportedHasMore != true, expectedCount <= offset else {
                     throw APIError.incompletePlaylist
@@ -715,6 +675,116 @@ actor QQMusicAPI {
             throw APIError.incompletePlaylist
         }
         return PlaylistTracksResult(tracks: tracks, refreshedCookie: profile.refreshedCookie)
+    }
+
+    /// QQ's older desktop detail endpoint is the route used by LX Music Mobile
+    /// when the newer CgiGetDiss response is rejected. Keep the fallback
+    /// read-only and page it in bounded batches so large playlists do not
+    /// require a single oversized response.
+    private func fetchPlaylistTrackPage(
+        playlistID: Int64,
+        isLikedSongs: Bool,
+        profileID: String,
+        csrf: Int,
+        offset: Int,
+        pageSize: Int,
+        cookie: String,
+        cookieValues: [String: String]
+    ) async throws -> PlaylistTrackPage {
+        var comm: [String: Any] = [
+            "ct": 24, "cv": 4_747_474, "platform": "yqq.json",
+            "uin": profileID, "g_tk": csrf,
+            "g_tk_new_20200303": csrf,
+            "format": "json", "inCharset": "utf-8",
+            "outCharset": "utf-8", "notice": 0, "need_new_code": 1
+        ]
+        // A web skey/p_skey derives g_tk, but is not a Music authst ticket.
+        if let ticket = Self.musicAuthTicket(in: cookieValues) {
+            comm["authst"] = ticket
+        }
+        let commonParam: [String: Any] = [
+            "disstid": playlistID,
+            "tag": true,
+            "song_begin": offset,
+            "song_num": pageSize,
+            "userinfo": true,
+            "orderlist": true
+        ]
+        var primaryParam = commonParam
+        primaryParam["dirid"] = isLikedSongs ? 201 : 0
+        primaryParam["onlysonglist"] = false
+        let primaryPayload: [String: Any] = [
+            "comm": comm,
+            "playlist": [
+                "module": "music.srfDissInfo.DissInfo",
+                "method": "CgiGetDiss",
+                "param": primaryParam
+            ]
+        ]
+
+        var fallbackParam = commonParam
+        fallbackParam["dirid"] = isLikedSongs ? 201 : 0
+        fallbackParam["enc_host_uin"] = ""
+        fallbackParam["onlysonglist"] = 0
+        let fallbackPayload: [String: Any] = [
+            "comm": comm,
+            "req_1": [
+                "module": "music.srfDissInfo.aiDissInfo",
+                "method": "uniform_get_Dissinfo",
+                "param": fallbackParam
+            ]
+        ]
+
+        var firstError: Error?
+        var sessionError: Error?
+        for (responseKey, payload) in [("playlist", primaryPayload), ("req_1", fallbackPayload)] {
+            do {
+                try Task.checkCancellation()
+                let body = try JSONSerialization.data(withJSONObject: payload)
+                var request = URLRequest(url: URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg")!)
+                request.httpMethod = "POST"
+                request.timeoutInterval = 20
+                request.httpBody = body
+                request.setValue(cookie, forHTTPHeaderField: "Cookie")
+                request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+                request.setValue("https://y.qq.com/n/yqq/playsquare/\(playlistID).html", forHTTPHeaderField: "Referer")
+                request.setValue("https://y.qq.com", forHTTPHeaderField: "Origin")
+                request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+
+                let (data, response) = try await session.data(for: request)
+                guard Self.isSuccess(response),
+                      let root = Self.jsonObject(from: data),
+                      let block = root[responseKey] as? [String: Any],
+                      Self.integer(in: block, keys: ["code", "result"]) == 0,
+                      let result = block["data"] as? [String: Any],
+                      let rows = result["songlist"] as? [[String: Any]] else {
+                    throw Self.playlistTracksRejection(
+                        from: data,
+                        response: response,
+                        cookieValues: cookieValues
+                    )
+                }
+                let hasMoreKeys = ["hasmore", "hasMore", "has_more"]
+                return PlaylistTrackPage(
+                    rows: rows,
+                    totalCount: Self.integer(in: result, keys: ["total_song_num", "songlist_size", "totalNum"]),
+                    hasMore: Self.boolean(in: result, keys: hasMoreKeys)
+                        ?? Self.boolean(in: block, keys: hasMoreKeys)
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as APIError {
+                if case .sessionCredentialRejected = error {
+                    sessionError = sessionError ?? error
+                }
+                if firstError == nil { firstError = error }
+            } catch {
+                if firstError == nil { firstError = error }
+            }
+        }
+
+        if let sessionError { throw sessionError }
+        throw firstError ?? APIError.invalidResponse
     }
 
     /// The directory's advertised count is independent from the selected
@@ -821,7 +891,7 @@ actor QQMusicAPI {
         let status = (response as? HTTPURLResponse)?.statusCode
         let lowerDiagnostic = diagnostic.lowercased()
         let explicitTicketFailure = [
-            "3a44", "authst", "ticket missing", "missing ticket",
+            "authst", "ticket missing", "missing ticket",
             "缺少票据", "缺少曲目凭据", "音乐票据无效"
         ].contains { lowerDiagnostic.contains($0) }
         let explicitSessionFailure = explicitTicketFailure || [
@@ -844,6 +914,14 @@ actor QQMusicAPI {
             detailObjects.append(playlist)
             if let result = playlist["data"] as? [String: Any] {
                 detailObjects.append(result)
+            }
+        }
+        for key in ["req_1", "req_0"] {
+            if let request = root[key] as? [String: Any] {
+                detailObjects.append(request)
+                if let result = request["data"] as? [String: Any] {
+                    detailObjects.append(result)
+                }
             }
         }
         if let data = root["data"] as? [String: Any] {
