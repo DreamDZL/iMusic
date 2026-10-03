@@ -199,7 +199,9 @@ private struct ProviderWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
+        configuration.defaultWebpagePreferences.preferredContentMode = .desktop
         let view = WKWebView(frame: .zero, configuration: configuration)
+        view.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
         view.allowsBackForwardNavigationGestures = true
         view.load(URLRequest(url: url))
         DispatchQueue.main.async { webView = view }
