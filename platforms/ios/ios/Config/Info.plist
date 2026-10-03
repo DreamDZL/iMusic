@@ -10,8 +10,6 @@
     <array>
         <string>audio</string>
     </array>
-    <key>NSSupportsLiveActivities</key>
-    <false/>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

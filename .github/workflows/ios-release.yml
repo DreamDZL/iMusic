@@ -83,6 +83,10 @@ jobs:
         run: |
           mkdir -p dist/Payload
           cp -R build/Build/Products/Release-iphoneos/iMusic.app dist/Payload/iMusic.app
+          if find dist/Payload -name '*.appex' -print -quit | grep -q .; then
+            echo "The iMusic IPA must not contain a custom Live Activity or widget extension" >&2
+            exit 1
+          fi
           ditto -c -k --sequesterRsrc --keepParent dist/Payload dist/iMusic-unsigned.ipa
 
       - name: Upload IPA

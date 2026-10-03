@@ -70,7 +70,7 @@ enum QQMusicLegacyPlaylistResponse {
         let requestedOffset = max(offset, 0)
         let requestedSize = max(pageSize, 1)
         let startIndex = min(requestedOffset, allRows.count)
-        let endIndex = min(allRows.count, startIndex + requestedSize)
+        let endIndex = startIndex + min(requestedSize, allRows.count - startIndex)
         let rows = Array(allRows[startIndex..<endIndex])
         let reportedCount = ["songnum", "total_song_num", "song_count", "song_count_total"]
             .compactMap { integer(playlist[$0]) }
@@ -660,7 +660,7 @@ actor QQMusicAPI {
             listKey: "cdlist", pageSize: 80, inclusiveEnd: true,
             cookie: requestCookie
         )
-        let (createdResult, collectedResult) = await (createdOutcome, collectedOutcome)
+        let (createdResult, collectedResult) = try await (createdOutcome, collectedOutcome)
         guard createdResult.rows != nil || collectedResult.rows != nil else {
             let details = [createdResult.error, collectedResult.error]
                 .compactMap { $0 }
@@ -708,7 +708,7 @@ actor QQMusicAPI {
         pageSize: Int,
         inclusiveEnd: Bool,
         cookie: String
-    ) async -> PlaylistFetchOutcome {
+    ) async throws -> PlaylistFetchOutcome {
         do {
             let rows = try await fetchPlaylistPages(
                 endpoint: endpoint,
@@ -720,9 +720,11 @@ actor QQMusicAPI {
             )
             return PlaylistFetchOutcome(rows: rows, error: nil)
         } catch is CancellationError {
-            return PlaylistFetchOutcome(rows: nil, error: "请求已取消")
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
         } catch {
-            return PlaylistFetchOutcome(rows: nil, error: error.localizedDescription)
+            return PlaylistFetchOutcome(rows: nil, error: Self.safeRouteFailure(error))
         }
     }
 
@@ -819,10 +821,10 @@ actor QQMusicAPI {
         return PlaylistTracksResult(tracks: tracks, refreshedCookie: profile.refreshedCookie)
     }
 
-    /// QQ's older desktop detail endpoint is the route used by LX Music Mobile
-    /// when the newer CgiGetDiss response is rejected. Keep the fallback
-    /// read-only and page it in bounded batches so large playlists do not
-    /// require a single oversized response.
+    /// Reads the same legacy desktop detail endpoint used first by LX Music
+    /// Mobile. That endpoint returns a whole song list rather than accepting
+    /// an offset, so it is requested once at offset zero; subsequent pages use
+    /// QQ's paginated musicu.fcg endpoints instead of redownloading the list.
     private func fetchPlaylistTrackPage(
         playlistID: Int64,
         isLikedSongs: Bool,
@@ -865,9 +867,10 @@ actor QQMusicAPI {
             ]
         ]
 
-        // Match LX Music Mobile's public uniform_get_Dissinfo request shape.
-        // Mixing the private profile UIN, g_tk, or authst into this fallback
-        // can make QQ reject an otherwise valid request with 3a44.
+        // Match LX Music Mobile's public, anonymous uniform_get_Dissinfo
+        // request shape. Account credentials belong only on the authenticated
+        // CgiGetDiss route; mixing either UIN=0 or this fallback with a logged-in
+        // Cookie can make QQ reject otherwise readable playlists with 3a44.
         let fallbackComm: [String: Any] = [
             "ct": 24, "cv": 4_747_474, "platform": "yqq.json",
             "uin": 0, "format": "json", "inCharset": "utf-8",
@@ -892,12 +895,48 @@ actor QQMusicAPI {
             ]
         ]
 
-        var firstError: Error?
         var sessionError: Error?
-        var fallbackError: Error?
-        var legacyError: Error?
+        var routeErrors: [String] = []
         var bestIncompletePage: PlaylistTrackPage?
-        for (responseKey, payload) in [("playlist", primaryPayload), ("req_1", fallbackPayload)] {
+
+        // Match LX Music Mobile's route order. The legacy GET endpoint has
+        // succeeded for some playlists where musicu.fcg returns 3a44. It has
+        // no server-side pagination, so consume up to the app's 10k-track
+        // safety limit in this single request and never call it again later.
+        if !isLikedSongs, offset == 0,
+           let url = QQMusicLegacyPlaylistResponse.endpointURL(playlistID: playlistID) {
+            do {
+                try Task.checkCancellation()
+                let legacyPage = try await fetchLegacyPlaylistTrackPage(
+                    url: url,
+                    playlistID: playlistID,
+                    pageSize: 10_000,
+                    cookieValues: cookieValues
+                )
+                let knownCount = max(expectedPlaylistCount ?? 0, legacyPage.totalCount ?? 0)
+                let requiredRows = knownCount > offset
+                    ? min(10_000, knownCount - offset)
+                    : nil
+                let expectedEnd = offset + legacyPage.rows.count
+                let contradictsExpectedCount = legacyPage.hasMore == false && knownCount > expectedEnd
+                let isAdequate = (requiredRows.map { legacyPage.rows.count >= $0 } ?? true)
+                    && !contradictsExpectedCount
+                if isAdequate, (!legacyPage.rows.isEmpty || knownCount == 0) {
+                    return legacyPage
+                }
+                if bestIncompletePage == nil || legacyPage.rows.count > bestIncompletePage!.rows.count {
+                    bestIncompletePage = legacyPage
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                routeErrors.append("旧版 GET：\(Self.safeRouteFailure(error))")
+            }
+        }
+
+        // Use the two anonymous routes in LX order before trying the account
+        // route. The account Cookie is attached only to CgiGetDiss below.
+        for (responseKey, payload) in [("req_1", fallbackPayload), ("playlist", primaryPayload)] {
             do {
                 try Task.checkCancellation()
                 let body = try JSONSerialization.data(withJSONObject: payload)
@@ -905,7 +944,10 @@ actor QQMusicAPI {
                 request.httpMethod = "POST"
                 request.timeoutInterval = 20
                 request.httpBody = body
-                request.setValue(cookie, forHTTPHeaderField: "Cookie")
+                request.httpShouldHandleCookies = false
+                if responseKey == "playlist" {
+                    request.setValue(cookie, forHTTPHeaderField: "Cookie")
+                }
                 request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
                 request.setValue("https://y.qq.com/n/yqq/playsquare/\(playlistID).html", forHTTPHeaderField: "Referer")
                 request.setValue("https://y.qq.com", forHTTPHeaderField: "Origin")
@@ -944,9 +986,11 @@ actor QQMusicAPI {
                 let requiredRows = knownCount > offset
                     ? min(pageSize, knownCount - offset)
                     : nil
+                let expectedEnd = offset + page.rows.count
                 let needsFallback = page.rows.isEmpty
                     || (requiredRows.map { page.rows.count < $0 } ?? false)
                     || (page.hasMore == true && page.rows.count < pageSize)
+                    || (page.hasMore == false && knownCount > expectedEnd)
                 guard needsFallback else { return page }
                 if bestIncompletePage == nil || page.rows.count > bestIncompletePage!.rows.count {
                     bestIncompletePage = page
@@ -954,60 +998,35 @@ actor QQMusicAPI {
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error as APIError {
-                if responseKey == "req_1" { fallbackError = fallbackError ?? error }
-                if case .sessionCredentialRejected = error {
-                    sessionError = sessionError ?? error
+                let routeName = responseKey == "playlist" ? "CgiGetDiss" : "uniform_get_Dissinfo"
+                routeErrors.append("\(routeName)：\(Self.safeRouteFailure(error))")
+                if responseKey == "playlist",
+                   case let .sessionCredentialRejected(_, ticketMissing) = error {
+                    sessionError = sessionError ?? .sessionCredentialRejected(
+                        "QQ 音乐会话凭据未通过验证",
+                        ticketMissing: ticketMissing
+                    )
                 }
-                if firstError == nil { firstError = error }
             } catch {
-                if responseKey == "req_1" { fallbackError = fallbackError ?? error }
-                if firstError == nil { firstError = error }
+                let routeName = responseKey == "playlist" ? "CgiGetDiss" : "uniform_get_Dissinfo"
+                routeErrors.append("\(routeName)：\(Self.safeRouteFailure(error))")
             }
         }
 
-        // The QQ web client and LX Music Mobile still use this endpoint as
-        // their first compatibility route. It is particularly useful when
-        // musicu.fcg returns 3a44 for an otherwise readable public playlist.
-        // Liked songs are virtual (disstid 0 / dirid 201) and are not supported
-        // by this legacy endpoint.
-        if !isLikedSongs, let url = QQMusicLegacyPlaylistResponse.endpointURL(playlistID: playlistID) {
-            do {
-                try Task.checkCancellation()
-                let legacyPage = try await fetchLegacyPlaylistTrackPage(
-                    url: url,
-                    playlistID: playlistID,
-                    offset: offset,
-                    pageSize: pageSize,
-                    cookie: cookie,
-                    cookieValues: cookieValues
-                )
-                let knownCount = max(expectedPlaylistCount ?? 0, legacyPage.totalCount ?? 0)
-                let requiredRows = knownCount > offset
-                    ? min(pageSize, knownCount - offset)
-                    : nil
-                let isAdequate = requiredRows.map { legacyPage.rows.count >= $0 } ?? true
-                if isAdequate, (!legacyPage.rows.isEmpty || knownCount == 0) {
-                    return legacyPage
-                }
-                if bestIncompletePage == nil || legacyPage.rows.count > bestIncompletePage!.rows.count {
-                    bestIncompletePage = legacyPage
-                }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                legacyError = error
-            }
-        }
-
+        if let sessionError { throw sessionError }
         if let bestIncompletePage, !bestIncompletePage.rows.isEmpty {
-            if let legacyError { throw legacyError }
-            if let fallbackError { throw fallbackError }
+            let knownCount = max(expectedPlaylistCount ?? 0, bestIncompletePage.totalCount ?? 0)
+            let expectedEnd = offset + bestIncompletePage.rows.count
+            let contradictsExpectedCount = bestIncompletePage.hasMore == false
+                && knownCount > expectedEnd
+            if contradictsExpectedCount, !routeErrors.isEmpty {
+                throw APIError.providerRejected(routeErrors.joined(separator: "；"))
+            }
             return bestIncompletePage
         }
-        if let sessionError { throw sessionError }
-        if let legacyError { throw legacyError }
-        if let fallbackError { throw fallbackError }
-        if let firstError { throw firstError }
+        if !routeErrors.isEmpty {
+            throw APIError.providerRejected(routeErrors.joined(separator: "；"))
+        }
         if let bestIncompletePage { return bestIncompletePage }
         throw APIError.invalidResponse
     }
@@ -1015,14 +1034,12 @@ actor QQMusicAPI {
     private func fetchLegacyPlaylistTrackPage(
         url: URL,
         playlistID: Int64,
-        offset: Int,
         pageSize: Int,
-        cookie: String,
         cookieValues: [String: String]
     ) async throws -> PlaylistTrackPage {
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
-        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        request.httpShouldHandleCookies = false
         request.setValue("https://y.qq.com/n/yqq/playsquare/\(playlistID).html", forHTTPHeaderField: "Referer")
         request.setValue("https://y.qq.com", forHTTPHeaderField: "Origin")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
@@ -1032,7 +1049,7 @@ actor QQMusicAPI {
         }
 
         do {
-            let page = try QQMusicLegacyPlaylistResponse.decode(data, offset: offset, pageSize: pageSize)
+            let page = try QQMusicLegacyPlaylistResponse.decode(data, offset: 0, pageSize: pageSize)
             return PlaylistTrackPage(
                 rows: page.rows,
                 totalCount: page.totalCount,
@@ -1189,6 +1206,42 @@ actor QQMusicAPI {
             if let message, !message.isEmpty { return message }
         }
         return "接口没有返回歌单数据"
+    }
+
+    /// Provider error messages are untrusted and can echo request/session
+    /// values. Keep user-visible route diagnostics to a local failure class
+    /// and a small allowlisted response code; never surface raw server text.
+    private static func safeRouteFailure(_ error: Error) -> String {
+        if let apiError = error as? APIError {
+            switch apiError {
+            case .providerRejected(let detail), .sessionCredentialRejected(let detail, _):
+                if let code = safeQQResponseCode(in: detail) { return "响应码 \(code)" }
+                return "服务端拒绝"
+            case .invalidResponse:
+                return "响应格式无法识别"
+            case .loginCookieUnavailable:
+                return "缺少 QQ 音乐曲目凭据"
+            case .unavailable:
+                return "服务暂不可用"
+            default:
+                return "请求未成功"
+            }
+        }
+        if let urlError = error as? URLError {
+            return "网络错误 \(urlError.code.rawValue)"
+        }
+        return "本地请求失败"
+    }
+
+    private static func safeQQResponseCode(in detail: String) -> String? {
+        let lowered = detail.lowercased()
+        if lowered.range(of: #"(?<![a-z0-9])3a44(?![a-z0-9])"#, options: .regularExpression) != nil {
+            return "3a44"
+        }
+        guard let regex = try? NSRegularExpression(pattern: #"响应码\s*([0-9]{1,4})(?![0-9])"#),
+              let match = regex.firstMatch(in: detail, range: NSRange(detail.startIndex..., in: detail)),
+              let range = Range(match.range(at: 1), in: detail) else { return nil }
+        return String(detail[range])
     }
 
     private static func providerError(in root: [String: Any]) -> String? {

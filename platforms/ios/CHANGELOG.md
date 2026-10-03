@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.41 - 2026-10-04
+
+### Fixed / 修复
+
+**iOS**: removed the custom playback Live Activity extension. The app now relies only on Apple's native Now Playing card, preventing a second lock-screen playback panel; startup still ends activities created by earlier builds.
+
+**iOS**：移除自定义播放实时活动扩展，锁屏只使用 Apple 原生 Now Playing 媒体卡片，避免出现第二个播放框；启动时仍会清理旧版本创建的活动。
+
+**QQ Music**: match LX Music Mobile's legacy playlist-detail-first route order, fetch the unpaginated legacy song list once, and include credential-free per-route response diagnostics when every route fails.
+
+**QQ 音乐**：按洛雪移动端的顺序优先读取旧版歌单详情接口；该接口一次取回曲目，后续分页改走分页接口，避免反复下载整张歌单。全部接口失败时显示不含 Cookie 和票据的分阶段诊断信息。
+
 ## 1.0.40 - 2026-10-04
 
 ### Fixed / 修复

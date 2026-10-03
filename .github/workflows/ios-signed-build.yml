@@ -34,7 +34,6 @@ jobs:
           IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
           IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
-          IOS_WIDGET_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_WIDGET_PROVISIONING_PROFILE_BASE64 }}
         run: |
           set -euo pipefail
 
@@ -47,8 +46,6 @@ jobs:
           certificate_path="$RUNNER_TEMP/imusic-signing.p12"
           app_profile_path="$RUNNER_TEMP/imusic-app.mobileprovision"
           app_profile_plist="$RUNNER_TEMP/imusic-app-profile.plist"
-          widget_profile_path="$RUNNER_TEMP/imusic-widget.mobileprovision"
-          widget_profile_plist="$RUNNER_TEMP/imusic-widget-profile.plist"
 
           printf '%s' "$IOS_CERTIFICATE_P12_BASE64" | base64 -D > "$certificate_path"
           printf '%s' "$IOS_PROVISIONING_PROFILE_BASE64" | base64 -D > "$app_profile_path"
@@ -91,33 +88,14 @@ jobs:
           }
 
           app_bundle_id='com.jiajia2222.imusic.ios'
-          widget_bundle_id='com.jiajia2222.imusic.ios.widget'
           if ! profile_allows_bundle "$application_id" "$app_bundle_id"; then
             echo "The app profile does not match $app_bundle_id (profile: $application_id)." >&2
             exit 1
           fi
 
-          widget_profile_uuid="$profile_uuid"
-          if [[ -n "${IOS_WIDGET_PROVISIONING_PROFILE_BASE64:-}" ]]; then
-            printf '%s' "$IOS_WIDGET_PROVISIONING_PROFILE_BASE64" | base64 -D > "$widget_profile_path"
-            security cms -D -i "$widget_profile_path" > "$widget_profile_plist"
-            widget_profile_uuid="$(profile_value UUID "$widget_profile_plist")"
-            widget_team_id="$(profile_value Entitlements:com.apple.developer.team-identifier "$widget_profile_plist")"
-            widget_application_id="$(profile_value Entitlements:application-identifier "$widget_profile_plist")"
-            if [[ "$widget_team_id" != "$team_id" ]] || ! profile_allows_bundle "$widget_application_id" "$widget_bundle_id"; then
-              echo "The widget profile does not match $widget_bundle_id." >&2
-              exit 1
-            fi
-          elif ! profile_allows_bundle "$application_id" "$widget_bundle_id"; then
-            echo 'The supplied profile only matches the main app. Add IOS_WIDGET_PROVISIONING_PROFILE_BASE64 for the widget profile.' >&2
-            exit 1
-          fi
 
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$app_profile_path" "$HOME/Library/MobileDevice/Provisioning Profiles/$profile_uuid.mobileprovision"
-          if [[ "$widget_profile_uuid" != "$profile_uuid" ]]; then
-            cp "$widget_profile_path" "$HOME/Library/MobileDevice/Provisioning Profiles/$widget_profile_uuid.mobileprovision"
-          fi
 
           identity="$(security find-identity -v -p codesigning "$keychain_path" | sed -n 's/.*"\(.*\)".*/\1/p' | head -n 1)"
           if [[ -z "$identity" ]]; then
@@ -137,7 +115,6 @@ jobs:
           fi
 
           echo "IMUSIC_APP_PROVISIONING_PROFILE=$profile_uuid" >> "$GITHUB_ENV"
-          echo "IMUSIC_WIDGET_PROVISIONING_PROFILE=$widget_profile_uuid" >> "$GITHUB_ENV"
           echo "IMUSIC_TEAM_ID=$team_id" >> "$GITHUB_ENV"
           echo "IMUSIC_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
           echo "IMUSIC_EXPORT_METHOD=$export_method" >> "$GITHUB_ENV"
@@ -165,8 +142,7 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$IMUSIC_TEAM_ID" \
             CODE_SIGN_IDENTITY="$IMUSIC_SIGNING_IDENTITY" \
-            MOU_APP_PROVISIONING_PROFILE="$IMUSIC_APP_PROVISIONING_PROFILE" \
-            MOU_WIDGET_PROVISIONING_PROFILE="$IMUSIC_WIDGET_PROVISIONING_PROFILE"
+            MOU_APP_PROVISIONING_PROFILE="$IMUSIC_APP_PROVISIONING_PROFILE"
 
       - name: Export signed IPA
         run: |
@@ -182,7 +158,6 @@ jobs:
             <key>teamID</key><string>$IMUSIC_TEAM_ID</string>
             <key>provisioningProfiles</key><dict>
               <key>com.jiajia2222.imusic.ios</key><string>$IMUSIC_APP_PROVISIONING_PROFILE</string>
-              <key>com.jiajia2222.imusic.ios.widget</key><string>$IMUSIC_WIDGET_PROVISIONING_PROFILE</string>
             </dict>
           </dict></plist>
           EOF
@@ -201,7 +176,10 @@ jobs:
           mkdir -p "$verify_dir"
           unzip -q iMusic-signed.ipa -d "$verify_dir"
           codesign --verify --deep --strict --verbose=2 "$verify_dir/Payload/iMusic.app"
-          test -d "$verify_dir/Payload/iMusic.app/PlugIns/MoumusicWidget.appex"
+          if find "$verify_dir/Payload" -name '*.appex' -print -quit | grep -q .; then
+            echo 'The signed iMusic IPA must not contain an app extension.' >&2
+            exit 1
+          fi
 
       - name: Upload signed IPA artifact
         uses: actions/upload-artifact@v4

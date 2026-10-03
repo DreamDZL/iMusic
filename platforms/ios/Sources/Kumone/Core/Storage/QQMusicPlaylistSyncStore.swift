@@ -314,7 +314,7 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                 if let apiError = error as? QQMusicAPI.APIError,
                    case .providerRejected(let detail) = apiError,
                    detail.localizedCaseInsensitiveContains("3a44") {
-                    let diagnostic = "QQ 歌单详情接口仍返回 3a44（标准、兼容和旧版接口均未能读取）。此码不能证明登录失效；若为个人歌单，请检查 QQ 音乐个人主页和歌单可见性设置后重试"
+                    let diagnostic = "QQ 歌单详情接口仍返回 3a44。接口阶段：\(detail)。此码不能证明登录失效；若为个人歌单，请检查 QQ 音乐个人主页和歌单可见性设置后重试"
                     session.recordPlaylistValidationFailure(
                         diagnostic,
                         expectedSessionRevision: sessionRevision

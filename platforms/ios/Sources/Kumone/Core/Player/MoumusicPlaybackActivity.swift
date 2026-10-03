@@ -2,8 +2,8 @@
 import ActivityKit
 import Foundation
 
-/// Shared by the app and the WidgetKit extension so ActivityKit sees the
-/// same attributes type on both sides of the Live Activity.
+/// Legacy attributes kept so the app can close Live Activities created by
+/// older builds during migration. New builds do not ship a Live Activity widget.
 @available(iOS 16.1, *)
 public struct MoumusicPlaybackActivityAttributes: ActivityAttributes {
     public struct ContentState: Codable, Hashable {
@@ -69,7 +69,7 @@ public struct MoumusicPlaybackActivityAttributes: ActivityAttributes {
 }
 
 /// Cleans up Live Activities created by older versions of the app. Playback
-/// now uses Apple's native Now Playing card exclusively.
+/// uses Apple's native Now Playing card exclusively.
 @available(iOS 16.2, *)
 @MainActor
 final class MoumusicPlaybackActivityManager {
