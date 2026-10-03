@@ -219,10 +219,20 @@ struct AccountSyncView: View {
                 }
             }
 
-            Text("已获取 \(account.userPlaylists.count) 个歌单，包含我喜欢的音乐和收藏歌单。选择后才会加入本地歌单；已加入的歌单会在每次打开应用时检查更新。")
+            Text("已获取 \(account.userPlaylists.count) 个歌单，包含我喜欢的音乐和收藏歌单。登录后会自动复制到本地；之后自动检查云端更新，并保留你在 iMusic 中的编辑。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if account.isSyncingAfterLogin {
+                Label("正在将网易云歌单同步到本地…", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let message = account.loginPlaylistSyncMessage {
+                Label(message, systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             HStack(spacing: 8) {
                 Image(systemName: account.lastPlaylistSyncAt == nil ? "clock" : "checkmark.circle.fill")
@@ -241,10 +251,11 @@ struct AccountSyncView: View {
             Button {
                 showPlaylistPicker = true
             } label: {
-                Label("选择要加入的歌单", systemImage: "checklist")
+                Label("查看与重新同步歌单", systemImage: "arrow.triangle.2.circlepath")
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.borderedProminent)
+            .disabled(account.isSyncingAfterLogin || account.userPlaylists.isEmpty)
 
             if let error = account.lastPlaylistSyncError {
                 Label(error, systemImage: "exclamationmark.triangle")
@@ -268,10 +279,20 @@ struct AccountSyncView: View {
             }
 
             if qqMusic.isLoggedIn {
-                Text("已获取 \(qqPlaylists.playlists.count) 个歌单。选中的歌单会复制到本地；本地增删只影响 iMusic，并可通过 LX Sync 同步到你的设备。")
+                Text("已获取 \(qqPlaylists.playlists.count) 个歌单。登录后会自动复制到本地；本地增删只影响 iMusic，并可通过 LX Sync 同步到你的设备。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if qqPlaylists.isSyncingAfterLogin {
+                    Label("正在将 QQ 歌单同步到本地…", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if let message = qqPlaylists.lastLoginSyncMessage {
+                    Label(message, systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 HStack(spacing: 8) {
                     Image(systemName: qqPlaylists.lastRefreshedAt == nil ? "clock" : "checkmark.circle.fill")
@@ -292,7 +313,7 @@ struct AccountSyncView: View {
                 Button {
                     showQQPlaylistPicker = true
                 } label: {
-                    Label("选择要导入的 QQ 歌单", systemImage: "checklist")
+                    Label("管理本地歌单副本", systemImage: "music.note.list")
                         .frame(maxWidth: .infinity, minHeight: 44)
                 }
                 .buttonStyle(.borderedProminent)
@@ -374,9 +395,9 @@ struct AccountSyncView: View {
         defer { isRefreshing = false }
 
         if account.isLoggedIn {
-            // Refresh the account first so the first records request after
-            // login or account switching uses the current user ID.
-            await account.bootstrap()
+            if forceQQ {
+                await account.refreshForOpen(force: true)
+            }
             if account.isLoggedIn, let uid = account.profile?.userId {
                 do {
                     records = try await NeteaseAPI.playRecords(uid: uid, week: true)
@@ -672,9 +693,10 @@ struct QQMusicPlaylistPickerView: View {
     }
 }
 
-/// Lets the user opt individual cloud playlists into the local playlist page.
-/// The source is intentionally provider-specific; an LX User API script does
-/// not provide a common account or playlist protocol for other platforms.
+/// Lets the user retry a one-way copy of cloud playlists into the local page.
+/// Login already imports all visible playlists; this screen is for manual
+/// retries. The source is provider-specific and never writes back to the
+/// platform account.
 struct RemotePlaylistPickerView: View {
     @EnvironmentObject private var account: AccountStore
     @StateObject private var localPlaylists = LocalPlaylistStore.shared
@@ -698,9 +720,9 @@ struct RemotePlaylistPickerView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("选择要同步的歌单", systemImage: "arrow.down.circle")
+                    Label("重新同步网易云歌单", systemImage: "arrow.down.circle")
                         .font(.title3.weight(.semibold))
-                    Text("只会导入你勾选的歌单。之后应用每次打开都会检查已加入歌单的更新时间，有变化时自动更新本地副本。")
+                    Text("登录时已自动复制账号中的歌单。这里可以手动重试；你在 iMusic 修改过的本地歌单会保留，不会被云端覆盖。")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }

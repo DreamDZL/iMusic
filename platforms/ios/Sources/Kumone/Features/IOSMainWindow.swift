@@ -10,8 +10,7 @@ public struct IOSMainWindow: View {
     @StateObject private var toasts = ToastCenter.shared
     @StateObject private var updater = IOSUpdater.shared
     @StateObject private var updateLog = IOSUpdateLogStore.shared
-    @StateObject private var startup = IOSStartupCoordinator.shared
-    @ObservedObject private var backgroundStore = BackgroundImageStore.shared
+    private let startup = IOSStartupCoordinator.shared
     @Namespace private var nowPlayingTransition
     @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -58,10 +57,9 @@ public struct IOSMainWindow: View {
             .task {
                 RenderingBudget.shared.setSceneActive(scenePhase == .active)
                 player.setSceneActive(scenePhase == .active)
-                await startup.start(
+                startup.start(
                     player: player,
-                    account: account,
-                    settings: settings
+                    account: account
                 )
                 if !IOSUITestMode.isEnabled {
                     await LXSyncService.shared.reconnectIfConfigured()
@@ -91,13 +89,6 @@ public struct IOSMainWindow: View {
             }
             .sheet(isPresented: $updateLog.isPresented) {
                 IOSUpdateLogSheet()
-            }
-            .overlay {
-                if !startup.isReady {
-                    IOSStartupSplashView(coordinator: startup)
-                        .transition(.opacity)
-                        .zIndex(100)
-                }
             }
             .overlay(alignment: .top) {
                 if let toast = toasts.current {
@@ -188,20 +179,11 @@ public struct IOSMainWindow: View {
         // old split view still contains the desktop/provider navigation and
         // would reintroduce those entry points on iPad.
         ZStack {
-            if backgroundStore.syncToApp, let image = backgroundStore.image {
-                MoumusicWallpaperView(
-                    image: image,
-                    blurRadius: backgroundStore.blurRadius,
-                    dimAmount: 0.16
-                )
-            } else {
-                Color(uiColor: .systemBackground)
-                    .ignoresSafeArea()
-            }
+            Color(uiColor: .systemBackground)
+                .ignoresSafeArea()
             tabInterface
                 .background(Color.clear)
         }
-        .animation(AppAnimation.smooth, value: backgroundStore.image != nil)
     }
 
     private func nowPlayingPresentation(
@@ -210,7 +192,6 @@ public struct IOSMainWindow: View {
     ) -> some View {
         IOSNowPlayingPresentation(
             isPresented: $player.showNowPlaying,
-            mode: settings.nowPlayingMode,
             usesSystemInteractiveDismissal: usesSystemInteractiveDismissal,
             dismissAnimation: dismissAnimation
         ) {

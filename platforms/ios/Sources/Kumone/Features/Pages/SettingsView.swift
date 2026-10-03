@@ -1,7 +1,4 @@
 import SwiftUI
-#if os(iOS)
-import PhotosUI
-#endif
 
 struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsManager
@@ -12,7 +9,6 @@ struct SettingsView: View {
     @StateObject private var qqMusic = QQMusicSessionStore.shared
     @StateObject private var kugou = KugouSessionStore.shared
     @StateObject private var updateLog = IOSUpdateLogStore.shared
-    @ObservedObject private var backgroundStore = BackgroundImageStore.shared
 #endif
     @State private var cacheSize = "计算中…"
     @State private var showEqualizer = false
@@ -28,7 +24,7 @@ struct SettingsView: View {
     // the app look empty and hides the controls users came here to change.
     @State private var expandedSections: Set<String> = [
         "audio", "accounts", "playback", "home", "sources",
-        "appearance", "player", "background", "lyrics",
+        "appearance", "lyrics",
         "storage", "updates", "about"
     ]
 
@@ -207,83 +203,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-#if os(iOS)
-            SettingsDisclosureSection("播放器模式", isExpanded: sectionBinding("player")) {
-                Picker("播放器模式", selection: $settings.nowPlayingMode) {
-                    ForEach(NowPlayingMode.allCases) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-                Text("选择播放页的布局风格；沉浸、经典、简洁、歌词和唱片模式互不覆盖。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            SettingsDisclosureSection("动态壁纸与背景", isExpanded: sectionBinding("background")) {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        Label("背景图片", systemImage: "photo.on.rectangle.angled")
-                        Spacer()
-                        if backgroundStore.image != nil {
-                            Text("已设置")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    if let image = backgroundStore.image {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(height: 92)
-                            .frame(maxWidth: .infinity)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(.white.opacity(0.18), lineWidth: 1)
-                            }
-                            .accessibilityHidden(true)
-                    }
-
-                    HStack(spacing: 12) {
-                        PhotosPicker(selection: $backgroundStore.photoSelection,
-                                     matching: .images,
-                                     photoLibrary: .shared()) {
-                            Label("选择图片", systemImage: "photo.badge.plus")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .frame(minHeight: 44)
-                        .disabled(backgroundStore.isImporting)
-
-                        if backgroundStore.image != nil {
-                            Button(role: .destructive) {
-                                backgroundStore.clear()
-                            } label: {
-                                Label("移除", systemImage: "trash")
-                            }
-                            .frame(minHeight: 44)
-                        }
-                    }
-
-                    Toggle("同步到播放页", isOn: $backgroundStore.syncToPlayer)
-                    Toggle("同步到应用页面", isOn: $backgroundStore.syncToApp)
-                    backgroundBlurControl
-                    Text("图片会缩放并压缩保存到本机；开启应用同步时，首页和其他页面也会使用这张图。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-#endif
-
             SettingsDisclosureSection("歌词显示", isExpanded: sectionBinding("lyrics")) {
-                Picker("歌词样式", selection: $settings.lyricsDisplayStyle) {
-                    ForEach(LyricsDisplayStyle.allCases) { style in
-                        Text(style.displayName).tag(style)
-                    }
-                }
-                Text(settings.lyricsDisplayStyle.explanation)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 Toggle("显示歌词翻译", isOn: $settings.showLyricsTranslation)
                 Toggle("逐字歌词（卡拉 OK）", isOn: $settings.verbatimLyrics)
                 Picker("日文歌词注音", selection: $settings.lyricsAnnotation) {
@@ -388,9 +308,6 @@ struct SettingsView: View {
             }
             .presentationDetents([.large])
         }
-        .onChange(of: backgroundStore.photoSelection) { _ in
-            Task { await backgroundStore.importSelection() }
-        }
 #endif
     }
 
@@ -415,16 +332,6 @@ struct SettingsView: View {
         .frame(minHeight: 44)
     }
 
-    private var backgroundBlurControl: some View {
-        HStack {
-            Text("背景模糊")
-            Slider(value: $backgroundStore.blurRadius, in: 0...24, step: 1)
-            Text(Int(backgroundStore.blurRadius), format: .number)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 24, alignment: .trailing)
-        }
-    }
 #endif
 
     private func sectionBinding(_ id: String) -> Binding<Bool> {

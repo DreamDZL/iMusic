@@ -332,14 +332,7 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                switch model.state {
-                case .loaded:
-                    featureCards
-                case .idle, .loading:
-                    featureCardsPlaceholder
-                case .error:
-                    EmptyView()
-                }
+                featureCards
                 if !localLibrary.recentTracks.isEmpty {
                     recentTracksShelf
                 }
@@ -436,7 +429,7 @@ struct HomeView: View {
     private var standardHomeBody: some View {
         switch model.state {
         case .idle, .loading:
-            loadingBody
+            EmptyView()
         case .error(let message):
             ErrorStateView(message: message) {
                 Task { await loadCurrentHome(force: true) }
@@ -530,15 +523,6 @@ struct HomeView: View {
         .buttonStyle(.plain)
     }
 
-    private var loadingBody: some View {
-        VStack(alignment: .leading, spacing: 32) {
-            SkeletonShelf()
-            SkeletonShelf()
-        }
-        .padding(Theme.Layout.contentInset)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     private var loadedBody: some View {
         LazyVStack(alignment: .leading, spacing: 34) {
             if !model.recommendPlaylists.isEmpty {
@@ -611,23 +595,6 @@ struct HomeView: View {
 
     private var featureCardHeight: CGFloat {
         dynamicTypeSize.isAccessibilitySize ? 380 : 252
-    }
-
-    private var featureCardsPlaceholder: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("为你精选")
-                .font(.title2.weight(.bold))
-                .padding(.horizontal, Theme.Layout.contentInset)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 14) {
-                    Color.clear.frame(width: max(0, Theme.Layout.contentInset - 14), height: 1)
-                    SkeletonView(cornerRadius: Theme.Radius.large)
-                        .frame(width: 310, height: featureCardHeight)
-                }
-            }
-        }
-        .accessibilityHidden(true)
     }
 
     private var featureCards: some View {

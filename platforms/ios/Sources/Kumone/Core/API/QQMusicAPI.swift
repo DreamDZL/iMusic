@@ -234,8 +234,10 @@ actor QQMusicAPI {
         }
 
         let key = cookieValue("qqmusic_key")
+            ?? cookieValue("qm_keyst")
             ?? cookieValue("p_skey")
             ?? cookieValue("skey")
+            ?? cookieValue("pskey")
             ?? ""
         let fields: [String: String] = [
             "response_type": "code",
@@ -436,8 +438,7 @@ actor QQMusicAPI {
         let profile = try await profile(cookie: cookie)
         let requestCookie = profile.refreshedCookie ?? cookie
         let cookieValues = Self.cookieFields(requestCookie)
-        let authKey = cookieValues["qm_keyst"] ?? cookieValues["qqmusic_key"]
-            ?? cookieValues["p_skey"] ?? cookieValues["skey"] ?? ""
+        let authKey = Self.playlistAuthKey(in: cookieValues) ?? ""
         guard !authKey.isEmpty else { throw APIError.unavailable }
         let csrf = String(Self.hash5381(authKey))
         let createdURL = "https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss"
@@ -483,8 +484,8 @@ actor QQMusicAPI {
         return PlaylistListResult(playlists: playlists, refreshedCookie: profile.refreshedCookie)
     }
 
-    /// Loads one selected playlist with the signed-in cookie and pages its
-    /// tracks. The UI calls this only after the user taps Import.
+    /// Loads one playlist with the signed-in cookie and pages its tracks. The
+    /// login sync uses this to make a local copy, and the UI can retry it.
     func playlistTracks(id: String, cookie: String) async throws -> PlaylistTracksResult {
         let profile = try await profile(cookie: cookie)
         let requestCookie = profile.refreshedCookie ?? cookie
@@ -500,8 +501,7 @@ actor QQMusicAPI {
         }
 
         let cookieValues = Self.cookieFields(requestCookie)
-        let authKey = cookieValues["qm_keyst"] ?? cookieValues["qqmusic_key"]
-            ?? cookieValues["p_skey"] ?? cookieValues["skey"] ?? ""
+        let authKey = Self.playlistAuthKey(in: cookieValues) ?? ""
         guard !authKey.isEmpty else { throw APIError.unavailable }
         let csrf = Self.hash5381(authKey)
         var tracks: [Track] = []
@@ -929,6 +929,20 @@ actor QQMusicAPI {
             guard pair.count == 2 else { return }
             result[pair[0].trimmingCharacters(in: .whitespaces)] = pair[1]
         }
+    }
+
+    private static func playlistAuthKey(in cookies: [String: String]) -> String? {
+        let accepted = [
+            "qm_keyst", "qqmusic_key", "music_key", "musickey",
+            "p_skey", "pskey", "skey", "wx_skey", "wxskey"
+        ]
+        for key in accepted {
+            if let value = cookies.first(where: { $0.key.lowercased() == key })?.value,
+               !value.isEmpty {
+                return value
+            }
+        }
+        return nil
     }
 
     private static func filename(for quality: String, mediaMid: String) -> String {

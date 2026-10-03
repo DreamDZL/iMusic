@@ -39,6 +39,13 @@ enum ProviderWebLoginKind: String, Identifiable {
         return value == root || value.hasSuffix(".\(root)")
     }
 
+    fileprivate static func isUsableQQIdentifier(_ raw: String?) -> Bool {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else { return false }
+        let number = raw.lowercased().hasPrefix("o") ? String(raw.dropFirst()) : raw
+        return number.contains(where: { $0 != "0" })
+    }
+
     func looksLoggedIn(_ header: String) -> Bool {
         let values = header.split(separator: ";").reduce(into: [String: String]()) { result, item in
             let pair = item.split(separator: "=", maxSplits: 1).map(String.init)
@@ -48,9 +55,14 @@ enum ProviderWebLoginKind: String, Identifiable {
         switch self {
         case .netease: return !(values["music_u"] ?? "").isEmpty
         case .qqMusic:
-            let uin = values["uin"] ?? values["qqmusic_uin"] ?? ""
-            return !uin.isEmpty && uin != "0" &&
-                !(values["qqmusic_key"] ?? "").isEmpty
+            // QQ's desktop web flow commonly yields p_uin/p_skey or qm_keyst
+            // instead of the pair used by the old QR API. Accept the session
+            // forms the profile and playlist endpoints actually understand.
+            let identifiers = ["uin", "qqmusic_uin", "p_uin", "musicid", "loginuin"]
+            let keys = ["qqmusic_key", "qm_keyst", "music_key", "musickey",
+                        "p_skey", "skey", "pskey", "wx_skey", "wxskey"]
+            let hasUser = identifiers.contains { Self.isUsableQQIdentifier(values[$0]) }
+            return hasUser && keys.contains { !(values[$0] ?? "").isEmpty }
         case .kugou:
             return !(values["token"] ?? "").isEmpty &&
                 !(values["userid"] ?? values["kugooid"] ?? "").isEmpty
@@ -168,6 +180,13 @@ struct ProviderWebLoginSheet: View {
                 return $0.value < $1.value
             }
         for cookie in scoped where values[cookie.name] == nil {
+            let key = cookie.name.lowercased()
+            let qqUserKeys = ["uin", "qqmusic_uin", "p_uin", "musicid", "loginuin"]
+            if provider == .qqMusic,
+               qqUserKeys.contains(key),
+               !ProviderWebLoginKind.isUsableQQIdentifier(cookie.value) {
+                continue
+            }
             values[cookie.name] = cookie.value
         }
         return values.sorted { $0.key < $1.key }
@@ -196,11 +215,17 @@ private struct ProviderWebView: UIViewRepresentable {
     @Binding var webView: WKWebView?
     let url: URL
 
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.preferredContentMode = .desktop
         let view = WKWebView(frame: .zero, configuration: configuration)
+        view.navigationDelegate = context.coordinator
+        view.uiDelegate = context.coordinator
         view.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
         view.allowsBackForwardNavigationGestures = true
         view.load(URLRequest(url: url))
@@ -209,6 +234,22 @@ private struct ProviderWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: WKWebView, context: Context) {}
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        func webView(
+            _ webView: WKWebView,
+            createWebViewWith configuration: WKWebViewConfiguration,
+            for navigationAction: WKNavigationAction,
+            windowFeatures: WKWindowFeatures
+        ) -> WKWebView? {
+            // QQ and NetEase route some desktop login steps through a new
+            // window. Keep that flow in the same ephemeral web view so the
+            // resulting provider cookies stay readable by the login sheet.
+            guard navigationAction.targetFrame == nil else { return nil }
+            webView.load(navigationAction.request)
+            return nil
+        }
+    }
 }
 
 private enum ProviderLoginError: LocalizedError {

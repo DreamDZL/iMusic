@@ -4,8 +4,8 @@ import MediaPlayer
 import UIKit
 #endif
 
-/// Immersive full-window now-playing page: artwork-tinted gradient backdrop,
-/// large artwork on the left, big synced lyrics on the right.
+/// Single Apple Music-style now-playing surface with a song page and a synced
+/// lyrics page, both backed by the current artwork palette.
 struct NowPlayingView: View {
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
@@ -13,7 +13,6 @@ struct NowPlayingView: View {
     @ObservedObject private var renderingBudget = RenderingBudget.shared
     @EnvironmentObject private var settings: SettingsManager
     #if os(iOS)
-    @ObservedObject private var backgroundStore = BackgroundImageStore.shared
     @Environment(\.dismissNowPlayingAction) private var dismissNowPlayingAction
     @Environment(\.dismissNowPlayingDragAction) private var dismissNowPlayingDragAction
     #endif
@@ -50,52 +49,35 @@ struct NowPlayingView: View {
             // stretch the ZStack and push the corner overlays off-screen.
             .frame(width: geo.size.width)
             .overlay(alignment: .topLeading) {
-                if showsClassicChrome(isCompact: isCompact) {
-                    Button {
-                        close()
-                    } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.85))
-                            .frame(width: 36, height: 36)
-                            .background(.white.opacity(0.12), in: Circle())
-                    }
-                    .buttonStyle(.pressable)
-                    .padding(.top, 20)
-                    .padding(.leading, 20)
+                Button {
+                    close()
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(width: 36, height: 36)
+                        .background(.white.opacity(0.12), in: Circle())
                 }
+                .buttonStyle(.pressable)
+                .padding(.top, 20)
+                .padding(.leading, 20)
             }
             .overlay(alignment: .topTrailing) {
-                HStack(spacing: 8) {
-                    if isCompact, showsClassicChrome(isCompact: isCompact) {
-                        Button {
-                            withAnimation(AppAnimation.standard) {
-                                showLyricsOnMobile.toggle()
-                            }
-                        } label: {
-                            Image(systemName: showLyricsOnMobile ? "music.note" : "quote.bubble")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(showLyricsOnMobile ? Theme.accent : .white.opacity(0.85))
-                                .frame(width: 36, height: 36)
-                                .background(.white.opacity(0.12), in: Circle())
-                        }
-                        .buttonStyle(.pressable)
+                Button {
+                    withAnimation(AppAnimation.standard) {
+                        showLyricsOnMobile.toggle()
                     }
+                } label: {
+                    Image(systemName: showLyricsOnMobile ? "music.note" : "quote.bubble")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(showLyricsOnMobile ? Theme.accent : .white.opacity(0.85))
+                        .frame(width: 36, height: 36)
+                        .background(.white.opacity(0.12), in: Circle())
                 }
+                .buttonStyle(.pressable)
                 .padding(.top, 20)
                 .padding(.trailing, 20)
             }
-            #if os(iOS)
-            .overlay {
-                if settings.nowPlayingMode == .minimal && showQueueOnMobile {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture { showQueueOnMobile = false }
-                        .accessibilityLabel("关闭播放列表")
-                        .accessibilityAddTraits(.isButton)
-                }
-            }
-            #endif
         }
         #if os(macOS)
         // The window toolbar is hidden while this page is up, but SwiftUI keeps
@@ -116,16 +98,8 @@ struct NowPlayingView: View {
             artworkPalette.finishTransition(revision: revision)
         }
         #if os(iOS)
-        .onAppear {
-            syncModePresentation()
-        }
-        .onChange(of: settings.nowPlayingMode) { _ in
-            syncModePresentation()
-        }
         .onChange(of: player.currentTrack?.id) { _ in
-            if settings.nowPlayingMode == .minimal {
-                showLyricsOnMobile = false
-            }
+            showLyricsOnMobile = false
         }
         #endif
         .onChange(of: reduceMotion) { _, isEnabled in
@@ -160,11 +134,6 @@ struct NowPlayingView: View {
         }
     }
 
-    private var hasLyricsColumn: Bool {
-        if let lyrics = player.lyrics, !lyrics.isEmpty { return true }
-        return player.lyrics == nil // still loading — keep layout stable
-    }
-
     private func close() {
         #if os(iOS)
         if let dismissNowPlayingAction {
@@ -178,15 +147,6 @@ struct NowPlayingView: View {
         player.showNowPlaying = false
         #endif
     }
-
-    private func showsClassicChrome(isCompact: Bool) -> Bool {
-        #if os(iOS)
-        return !isCompact || settings.nowPlayingMode == .classic
-        #else
-        return true
-        #endif
-    }
-
 
     /// Jump straight to the line the song is on. Used when the view appears,
     /// where waiting for the next line change would leave the lyrics parked at
@@ -204,22 +164,7 @@ struct NowPlayingView: View {
     // MARK: - Backdrop
 
     private var backdrop: some View {
-        ZStack {
-#if os(iOS)
-            if backgroundStore.syncToPlayer, let image = backgroundStore.image {
-                MoumusicWallpaperView(
-                    image: image,
-                    blurRadius: backgroundStore.blurRadius,
-                    dimAmount: 0.32
-                )
-            } else {
-                artworkBackdrop
-            }
-#else
-            artworkBackdrop
-#endif
-        }
-        .ignoresSafeArea()
+        artworkBackdrop.ignoresSafeArea()
     }
 
     private var artworkBackdrop: some View {
@@ -234,9 +179,8 @@ struct NowPlayingView: View {
     private func artworkGradient(for palette: ArtworkColors) -> LinearGradient {
         LinearGradient(
             stops: [
-                .init(color: palette.primary.opacity(0.96), location: 0),
-                .init(color: palette.secondary.opacity(0.88), location: 0.48),
-                .init(color: palette.secondary.opacity(0.48), location: 0.76),
+                .init(color: palette.primary, location: 0),
+                .init(color: palette.secondary, location: 0.52),
                 .init(color: .black, location: 1),
             ],
             startPoint: .topLeading,
@@ -298,19 +242,25 @@ struct NowPlayingView: View {
         let artworkSize = min(190, max(120, size.height - 175))
 
         VStack(spacing: 6) {
-            HStack(spacing: 18) {
-                VStack(spacing: 7) {
-                    artworkView(size: artworkSize)
-                    trackMetaView
-                }
-                .frame(maxWidth: .infinity)
-
-                if hasLyricsColumn {
+            Group {
+                if showLyricsOnMobile {
                     lyricsColumn
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    Color.clear
+                    HStack(spacing: 18) {
+                        VStack(spacing: 7) {
+                            artworkView(size: artworkSize)
+                            trackMetaView
+                        }
+                        .frame(maxWidth: .infinity)
+
+                        MiniLyricsView {
+                            withAnimation(AppAnimation.standard) {
+                                showLyricsOnMobile = true
+                            }
+                        }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             }
             .frame(maxHeight: .infinity)
@@ -330,41 +280,32 @@ struct NowPlayingView: View {
     }
 
     private func regularLayout(size: CGSize) -> some View {
-        // Everything below the artwork needs ~300pt; shrink the artwork on
-        // short displays (iPhone landscape) instead of clipping it.
-        let artworkSize = max(120, min(340, size.width * 0.32, size.height - 300))
-        return HStack(spacing: 0) {
-            leftColumn(artworkSize: artworkSize)
-                .frame(maxWidth: .infinity)
-            if hasLyricsColumn {
-                lyricsColumn
+        let artworkSize = max(120, min(340, size.width * 0.48, size.height - 300))
+        return Group {
+            if showLyricsOnMobile {
+                VStack(spacing: 18) {
+                    trackMetaView
+                        .padding(.top, 12)
+                    lyricsColumn
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    NowPlayingScrubber(onShowQuality: { showQualityPicker = true })
+                        .frame(maxWidth: 520)
+                    controls
+                        .frame(maxWidth: 620)
+                }
+                .padding(.horizontal, 48)
+            } else {
+                leftColumn(artworkSize: artworkSize)
                     .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 48)
             }
         }
-        .padding(.horizontal, 48)
         .padding(.vertical, size.height < 500 ? 24 : 40)
     }
 
     @ViewBuilder
     private func compactLayout(size: CGSize) -> some View {
-        #if os(iOS)
-        switch settings.nowPlayingMode {
-        case .classic:
-            classicCompactLayout(size: size)
-        case .immersive:
-            immersiveCompactLayout(size: size)
-        case .minimal:
-            minimalCompactLayout(size: size)
-        case .lyrics:
-            lyricsCompactLayout(size: size)
-        case .amll:
-            lyricsCompactLayout(size: size)
-        case .vinyl:
-            vinylCompactLayout(size: size)
-        }
-        #else
         classicCompactLayout(size: size)
-        #endif
     }
 
     private func classicCompactLayout(size: CGSize) -> some View {
@@ -589,16 +530,6 @@ struct NowPlayingView: View {
         }
     }
 
-    private func syncModePresentation() {
-        // Only immersive mode owns the floating lyrics/queue overlay state.
-        // The other modes render their own dedicated layout below.
-        showLyricsOnMobile = settings.nowPlayingMode == .immersive
-        showQueueOnMobile = false
-        if settings.nowPlayingMode == .amll {
-            settings.lyricsDisplayStyle = .amll
-        }
-    }
-
     private func minimalCompactLayout(size: CGSize) -> some View {
         let contentWidth = max(size.width - 64, 0)
         let artworkDimension = min(contentWidth, size.height * 0.52, 378)
@@ -805,7 +736,6 @@ struct NowPlayingView: View {
 
             Spacer()
         }
-        .padding(.trailing, hasLyricsColumn ? 30 : 0)
     }
 
     private var controls: some View {
@@ -961,12 +891,6 @@ struct NowPlayingView: View {
                         }
                     }
                 )
-                .onLongPressGesture(minimumDuration: 0.45) {
-                    withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) {
-                        settings.lyricsDisplayStyle.toggle()
-                    }
-                    ToastCenter.shared.show(settings.lyricsDisplayStyle.displayName)
-                }
             }
         } else if player.lyrics != nil, player.lyrics?.isInstrumental != true {
             VStack(spacing: 10) {
@@ -1342,12 +1266,6 @@ private struct IOSImmersiveLyricsColumn: View {
                                 }
                             }
                     )
-                    .onLongPressGesture(minimumDuration: 0.45) {
-                        withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) {
-                            settings.lyricsDisplayStyle.toggle()
-                        }
-                        ToastCenter.shared.show(settings.lyricsDisplayStyle.displayName)
-                    }
                 }
             } else if player.lyrics != nil, player.lyrics?.isInstrumental != true {
                 VStack(spacing: 10) {
@@ -1588,13 +1506,6 @@ private struct CompactTrackHeader: View {
             }
         }
         .contentShape(Rectangle())
-        .onLongPressGesture(minimumDuration: 0.45) {
-            withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) {
-                settings.lyricsDisplayStyle.toggle()
-            }
-            ToastCenter.shared.show(settings.lyricsDisplayStyle.displayName)
-        }
-        .accessibilityHint(String(localized: "长按歌曲信息切换歌词样式"))
         .sheet(isPresented: $showComments) {
             if let track = player.currentTrack {
                 SongCommentsSheet(track: track)
@@ -2010,12 +1921,6 @@ private struct IOSMinimalLyricsColumn: View {
                         .mask(edgeMask)
                         .contentShape(Rectangle())
                         .onTapGesture(perform: closeLyrics)
-                        .onLongPressGesture(minimumDuration: 0.45) {
-                            withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) {
-                                settings.lyricsDisplayStyle.toggle()
-                            }
-                            ToastCenter.shared.show(settings.lyricsDisplayStyle.displayName)
-                        }
                         .accessibilityIdentifier("syncedLyricsScroll")
                         .onPreferenceChange(MinimalLyricCentersKey.self) { centers in
                             lineCenters = centers
@@ -2803,12 +2708,6 @@ struct MiniLyricsView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onOpen)
-                .onLongPressGesture(minimumDuration: 0.45) {
-                    withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) {
-                        settings.lyricsDisplayStyle.toggle()
-                    }
-                    ToastCenter.shared.show(settings.lyricsDisplayStyle.displayName)
-                }
                 .animation(.spring(response: 0.4, dampingFraction: 0.85), value: current?.id)
             } else {
                 Color.clear

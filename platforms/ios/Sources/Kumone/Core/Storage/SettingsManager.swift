@@ -194,57 +194,10 @@ enum LyricsAnnotation: String, CaseIterable, Identifiable {
     }
 }
 
-/// Controls how synced lyric lines are rendered. The AMLL option follows the
-/// Apple Music-style presentation: larger focused lines, softer surrounding
-/// lines, and a live word-timed fill when the source provides word timings.
-enum LyricsDisplayStyle: String, CaseIterable, Identifiable {
-    case standard
+/// One fixed Apple Music-style lyric presentation.
+enum LyricsDisplayStyle: String {
     case amll
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .standard: return String(localized: "标准歌词")
-        case .amll: return String(localized: "Apple Music / AMLL")
-        }
-    }
-
-    var explanation: String {
-        switch self {
-        case .standard: return String(localized: "保持当前歌词布局与逐字高亮")
-        case .amll: return String(localized: "Apple Music 风格聚焦歌词；长按歌词区域可快速切换")
-        }
-    }
-
-    mutating func toggle() {
-        self = self == .standard ? .amll : .standard
-    }
 }
-
-#if os(iOS)
-enum NowPlayingMode: String, CaseIterable, Identifiable {
-    case classic
-    case immersive
-    case minimal
-    case lyrics
-    case amll
-    case vinyl
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .classic: return String(localized: "经典模式")
-        case .immersive: return String(localized: "沉浸模式")
-        case .minimal: return String(localized: "简洁模式")
-        case .lyrics: return String(localized: "歌词模式")
-        case .amll: return String(localized: "Apple Music / AMLL")
-        case .vinyl: return String(localized: "唱片模式")
-        }
-    }
-}
-#endif
 
 /// The home page has one recommendation family at a time. The platform used
 /// by LX recommendations is configured separately so aggregate search never
@@ -271,9 +224,6 @@ final class SettingsManager: ObservableObject {
         static let quality = "settings.audioQuality"
         static let playbackSourceMode = "settings.playbackSourceMode"
         static let appearance = "settings.appearance"
-        #if os(iOS)
-        static let nowPlayingMode = "settings.nowPlayingMode"
-        #endif
         static let showTranslation = "settings.showLyricsTranslation"
         static let showRomaji = "settings.showLyricsRomaji"
         static let lyricsAnnotation = "settings.lyricsAnnotation"
@@ -302,12 +252,6 @@ final class SettingsManager: ObservableObject {
     @Published var appearance: AppAppearance {
         didSet { UserDefaults.standard.set(appearance.rawValue, forKey: Keys.appearance) }
     }
-
-    #if os(iOS)
-    @Published var nowPlayingMode: NowPlayingMode {
-        didSet { UserDefaults.standard.set(nowPlayingMode.rawValue, forKey: Keys.nowPlayingMode) }
-    }
-    #endif
 
     @Published var showLyricsTranslation: Bool {
         didSet { UserDefaults.standard.set(showLyricsTranslation, forKey: Keys.showTranslation) }
@@ -383,6 +327,8 @@ final class SettingsManager: ObservableObject {
 
     private init() {
         let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "settings.nowPlayingMode")
+        defaults.removeObject(forKey: "settings.lyricsDisplayStyle")
         if !defaults.bool(forKey: "migration.removedBilibiliFeature.v1") {
             let didRemoveCredential = ProviderSessionSupport.deleteCookie(
                 service: "com.moumusic.bilibili.session"
@@ -396,16 +342,12 @@ final class SettingsManager: ObservableObject {
         playbackSourceMode = defaults.string(forKey: Keys.playbackSourceMode)
             .flatMap(PlaybackSourceMode.init(rawValue:)) ?? .automatic
         appearance = defaults.string(forKey: Keys.appearance).flatMap(AppAppearance.init) ?? .auto
-        #if os(iOS)
-        nowPlayingMode = defaults.string(forKey: Keys.nowPlayingMode).flatMap(NowPlayingMode.init) ?? .immersive
-        #endif
         showLyricsTranslation = defaults.object(forKey: Keys.showTranslation) as? Bool ?? true
         showLyricsRomaji = defaults.object(forKey: Keys.showRomaji) as? Bool ?? false
         let legacyRomaji = defaults.object(forKey: Keys.showRomaji) as? Bool ?? false
         lyricsAnnotation = defaults.string(forKey: Keys.lyricsAnnotation)
             .flatMap(LyricsAnnotation.init) ?? (legacyRomaji ? .romaji : .off)
-        lyricsDisplayStyle = defaults.string(forKey: Keys.lyricsDisplayStyle)
-            .flatMap(LyricsDisplayStyle.init) ?? .standard
+        lyricsDisplayStyle = .amll
         verbatimLyrics = defaults.object(forKey: Keys.verbatimLyrics) as? Bool ?? true
         lyricsOffset = defaults.object(forKey: Keys.lyricsOffset) as? Double ?? 0
         enableUnblock = defaults.object(forKey: Keys.unblock) as? Bool ?? false

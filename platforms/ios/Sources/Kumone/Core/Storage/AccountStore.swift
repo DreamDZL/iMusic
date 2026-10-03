@@ -19,6 +19,8 @@ final class AccountStore: ObservableObject {
     @Published private(set) var isSyncingPlaylists = false
     @Published private(set) var lastPlaylistSyncAt: Date?
     @Published private(set) var lastPlaylistSyncError: String?
+    @Published private(set) var isSyncingAfterLogin = false
+    @Published private(set) var loginPlaylistSyncMessage: String?
 
     struct PlaylistSyncReport: Equatable {
         let inserted: Int
@@ -49,13 +51,21 @@ final class AccountStore: ObservableObject {
 
     private init() {}
 
+    private var loginPlaylistSyncTask: Task<Void, Never>?
+    private var loginBootstrapTask: Task<Void, Never>?
+    private var importedPlaylistSyncTask: Task<Void, Never>?
+    private var loginSessionRevision = 0
+
     /// Called at launch and after login succeeds.
     func bootstrap() async {
         defer { isBootstrapped = true }
         guard hasAuthCookie else { return }
+        let revision = loginSessionRevision
         refreshCookieIfNeeded()
         do {
-            profile = try await NeteaseAPI.userAccount()
+            let loadedProfile = try await NeteaseAPI.userAccount()
+            guard revision == loginSessionRevision, hasAuthCookie else { return }
+            profile = loadedProfile
         } catch {
             return
         }
@@ -65,6 +75,16 @@ final class AccountStore: ObservableObject {
     /// Installs cookies captured from NetEase's own web login, then validates
     /// them against the account endpoint before exposing a signed-in state.
     func signInFromWeb(cookieHeader: String) async throws {
+        loginSessionRevision &+= 1
+        let revision = loginSessionRevision
+        loginBootstrapTask?.cancel()
+        loginPlaylistSyncTask?.cancel()
+        importedPlaylistSyncTask?.cancel()
+        isSyncingAfterLogin = false
+        isSyncingPlaylists = false
+        loginPlaylistSyncMessage = nil
+        lastPlaylistSyncAt = nil
+        lastPlaylistSyncError = nil
         NeteaseClient.shared.clearAuthCookies()
         profile = nil
         likedTrackIDs = []
@@ -78,28 +98,50 @@ final class AccountStore: ObservableObject {
             guard let verifiedProfile = try await NeteaseAPI.userAccount() else {
                 throw NeteaseAPIError.missingProfile
             }
+            guard revision == loginSessionRevision else { throw NeteaseAPIError.needLogin }
             profile = verifiedProfile
-            await refreshLibrary()
-            await refreshSublists()
             isBootstrapped = true
+            loginBootstrapTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.refreshLibrary(syncImportedCopies: false, expectedRevision: revision)
+                await self.refreshSublists(expectedRevision: revision)
+                guard !Task.isCancelled,
+                      self.loginSessionRevision == revision,
+                      self.profile?.userId == verifiedProfile.userId,
+                      NeteaseClient.shared.isLoggedIn else { return }
+                self.startPlaylistSyncAfterLogin(
+                    for: verifiedProfile.userId,
+                    sessionRevision: revision
+                )
+            }
         } catch {
-            NeteaseClient.shared.clearAuthCookies()
-            profile = nil
-            likedTrackIDs = []
-            userPlaylists = []
-            likedAlbums = []
-            likedArtists = []
+            if revision == loginSessionRevision {
+                NeteaseClient.shared.clearAuthCookies()
+                profile = nil
+                likedTrackIDs = []
+                userPlaylists = []
+                likedAlbums = []
+                likedArtists = []
+            }
             throw error
         }
     }
 
-    func refreshLibrary() async {
+    func refreshLibrary(
+        syncImportedCopies: Bool = true,
+        expectedRevision: Int? = nil
+    ) async {
         guard let uid = profile?.userId else { return }
+        let revision = expectedRevision ?? loginSessionRevision
+        guard revision == loginSessionRevision else { return }
         lastPlaylistSyncError = nil
         async let playlists = try? NeteaseAPI.userPlaylists(uid: uid)
         async let liked = try? NeteaseAPI.likedTrackIDs(uid: uid)
         let fetchedPlaylists = await playlists
         let fetchedLiked = await liked
+        guard revision == loginSessionRevision,
+              profile?.userId == uid,
+              hasAuthCookie else { return }
 
         if let fetchedPlaylists {
             userPlaylists = fetchedPlaylists
@@ -113,14 +155,14 @@ final class AccountStore: ObservableObject {
         // Do not show a successful sync timestamp when the playlist request
         // failed and the screen is still displaying stale cached data.
         if fetchedPlaylists != nil {
-            await syncImportedPlaylistCopies()
+            if syncImportedCopies { scheduleImportedPlaylistCopySync(userID: uid, revision: revision) }
             lastPlaylistSyncAt = .now
         }
     }
 
     /// Refresh account-owned cloud playlists when the app comes back to the
-    /// foreground. This never imports every remote playlist automatically:
-    /// only copies explicitly selected by the user are updated.
+    /// foreground. Existing local provider copies update in the background;
+    /// their locally edited contents stay protected from a cloud overwrite.
     func refreshForOpen(force: Bool = false) async {
         guard hasAuthCookie else { return }
         let now = Date()
@@ -149,11 +191,19 @@ final class AccountStore: ObservableObject {
         return await syncPlaylists(selected, force: true)
     }
 
-    func refreshSublists() async {
+    func refreshSublists(expectedRevision: Int? = nil) async {
+        guard let userID = profile?.userId else { return }
+        let revision = expectedRevision ?? loginSessionRevision
+        guard revision == loginSessionRevision, hasAuthCookie else { return }
         async let albums = try? NeteaseAPI.likedAlbums()
         async let artists = try? NeteaseAPI.likedArtists()
-        likedAlbums = await albums ?? likedAlbums
-        likedArtists = await artists ?? likedArtists
+        let fetchedAlbums = await albums
+        let fetchedArtists = await artists
+        guard revision == loginSessionRevision,
+              profile?.userId == userID,
+              hasAuthCookie else { return }
+        likedAlbums = fetchedAlbums ?? likedAlbums
+        likedArtists = fetchedArtists ?? likedArtists
     }
 
     /// Copies the account's liked songs into iMusic's local favorites. This is
@@ -213,16 +263,29 @@ final class AccountStore: ObservableObject {
     }
 
     func logout() async {
-        await NeteaseAPI.logout()
+        loginSessionRevision &+= 1
+        loginBootstrapTask?.cancel()
+        loginBootstrapTask = nil
+        loginPlaylistSyncTask?.cancel()
+        loginPlaylistSyncTask = nil
+        importedPlaylistSyncTask?.cancel()
+        importedPlaylistSyncTask = nil
+        isSyncingAfterLogin = false
+        isSyncingPlaylists = false
+        loginPlaylistSyncMessage = nil
+        lastPlaylistSyncAt = nil
+        lastPlaylistSyncError = nil
         profile = nil
         likedTrackIDs = []
         userPlaylists = []
         likedAlbums = []
         likedArtists = []
         isBootstrapped = true
+        await NeteaseAPI.logout()
     }
 
-    private func syncImportedPlaylistCopies() async {
+    private func syncImportedPlaylistCopies(userID: Int, revision: Int) async {
+        guard revision == loginSessionRevision, profile?.userId == userID else { return }
         let mirrored = LocalPlaylistStore.shared.playlists.filter {
             $0.remoteSource == "netease"
                 && $0.remotePlaylistID != nil
@@ -235,23 +298,92 @@ final class AccountStore: ObservableObject {
             return userPlaylists.first { $0.id == id }
         }
         guard !candidates.isEmpty else { return }
-        _ = await syncPlaylists(candidates, force: false)
+        _ = await syncPlaylists(
+            candidates,
+            force: false,
+            expectedUserID: userID,
+            expectedSessionRevision: revision
+        )
+    }
+
+    private func scheduleImportedPlaylistCopySync(userID: Int, revision: Int) {
+        guard importedPlaylistSyncTask == nil else { return }
+        importedPlaylistSyncTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.syncImportedPlaylistCopies(userID: userID, revision: revision)
+            self.importedPlaylistSyncTask = nil
+        }
+    }
+
+    /// Import all playlists visible to the signed-in account into local copies
+    /// after login. This runs in the background so returning from the web view
+    /// stays immediate; later refreshes update only unedited provider copies.
+    private func startPlaylistSyncAfterLogin(for userID: Int, sessionRevision: Int) {
+        guard sessionRevision == loginSessionRevision, profile?.userId == userID else { return }
+        importedPlaylistSyncTask?.cancel()
+        importedPlaylistSyncTask = nil
+        loginPlaylistSyncTask?.cancel()
+        if let lastPlaylistSyncError {
+            loginPlaylistSyncMessage = lastPlaylistSyncError
+            return
+        }
+        let candidates = userPlaylists
+        guard !candidates.isEmpty else {
+            loginPlaylistSyncMessage = "账号中没有可同步的歌单"
+            return
+        }
+        loginPlaylistSyncMessage = nil
+        loginPlaylistSyncTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.isSyncingAfterLogin = true
+            defer {
+                if self.loginSessionRevision == sessionRevision {
+                    self.isSyncingAfterLogin = false
+                }
+            }
+            let report = await self.syncPlaylists(
+                candidates,
+                force: false,
+                expectedUserID: userID,
+                expectedSessionRevision: sessionRevision
+            )
+            guard !Task.isCancelled,
+                  self.loginSessionRevision == sessionRevision,
+                  self.profile?.userId == userID,
+                  NeteaseClient.shared.isLoggedIn else { return }
+            if report.failed.isEmpty {
+                self.loginPlaylistSyncMessage = "网易云歌单同步完成：新增 \(report.inserted)，更新 \(report.updated)，最新 \(report.unchanged)"
+            } else {
+                self.loginPlaylistSyncMessage = "已同步 \(report.changedCount) 个，\(report.failed.count) 个歌单暂时失败"
+            }
+        }
     }
 
     private func syncPlaylists(
         _ candidates: [PlaylistSummary],
-        force: Bool
+        force: Bool,
+        expectedUserID: Int? = nil,
+        expectedSessionRevision: Int? = nil
     ) async -> PlaylistSyncReport {
         guard !candidates.isEmpty else {
             lastPlaylistSyncAt = .now
             return PlaylistSyncReport(inserted: 0, updated: 0, unchanged: 0, failed: [])
         }
 
+        let revision = expectedSessionRevision ?? loginSessionRevision
+        let userID = expectedUserID ?? profile?.userId
+        guard revision == loginSessionRevision, let userID else {
+            return PlaylistSyncReport(
+                inserted: 0, updated: 0, unchanged: 0,
+                failed: ["账号状态已变化，请重新登录后同步"]
+            )
+        }
+
         isSyncingPlaylists = true
         lastPlaylistSyncError = nil
         defer {
             isSyncingPlaylists = false
-            lastPlaylistSyncAt = .now
+            if revision == loginSessionRevision { lastPlaylistSyncAt = .now }
         }
 
         var inserted = 0
@@ -260,6 +392,13 @@ final class AccountStore: ObservableObject {
         var failed: [String] = []
 
         for summary in candidates {
+            guard !Task.isCancelled else { break }
+            if revision != loginSessionRevision
+                || !NeteaseClient.shared.isLoggedIn
+                || profile?.userId != userID {
+                failed.append("账号状态已变化，已停止歌单同步")
+                break
+            }
             let localCopy = LocalPlaylistStore.shared.playlists.first(where: {
                 LocalPlaylistSyncPolicy.matchesProviderPlaylist(
                     $0,
@@ -282,6 +421,13 @@ final class AccountStore: ObservableObject {
 
             do {
                 let tracks = try await allTracks(for: summary.id)
+                guard !Task.isCancelled else { break }
+                if revision != loginSessionRevision
+                    || !NeteaseClient.shared.isLoggedIn
+                    || profile?.userId != userID {
+                    failed.append("账号状态已变化，未保存歌单副本")
+                    break
+                }
                 let result = LocalPlaylistStore.shared.upsertRemotePlaylist(
                     source: "netease",
                     remoteID: summary.id,
@@ -299,7 +445,7 @@ final class AccountStore: ObservableObject {
             }
         }
 
-        if !failed.isEmpty {
+        if revision == loginSessionRevision, !failed.isEmpty {
             lastPlaylistSyncError = "部分歌单暂时无法同步"
         }
         return PlaylistSyncReport(

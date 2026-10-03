@@ -119,7 +119,6 @@ extension EnvironmentValues {
 /// interactive dismissal offset. Playback layout and safe areas remain in
 /// `NowPlayingView` and SwiftUI's presentation container.
 struct IOSNowPlayingPresentation<Content: View>: View {
-    private let mode: NowPlayingMode
     private let usesSystemInteractiveDismissal: Bool
     private let dismissAnimation: Animation?
     private let content: Content
@@ -129,13 +128,11 @@ struct IOSNowPlayingPresentation<Content: View>: View {
 
     init(
         isPresented: Binding<Bool>,
-        mode: NowPlayingMode,
         usesSystemInteractiveDismissal: Bool = false,
         dismissAnimation: Animation? = NowPlayingPresentationMetrics.presentationAnimation,
         @ViewBuilder content: () -> Content
     ) {
         _isPresented = isPresented
-        self.mode = mode
         self.usesSystemInteractiveDismissal = usesSystemInteractiveDismissal
         self.dismissAnimation = dismissAnimation
         self.content = content()
@@ -143,7 +140,7 @@ struct IOSNowPlayingPresentation<Content: View>: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let isInteractive = proxy.size.width < 720 && mode != .classic
+            let isInteractive = proxy.size.width < 720
             let usesCustomDrag = isInteractive && !usesSystemInteractiveDismissal
 
             ZStack(alignment: .top) {

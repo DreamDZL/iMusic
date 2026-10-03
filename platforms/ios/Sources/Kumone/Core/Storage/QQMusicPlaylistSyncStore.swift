@@ -1,9 +1,9 @@
 import Foundation
 import Combine
 
-/// Reads QQ Music playlists and copies explicitly selected playlists into the
-/// local library. Edits stay in iMusic and can be synchronized through LX Sync;
-/// this store intentionally has no QQ write operations.
+/// Reads QQ Music playlists and keeps a one-way local copy. Edits stay in
+/// iMusic and can be synchronized through LX Sync; this store intentionally
+/// has no QQ write operations.
 @MainActor
 final class QQMusicPlaylistSyncStore: ObservableObject {
     static let shared = QQMusicPlaylistSyncStore()
@@ -20,15 +20,19 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
     @Published private(set) var playlists: [QQMusicAPI.Playlist] = []
     @Published private(set) var isRefreshing = false
     @Published private(set) var isImporting = false
+    @Published private(set) var isSyncingAfterLogin = false
     @Published private(set) var lastRefreshedAt: Date?
     @Published private(set) var errorMessage: String?
+    @Published private(set) var lastLoginSyncMessage: String?
 
     private var lastRefreshAttempt: Date?
+    private var lastRefreshedSessionRevision: Int?
+    private var loginSyncTask: Task<Void, Never>?
 
     private init() {}
 
-    /// Refreshes only playlist metadata. Track pages are fetched only after an
-    /// explicit import action, which keeps foreground refreshes light.
+    /// Refreshes only playlist metadata. Track pages are fetched during the
+    /// post-login copy or after a user explicitly retries a local copy.
     func refresh(force: Bool = false) async {
         let session = QQMusicSessionStore.shared
         guard session.isLoggedIn, let requestCookie = session.cookie else {
@@ -57,10 +61,62 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                                           expectedCookie: requestCookie)
             playlists = result.playlists
             lastRefreshedAt = .now
+            lastRefreshedSessionRevision = sessionRevision
         } catch {
             guard session.sessionRevision == sessionRevision, session.isLoggedIn else { return }
             errorMessage = "QQ 歌单暂时无法获取，请稍后重试。"
         }
+    }
+
+    /// A successful sign-in immediately mirrors every visible QQ playlist to
+    /// the local library. Track requests run serially and the local copies keep
+    /// the existing protection against overwriting edits made in iMusic.
+    func syncAfterLogin() async {
+        if let loginSyncTask {
+            await loginSyncTask.value
+            return
+        }
+        let session = QQMusicSessionStore.shared
+        guard session.isLoggedIn else { return }
+        let revision = session.sessionRevision
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.isSyncingAfterLogin = true
+            self.lastLoginSyncMessage = nil
+            defer { self.isSyncingAfterLogin = false }
+
+            // AccountSyncView also refreshes on the session change. Join that
+            // request instead of issuing duplicate playlist calls.
+            while self.isRefreshing {
+                guard session.isLoggedIn, session.sessionRevision == revision else { return }
+                try? await Task.sleep(for: .milliseconds(100))
+                guard !Task.isCancelled else { return }
+            }
+            guard session.isLoggedIn, session.sessionRevision == revision else { return }
+            if self.lastRefreshedSessionRevision != revision || self.errorMessage != nil {
+                await self.refresh(force: true)
+            }
+            guard session.isLoggedIn, session.sessionRevision == revision else { return }
+            guard self.errorMessage == nil else {
+                self.lastLoginSyncMessage = self.errorMessage
+                return
+            }
+            guard !self.playlists.isEmpty else {
+                self.lastLoginSyncMessage = "账号中没有可同步的歌单"
+                return
+            }
+
+            let report = await self.importSelected(Set(self.playlists.map(\.id)))
+            guard session.isLoggedIn, session.sessionRevision == revision else { return }
+            if report.failed.isEmpty {
+                self.lastLoginSyncMessage = "QQ 歌单同步完成：新增 \(report.inserted)，更新 \(report.updated)，最新 \(report.unchanged)"
+            } else {
+                self.lastLoginSyncMessage = "已同步 \(report.changedCount) 个，\(report.failed.count) 个歌单暂时失败"
+            }
+        }
+        loginSyncTask = task
+        await task.value
+        loginSyncTask = nil
     }
 
     func isImported(_ playlistID: String) -> Bool {

@@ -62,6 +62,12 @@ final class QQMusicSessionStore: ObservableObject {
         profileName = profile.name
         isLoggedIn = true
         sessionRevision &+= 1
+
+        // Playlist synchronization begins after the login sheet can close;
+        // it must never delay account validation or first playback.
+        Task { @MainActor in
+            await QQMusicPlaylistSyncStore.shared.syncAfterLogin()
+        }
     }
 
     func refreshProfile() async {

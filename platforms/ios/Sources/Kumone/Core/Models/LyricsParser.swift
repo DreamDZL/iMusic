@@ -32,7 +32,7 @@ struct ParsedLyrics: Hashable {
 
     /// Index of the active line for a playback position.
     func activeIndex(at time: TimeInterval) -> Int? {
-        guard !lines.isEmpty else { return nil }
+        guard !lines.isEmpty, time.isFinite else { return nil }
         var low = 0, high = lines.count - 1, result: Int? = nil
         while low <= high {
             let mid = (low + high) / 2
@@ -72,6 +72,7 @@ enum LyricsParser {
             parseYRC(lyric),
         ].first(where: { !$0.isEmpty }) ?? []
         if !verbatimLines.isEmpty { lines = verbatimLines }
+        lines = timelineOrdered(lines)
 
         func merge(_ body: String?, into keyPath: WritableKeyPath<LyricLine, String?>) {
             guard let body, !body.isEmpty else { return }
@@ -273,6 +274,7 @@ enum LyricsParser {
             let yrcLines = parseYRC(yrcRaw)
             if !yrcLines.isEmpty { lines = yrcLines }
         }
+        lines = timelineOrdered(lines)
 
         func merge(_ body: String?, into keyPath: WritableKeyPath<LyricLine, String?>) {
             guard let body, !body.isEmpty else { return }
@@ -315,6 +317,30 @@ enum LyricsParser {
         out.lines = addSyntheticWordTimings(to: out.lines)
         out.lines = addFurigana(to: out.lines)
         return out
+    }
+
+    /// Active-line lookup uses binary search. Provider word-lyrics are usually
+    /// ordered, but malformed exports can contain out-of-order timestamps;
+    /// normalize once at parse time so playback never jumps to the wrong line.
+    private static func timelineOrdered(_ input: [LyricLine]) -> [LyricLine] {
+        input.enumerated()
+            .sorted {
+                if $0.element.time == $1.element.time { return $0.offset < $1.offset }
+                return $0.element.time < $1.element.time
+            }
+            .enumerated()
+            .map { index, pair in
+                let line = pair.element
+                return LyricLine(
+                    id: index,
+                    time: line.time,
+                    text: line.text,
+                    translation: line.translation,
+                    romaji: line.romaji,
+                    furigana: line.furigana,
+                    words: line.words
+                )
+            }
     }
 
     private static func addFurigana(to input: [LyricLine]) -> [LyricLine] {
