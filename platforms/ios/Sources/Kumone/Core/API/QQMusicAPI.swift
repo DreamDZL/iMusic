@@ -895,7 +895,7 @@ actor QQMusicAPI {
             ]
         ]
 
-        var sessionError: Error?
+        var sessionError: APIError?
         var routeErrors: [String] = []
         var bestIncompletePage: PlaylistTrackPage?
 
@@ -1003,7 +1003,7 @@ actor QQMusicAPI {
                 if responseKey == "playlist",
                    let apiError = error as? APIError,
                    case let .sessionCredentialRejected(_, ticketMissing) = apiError {
-                    sessionError = sessionError ?? .sessionCredentialRejected(
+                    sessionError = sessionError ?? APIError.sessionCredentialRejected(
                         "QQ 音乐会话凭据未通过验证",
                         ticketMissing: ticketMissing
                     )
