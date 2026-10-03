@@ -15,7 +15,7 @@ SwiftUI · System Liquid Glass · LX User API · LX Sync Server
 
 </div>
 
-iMusic continues the native iOS project from [Moumusic](https://github.com/jiajia2222/Moumusic). Its main destinations are Home, New, Search and Library. The interface uses native SwiftUI navigation and follows the system Liquid Glass appearance. Imported LX User API sources provide third-party playback and fallback; automatic mode may first use an eligible signed-in provider account.
+iMusic continues the native iOS project from [Moumusic](https://github.com/jiajia2222/Moumusic). Its main destinations are Home, New Discovery, Radio and Library, with Search as a separate navigation entry. The interface uses native SwiftUI navigation and follows the system Liquid Glass appearance. Imported LX User API sources provide third-party playback and fallback; automatic mode may first use an eligible signed-in provider account.
 
 QQ Music and NetEase public playlist imports become editable local copies. Edits to those copies stay in iMusic and are not written to the originating provider playlist. Local favorites and compatible playlists can sync through a self-hosted [LX Sync Server](https://github.com/lyswhut/lx-music-sync-server). Source scripts are managed locally on each device.
 
@@ -23,7 +23,7 @@ Users can also copy their NetEase liked songs into iMusic's local favorites from
 
 ## Features
 
-- Apple Music-inspired Home, New, Search and Library page structure
+- Apple Music-inspired Home, New Discovery, Radio and Library page structure, with a separate Search entry
 - Artist, album and playlist details, mini-player, full-screen player, queue and synchronized lyrics
 - Native lock-screen and Control Center playback controls
 - User-managed LX source import, validation, enable/disable, switching, export and deletion
@@ -32,9 +32,9 @@ Users can also copy their NetEase liked songs into iMusic's local favorites from
 - QQ Music and NetEase public playlist imports as local copies
 - Optional LX Sync for compatible favorites and playlists
 - iOS 27 system Liquid Glass, with transparency and tint following iPhone display and accessibility settings
-- Continuous decorative animations and audio spectrum analysis are throttled or paused for Low Power Mode, thermal pressure and inactive scenes. During background playback, progress and lyric-cursor callbacks slow from 0.2 to 1 second; New content refreshes automatically at most every ten minutes
+- Continuous decorative animations and audio spectrum analysis are throttled or paused for Low Power Mode, thermal pressure and inactive scenes. During background playback, progress and lyric-cursor callbacks slow from 0.2 to 1 second; New Discovery refreshes automatically at most every ten minutes
 
-The default target does not include an in-app audio-download screen, Home Screen widgets or CarPlay integration. Playback Live Activities remain available. The player can reuse local audio files that are already present.
+The default target does not include an in-app audio-download screen, Home Screen widgets, custom Live Activities or CarPlay integration. The lock screen and Dynamic Island use the native iOS Now Playing card. The player can reuse local audio files that are already present.
 
 ## Sources and synchronization
 
@@ -44,7 +44,7 @@ Open **Library → Sync Library** to enter an LX Sync Server address and connect
 
 ## Build
 
-The iOS application requires macOS and Xcode. XcodeGen generates the app and ActivityKit extension targets:
+The iOS application requires macOS and Xcode. XcodeGen generates the app target:
 
 ```sh
 cd platforms/ios/ios
@@ -65,8 +65,8 @@ platforms/ios/
 │   ├── Core/Storage/      Local library, source configuration and account data
 │   ├── Core/Sync/         LX Sync wire models and client
 │   ├── DesignSystem/      SwiftUI theme, Liquid Glass and rendering budget
-│   └── Features/          Home, New, Search, Library, settings and player
-├── ios/                   iOS app shell, playback Live Activity extension, tests and XcodeGen manifest
+│   └── Features/          Home, New Discovery, Radio, Library, Search, settings and player
+├── ios/                   iOS app shell, tests and XcodeGen manifest
 └── docs/                  Product icon and screenshots
 platforms/android/         Preserved upstream subtree; not part of the iMusic iOS target
 ```

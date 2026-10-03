@@ -14,7 +14,7 @@ SwiftUI · 系统 Liquid Glass · LX User API 音源 · LX Sync Server
 
 </div>
 
-iMusic 基于 [Moumusic](https://github.com/jiajia2222/Moumusic) 的原生 iOS 工程继续开发。主页面为“主页、新内容、搜索、资料库”，使用 SwiftUI 原生导航并跟随系统 Liquid Glass 外观。LX User API 音源负责第三方播放和回退；自动模式可能先使用符合条件的已登录平台账号。
+iMusic 基于 [Moumusic](https://github.com/jiajia2222/Moumusic) 的原生 iOS 工程继续开发。主页面为“主页、新发现、广播、资料库”，搜索作为独立导航入口；使用 SwiftUI 原生导航并跟随系统 Liquid Glass 外观。LX User API 音源负责第三方播放和回退；自动模式可能先使用符合条件的已登录平台账号。
 
 QQ 音乐和网易云公开歌单会导入为可编辑的本地副本。对这些副本的编辑只作用于 iMusic 中的副本，不会写回来源平台歌单。本地收藏和兼容歌单可通过自托管的 [LX Sync Server](https://github.com/lyswhut/lx-music-sync-server) 在设备间同步。音源脚本由每台设备分别管理。
 
@@ -22,7 +22,7 @@ QQ 音乐和网易云公开歌单会导入为可编辑的本地副本。对这�
 
 ## 功能
 
-- Apple Music 风格的主页、新内容、搜索和资料库页面
+- Apple Music 风格的主页、新发现、广播和资料库页面，搜索作为独立导航入口
 - 歌手、专辑与歌单详情，迷你播放器、全屏播放器、队列和同步歌词
 - 原生锁屏与控制中心播放控制
 - LX 音源文件/链接导入、检测、启停、切换、导出和删除
@@ -31,7 +31,7 @@ QQ 音乐和网易云公开歌单会导入为可编辑的本地副本。对这�
 - QQ 音乐与网易云公开歌单导入为本地副本
 - 可选 LX Sync，支持兼容的收藏和歌单
 - iOS 27 原生 Liquid Glass；透明度、着色及辅助功能表现跟随 iPhone 系统设置
-- 连续装饰动效和音频频谱分析会根据低电量、设备热状态及应用场景活跃状态降载或暂停。后台播放时，进度与歌词游标回调由 0.2 秒降至 1 秒；“新内容”自动刷新间隔至少为 10 分钟
+- 连续装饰动效和音频频谱分析会根据低电量、设备热状态及应用场景活跃状态降载或暂停。后台播放时，进度与歌词游标回调由 0.2 秒降至 1 秒；“新发现”自动刷新间隔至少为 10 分钟
 
 默认 iOS 目标不包含应用内音乐下载页面、主屏幕小组件、自定义实时活动或 CarPlay 集成。锁屏与灵动岛仅使用 iOS 原生 Now Playing 媒体卡片。播放器也能复用设备上已有的本地音频文件。
 
@@ -43,7 +43,7 @@ QQ 音乐和网易云公开歌单会导入为可编辑的本地副本。对这�
 
 ## 构建
 
-iOS 应用需要 macOS 和 Xcode。使用 XcodeGen 生成 App 与实时活动扩展：
+iOS 应用需要 macOS 和 Xcode。使用 XcodeGen 生成 iOS App 目标：
 
 ```sh
 cd platforms/ios/ios
@@ -64,8 +64,8 @@ platforms/ios/
 │   ├── Core/Storage/      本地资料库、音源配置和账号数据
 │   ├── Core/Sync/         LX Sync 数据模型与客户端
 │   ├── DesignSystem/      SwiftUI 主题和 Liquid Glass 辅助组件
-│   └── Features/          主页、新内容、搜索、资料库、设置和播放器
-├── ios/                   iOS App 壳、播放实时活动扩展、测试和 XcodeGen 配置
+│   └── Features/          主页、新发现、广播、资料库、搜索、设置和播放器
+├── ios/                   iOS App 壳、测试和 XcodeGen 配置
 └── docs/                  产品图标与截图
 platforms/android/         保留的上游子树，不属于 iMusic iOS 目标
 ```

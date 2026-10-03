@@ -126,6 +126,21 @@ enum QQMusicLoginCookiePolicy {
     }
 }
 
+/// Auth envelope used by QQ Music's account-bound read endpoints. Anonymous
+/// web calls use `ct: 24`/`cv: 4747474`; once a Music ticket is attached, QQ's
+/// account route expects the ticket-bearing client envelope instead.
+enum QQMusicAccountRequestEnvelope {
+    static func common(userID: String, musicTicket: String) -> [String: Any] {
+        [
+            "uin": userID,
+            "format": "json",
+            "ct": 19,
+            "cv": 0,
+            "authst": musicTicket,
+        ]
+    }
+}
+
 /// QQ's QR flow must expose redirect responses so the app can collect the
 /// account cookies and exchange the OAuth code for a Music session.
 private final class QQNoRedirectDelegate: NSObject, URLSessionTaskDelegate {
@@ -759,10 +774,9 @@ actor QQMusicAPI {
         }
 
         let cookieValues = Self.cookieFields(requestCookie)
-        let authKey = Self.playlistAuthKey(in: cookieValues) ?? ""
-        guard !authKey.isEmpty else { throw APIError.unavailable }
-        let csrfKey = Self.csrfKey(in: cookieValues) ?? authKey
-        let csrf = Self.hash5381(csrfKey)
+        guard let musicTicket = Self.musicAuthTicket(in: cookieValues) else {
+            throw APIError.loginCookieUnavailable
+        }
         var tracks: [Track] = []
         var offset = 0
         var expectedCount = max(expectedTrackCount, 0)
@@ -776,7 +790,7 @@ actor QQMusicAPI {
                 playlistID: playlistID,
                 isLikedSongs: isLikedSongs,
                 profileID: profile.id,
-                csrf: csrf,
+                musicTicket: musicTicket,
                 offset: offset,
                 pageSize: pageSize,
                 expectedPlaylistCount: expectedCount > 0 ? expectedCount : nil,
@@ -821,32 +835,28 @@ actor QQMusicAPI {
         return PlaylistTracksResult(tracks: tracks, refreshedCookie: profile.refreshedCookie)
     }
 
-    /// Reads the same legacy desktop detail endpoint used first by LX Music
-    /// Mobile. That endpoint returns a whole song list rather than accepting
-    /// an offset, so it is requested once at offset zero; subsequent pages use
-    /// QQ's paginated musicu.fcg endpoints instead of redownloading the list.
+    /// Reads a QQ account playlist, preferring the authenticated paginated
+    /// route. Public LX-compatible endpoints remain fallbacks; the legacy
+    /// desktop endpoint returns the full list and is requested once at offset
+    /// zero only when the paginated routes do not return a complete page.
     private func fetchPlaylistTrackPage(
         playlistID: Int64,
         isLikedSongs: Bool,
         profileID: String,
-        csrf: Int,
+        musicTicket: String,
         offset: Int,
         pageSize: Int,
         expectedPlaylistCount: Int?,
         cookie: String,
         cookieValues: [String: String]
     ) async throws -> PlaylistTrackPage {
-        var primaryComm: [String: Any] = [
-            "ct": 24, "cv": 4_747_474, "platform": "yqq.json",
-            "uin": profileID, "g_tk": csrf,
-            "g_tk_new_20200303": csrf,
-            "format": "json", "inCharset": "utf-8",
-            "outCharset": "utf-8", "notice": 0, "need_new_code": 1
-        ]
-        // CgiGetDiss uses the logged-in account's current session.
-        if let ticket = Self.musicAuthTicket(in: cookieValues) {
-            primaryComm["authst"] = ticket
-        }
+        // `CgiGetDiss` is the account-bound route. Send QQ's ticket-bearing
+        // client envelope with the signed-in UIN and cookie; do not reuse the
+        // public web envelope from `uniform_get_Dissinfo`.
+        let primaryComm = QQMusicAccountRequestEnvelope.common(
+            userID: profileID,
+            musicTicket: musicTicket
+        )
         let commonParam: [String: Any] = [
             "disstid": playlistID,
             "tag": true,
@@ -868,9 +878,8 @@ actor QQMusicAPI {
         ]
 
         // Match LX Music Mobile's public, anonymous uniform_get_Dissinfo
-        // request shape. Account credentials belong only on the authenticated
-        // CgiGetDiss route; mixing either UIN=0 or this fallback with a logged-in
-        // Cookie can make QQ reject otherwise readable playlists with 3a44.
+        // request shape. This is a fallback for public playlists; account
+        // credentials are attached only to the authenticated CgiGetDiss route.
         let fallbackComm: [String: Any] = [
             "ct": 24, "cv": 4_747_474, "platform": "yqq.json",
             "uin": 0, "format": "json", "inCharset": "utf-8",
@@ -899,44 +908,10 @@ actor QQMusicAPI {
         var routeErrors: [String] = []
         var bestIncompletePage: PlaylistTrackPage?
 
-        // Match LX Music Mobile's route order. The legacy GET endpoint has
-        // succeeded for some playlists where musicu.fcg returns 3a44. It has
-        // no server-side pagination, so consume up to the app's 10k-track
-        // safety limit in this single request and never call it again later.
-        if !isLikedSongs, offset == 0,
-           let url = QQMusicLegacyPlaylistResponse.endpointURL(playlistID: playlistID) {
-            do {
-                try Task.checkCancellation()
-                let legacyPage = try await fetchLegacyPlaylistTrackPage(
-                    url: url,
-                    playlistID: playlistID,
-                    pageSize: 10_000,
-                    cookieValues: cookieValues
-                )
-                let knownCount = max(expectedPlaylistCount ?? 0, legacyPage.totalCount ?? 0)
-                let requiredRows = knownCount > offset
-                    ? min(10_000, knownCount - offset)
-                    : nil
-                let expectedEnd = offset + legacyPage.rows.count
-                let contradictsExpectedCount = legacyPage.hasMore == false && knownCount > expectedEnd
-                let isAdequate = (requiredRows.map { legacyPage.rows.count >= $0 } ?? true)
-                    && !contradictsExpectedCount
-                if isAdequate, (!legacyPage.rows.isEmpty || knownCount == 0) {
-                    return legacyPage
-                }
-                if bestIncompletePage == nil || legacyPage.rows.count > bestIncompletePage!.rows.count {
-                    bestIncompletePage = legacyPage
-                }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                routeErrors.append("旧版 GET：\(Self.safeRouteFailure(error))")
-            }
-        }
-
-        // Use the two anonymous routes in LX order before trying the account
-        // route. The account Cookie is attached only to CgiGetDiss below.
-        for (responseKey, payload) in [("req_1", fallbackPayload), ("playlist", primaryPayload)] {
+        // Read the signed-in account first so private playlists are not
+        // needlessly requested through anonymous endpoints. Public routes
+        // remain fallbacks for provider responses that omit account tracks.
+        for (responseKey, payload) in [("playlist", primaryPayload), ("req_1", fallbackPayload)] {
             do {
                 try Task.checkCancellation()
                 let body = try JSONSerialization.data(withJSONObject: payload)
@@ -1011,6 +986,40 @@ actor QQMusicAPI {
             } catch {
                 let routeName = responseKey == "playlist" ? "CgiGetDiss" : "uniform_get_Dissinfo"
                 routeErrors.append("\(routeName)：\(Self.safeRouteFailure(error))")
+            }
+        }
+
+        // Match LX Music Mobile's legacy GET fallback for public playlists.
+        // It has no server-side pagination, so consume up to the app's 10k
+        // track safety limit in this single request and never call it again.
+        if !isLikedSongs, offset == 0,
+           let url = QQMusicLegacyPlaylistResponse.endpointURL(playlistID: playlistID) {
+            do {
+                try Task.checkCancellation()
+                let legacyPage = try await fetchLegacyPlaylistTrackPage(
+                    url: url,
+                    playlistID: playlistID,
+                    pageSize: 10_000,
+                    cookieValues: cookieValues
+                )
+                let knownCount = max(expectedPlaylistCount ?? 0, legacyPage.totalCount ?? 0)
+                let requiredRows = knownCount > offset
+                    ? min(10_000, knownCount - offset)
+                    : nil
+                let expectedEnd = offset + legacyPage.rows.count
+                let contradictsExpectedCount = legacyPage.hasMore == false && knownCount > expectedEnd
+                let isAdequate = (requiredRows.map { legacyPage.rows.count >= $0 } ?? true)
+                    && !contradictsExpectedCount
+                if isAdequate, (!legacyPage.rows.isEmpty || knownCount == 0) {
+                    return legacyPage
+                }
+                if bestIncompletePage == nil || legacyPage.rows.count > bestIncompletePage!.rows.count {
+                    bestIncompletePage = legacyPage
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                routeErrors.append("旧版 GET：\(Self.safeRouteFailure(error))")
             }
         }
 

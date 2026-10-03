@@ -15,13 +15,13 @@ SwiftUI · System Liquid Glass · LX User API · LX Sync Server
 
 </div>
 
-iMusic continues the native iOS project from [Moumusic](https://github.com/jiajia2222/Moumusic). Its main destinations are Home, New, Search and Library. The interface uses native SwiftUI navigation and follows the system Liquid Glass appearance. Imported LX User API sources provide third-party playback and fallback; automatic mode may first use an eligible signed-in provider account.
+iMusic continues the native iOS project from [Moumusic](https://github.com/jiajia2222/Moumusic). Its main destinations are Home, New Discovery, Radio and Library, with Search as a separate navigation entry. The interface uses native SwiftUI navigation and follows the system Liquid Glass appearance. Imported LX User API sources provide third-party playback and fallback; automatic mode may first use an eligible signed-in provider account.
 
 QQ Music and NetEase public playlists are imported as editable local copies. Edits to those copies stay in iMusic and are not written to the originating provider playlist. Local favorites and compatible playlists can sync across devices through a self-hosted [LX Sync Server](https://github.com/lyswhut/lx-music-sync-server). Source scripts are managed locally on each device.
 
 ## Features
 
-- Apple Music-inspired Home, New, Search and Library destinations
+- Apple Music-inspired Home, New Discovery, Radio and Library destinations, with a separate Search entry
 - Artist, album and playlist details, mini-player, full-screen player, queue and synchronized lyrics
 - Native Lock Screen and Control Center playback controls
 - User-managed LX source import, availability check, enable/disable, switching, export and deletion
@@ -31,9 +31,9 @@ QQ Music and NetEase public playlists are imported as editable local copies. Edi
 - Optional LX Sync for compatible favorites and playlists
 - iOS 27 system Liquid Glass, with transparency and tint following iPhone display and accessibility settings
 - Continuous decorative animations and audio spectrum analysis are throttled or paused for Low Power Mode, thermal pressure and inactive scenes. During background playback, progress and lyric-cursor callbacks slow from 0.2 to 1 second
-- Automatic New content refresh is throttled to at most once every ten minutes
+- Automatic New Discovery refresh is throttled to at most once every ten minutes
 
-The default target does not include an in-app audio-download screen, Home Screen widgets or CarPlay integration. Playback Live Activities remain available. The player can reuse local audio files that are already present.
+The default target does not include an in-app audio-download screen, Home Screen widgets, custom Live Activities or CarPlay integration. The lock screen and Dynamic Island use the native iOS Now Playing card. The player can reuse local audio files that are already present.
 
 ## Sources and synchronization
 
@@ -43,7 +43,7 @@ Open **Library → Sync Library** to enter an LX Sync Server address and connect
 
 ## Build
 
-The iOS application requires macOS and Xcode. XcodeGen generates the app and Live Activity extension targets:
+The iOS application requires macOS and Xcode. XcodeGen generates the app target:
 
 ```sh
 cd platforms/ios/ios
@@ -64,8 +64,8 @@ platforms/ios/
 │   ├── Core/Storage/      Local library, source configuration and account data
 │   ├── Core/Sync/         LX Sync wire models and client
 │   ├── DesignSystem/      SwiftUI theme, Liquid Glass and rendering budget
-│   └── Features/          Home, New, Search, Library, settings and player
-├── ios/                   iOS app shell, playback Live Activity extension and tests
+│   └── Features/          Home, New Discovery, Radio, Library, Search, settings and player
+├── ios/                   iOS app shell, tests and XcodeGen manifest
 └── docs/                  Product icon and screenshots
 platforms/android/         Preserved upstream subtree; not part of the iMusic iOS target
 ```

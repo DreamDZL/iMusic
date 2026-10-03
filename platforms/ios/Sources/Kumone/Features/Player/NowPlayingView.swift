@@ -1210,29 +1210,41 @@ struct LyricMainText: View {
         }
     }
 
-      /// One concatenated `Text` (so it wraps) with the exact opacity of each
-      /// source-timed word/run. LX/NetEase verbatim data already contains the
-      /// timing for each run; subdividing it by character creates drift.
+    /// One concatenated `Text` (so it wraps) with an estimated progressive
+    /// fill inside each source-timed run. Run boundaries still come from source.
     private func karaoke(_ words: [LyricWord], at time: TimeInterval) -> Text {
-          let unsung = 0.28
-          var out = Text(verbatim: "")
-          for word in words {
-              let fraction = word.progress(at: time)
-              let alpha = unsung + (1 - unsung) * fraction
-              out = out + Text(verbatim: word.text)
-                  .foregroundColor(.white.opacity(alpha))
-          }
-          return out
-      }
+        let unsung = 0.28
+        var out = Text(verbatim: "")
+        for word in words {
+            let characters = Array(word.text)
+            for (index, character) in characters.enumerated() {
+                let fraction = word.characterProgress(
+                    at: time,
+                    characterIndex: index,
+                    characterCount: characters.count
+                )
+                let alpha = unsung + (1 - unsung) * fraction
+                out = out + Text(verbatim: String(character))
+                    .foregroundColor(.white.opacity(alpha))
+            }
+        }
+        return out
+    }
 
-      private func karaokeAlphas(_ words: [LyricWord], at time: TimeInterval) -> [Double] {
-          let unsung = 0.28
-          return words.flatMap { word in
-              let fraction = word.progress(at: time)
-              let alpha = unsung + (1 - unsung) * fraction
-              return Array(repeating: alpha, count: word.text.count)
-          }
-      }
+    private func karaokeAlphas(_ words: [LyricWord], at time: TimeInterval) -> [Double] {
+        let unsung = 0.28
+        return words.flatMap { word in
+            let count = word.text.count
+            return (0..<count).map { index in
+                let fraction = word.characterProgress(
+                    at: time,
+                    characterIndex: index,
+                    characterCount: count
+                )
+                return unsung + (1 - unsung) * fraction
+            }
+        }
+    }
 }
 
 /// Apple Music-like lyric rendering without depending on a private or
@@ -1279,13 +1291,22 @@ private struct AMLLyricText: View {
         .animation(.spring(response: 0.36, dampingFraction: 0.86), value: isActive)
     }
 
+    /// Per-grapheme highlight is a visual interpolation inside each source
+    /// run; exact boundaries remain those returned by the lyric provider.
     private func timedText(_ words: [LyricWord], at time: TimeInterval) -> Text {
         var output = Text(verbatim: "")
         for word in words {
-            let progress = word.progress(at: time)
-            let opacity = 0.34 + 0.66 * progress
-            output = output + Text(verbatim: word.text)
-                .foregroundColor(.white.opacity(opacity))
+            let characters = Array(word.text)
+            for (index, character) in characters.enumerated() {
+                let progress = word.characterProgress(
+                    at: time,
+                    characterIndex: index,
+                    characterCount: characters.count
+                )
+                let opacity = 0.34 + 0.66 * progress
+                output = output + Text(verbatim: String(character))
+                    .foregroundColor(.white.opacity(opacity))
+            }
         }
         return output
     }

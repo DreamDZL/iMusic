@@ -18,6 +18,22 @@ struct LyricWord: Hashable {
         }
         return min(max((time - start) / duration, 0), 1)
     }
+
+    /// Estimated progress for a grapheme cluster within a provider-timed run.
+    /// QQ/LX/YRC sources time runs, not every grapheme, so this divides each
+    /// run's interval evenly across the visible characters.
+    func characterProgress(
+        at time: TimeInterval,
+        characterIndex: Int,
+        characterCount: Int
+    ) -> Double {
+        guard characterCount > 0,
+              characterIndex >= 0,
+              characterIndex < characterCount else { return 0 }
+        let runProgress = progress(at: time)
+        let characterProgress = runProgress * Double(characterCount) - Double(characterIndex)
+        return min(max(characterProgress, 0), 1)
+    }
 }
 
 struct LyricLine: Identifiable, Hashable {
@@ -190,7 +206,6 @@ enum LyricsParser {
             let content = line[contentStart...]
             let matches = content.matches(of: wordTag)
             var words: [LyricWord] = []
-            var text = ""
             for (offset, w) in matches.enumerated() {
                 let start = (Double(w.output.1) ?? 0) / 1000
                 let duration = (Double(w.output.2) ?? 0) / 1000
@@ -200,11 +215,11 @@ enum LyricsParser {
                     : content.endIndex
                 let piece = String(content[pieceStart..<pieceEnd])
                 words.append(LyricWord(text: piece, start: start, duration: duration))
-                text += piece
             }
-            let trimmed = text.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty, !words.isEmpty else { continue }
-            lines.append(LyricLine(id: idx, time: lineStart, text: trimmed, words: words))
+            let timedWords = trimTimedWords(words)
+            let trimmed = timedWords.map(\.text).joined()
+            guard !trimmed.isEmpty, !timedWords.isEmpty else { continue }
+            lines.append(LyricLine(id: idx, time: lineStart, text: trimmed, words: timedWords))
             idx += 1
         }
         return lines
@@ -235,7 +250,6 @@ enum LyricsParser {
             guard !matches.isEmpty else { continue }
 
             var words: [LyricWord] = []
-            var text = ""
             for (offset, match) in matches.enumerated() {
                 let start = lineStart + (Double(match.output.1) ?? 0) / 1000
                 let duration = (Double(match.output.2) ?? 0) / 1000
@@ -245,12 +259,12 @@ enum LyricsParser {
                     : content.endIndex
                 let piece = String(content[pieceStart..<pieceEnd])
                 words.append(LyricWord(text: piece, start: start, duration: duration))
-                text += piece
             }
 
-            let trimmed = text.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty, !words.isEmpty else { continue }
-            lines.append(LyricLine(id: idx, time: lineStart, text: trimmed, words: words))
+            let timedWords = trimTimedWords(words)
+            let trimmed = timedWords.map(\.text).joined()
+            guard !trimmed.isEmpty, !timedWords.isEmpty else { continue }
+            lines.append(LyricLine(id: idx, time: lineStart, text: trimmed, words: timedWords))
             idx += 1
         }
         return lines
@@ -276,20 +290,67 @@ enum LyricsParser {
             guard !matches.isEmpty else { continue }
 
             var words: [LyricWord] = []
-            var text = ""
             for match in matches {
                 let piece = String(match.output.1)
                 let start = (Double(match.output.2) ?? 0) / 1000
                 let duration = (Double(match.output.3) ?? 0) / 1000
                 guard !piece.isEmpty else { continue }
                 words.append(LyricWord(text: piece, start: start, duration: duration))
-                text += piece
             }
-            let trimmed = text.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty, !words.isEmpty else { continue }
-            lines.append(LyricLine(id: lines.count, time: lineStart, text: trimmed, words: words))
+            let timedWords = trimTimedWords(words)
+            let trimmed = timedWords.map(\.text).joined()
+            guard !trimmed.isEmpty, !timedWords.isEmpty else { continue }
+            lines.append(LyricLine(id: lines.count, time: lineStart, text: trimmed, words: timedWords))
         }
         return lines
+    }
+
+    /// Removes only line-edge whitespace from timed pieces, keeping the
+    /// concatenated timing text byte-for-byte aligned with `LyricLine.text`.
+    /// When a piece is trimmed, its duration is shortened proportionally so
+    /// its visible graphemes retain the same relative timing within that run.
+    private static func trimTimedWords(_ words: [LyricWord]) -> [LyricWord] {
+        var result = words
+
+        while let first = result.first {
+            let characters = Array(first.text)
+            let leadingWhitespace = characters.prefix(while: \.isWhitespace).count
+            guard leadingWhitespace > 0 else { break }
+            guard leadingWhitespace < characters.count else {
+                result.removeFirst()
+                continue
+            }
+            let remaining = characters.dropFirst(leadingWhitespace)
+            let removedFraction = Double(leadingWhitespace) / Double(characters.count)
+            let retainedFraction = 1 - removedFraction
+            let shiftedStart = first.start + max(first.duration, 0) * removedFraction
+            result[0] = LyricWord(
+                text: String(remaining),
+                start: shiftedStart,
+                duration: max(first.duration, 0) * retainedFraction
+            )
+            break
+        }
+
+        while let last = result.last {
+            let characters = Array(last.text)
+            let trailingWhitespace = characters.reversed().prefix(while: \.isWhitespace).count
+            guard trailingWhitespace > 0 else { break }
+            guard trailingWhitespace < characters.count else {
+                result.removeLast()
+                continue
+            }
+            let retainedCount = characters.count - trailingWhitespace
+            let retainedFraction = Double(retainedCount) / Double(characters.count)
+            result[result.count - 1] = LyricWord(
+                text: String(characters.prefix(retainedCount)),
+                start: last.start,
+                duration: max(last.duration, 0) * retainedFraction
+            )
+            break
+        }
+
+        return result
     }
 
     private static func qrcContent(in input: String) -> String {

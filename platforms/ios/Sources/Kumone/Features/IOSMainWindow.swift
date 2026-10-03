@@ -244,7 +244,7 @@ public struct IOSMainWindow: View {
                 tabStack(.home) { HomeView() }
             }
 
-            Tab("新内容", systemImage: "square.grid.2x2", value: .new) {
+            Tab("新发现", systemImage: "square.grid.2x2", value: .new) {
                 tabStack(.new) { ExploreView() }
             }
 
@@ -355,7 +355,7 @@ enum IOSTab: Hashable {
 extension IOSMainWindow {
     static let tabItems: [GlassTabBar.Item] = [
         .init(tab: .home, title: "主页", icon: "house"),
-        .init(tab: .new, title: "新内容", icon: "square.grid.2x2"),
+        .init(tab: .new, title: "新发现", icon: "square.grid.2x2"),
         .init(tab: .radio, title: "广播", icon: "dot.radiowaves.left.and.right"),
         .init(tab: .library, title: "资料库", icon: "square.stack"),
         .init(tab: .search, title: "搜索", icon: "magnifyingglass"),

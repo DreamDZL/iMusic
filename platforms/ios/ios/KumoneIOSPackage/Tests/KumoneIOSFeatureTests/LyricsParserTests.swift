@@ -43,7 +43,36 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(qrcLyrics.lines.first?.words?[1].start ?? .nan, 1.3, accuracy: 0.0001)
     }
 
-    func testWordProgressFollowsProviderTimingWithoutSyntheticCharacterSplits() {
+    func testLXTimedLyricTextAndRunsStayAlignedAfterTrimmingWhitespace() throws {
+        let lyrics = LyricsParser.parseLX(
+            lyric: "[00:01.000]你好 世界",
+            lxlyric: "[00:01.000]<0,300> 你好 <300,300>世界 "
+        )
+        let line = try XCTUnwrap(lyrics.lines.first)
+        let words = try XCTUnwrap(line.words)
+
+        XCTAssertEqual(line.text, "你好 世界")
+        XCTAssertEqual(words.map(\.text).joined(), line.text)
+        XCTAssertEqual(words[0].start, 1.075, accuracy: 0.0001)
+        XCTAssertEqual(words[0].duration, 0.225, accuracy: 0.0001)
+        XCTAssertEqual(words[1].duration, 0.2, accuracy: 0.0001)
+    }
+
+    func testYRCAndQRCTrimTimedRunEdgesAlongWithDisplayedText() throws {
+        let yrcLine = try XCTUnwrap(
+            LyricsParser.parseYRC("[1000,900](1000,300,0) 你好 (1300,600,0)世界 ").first
+        )
+        let qrcLine = try XCTUnwrap(
+            LyricsParser.parseQRC("[1000,900] 你好 (1000,300)世界 (1300,600) ").first
+        )
+
+        XCTAssertEqual(yrcLine.text, yrcLine.words?.map(\.text).joined())
+        XCTAssertEqual(qrcLine.text, qrcLine.words?.map(\.text).joined())
+        XCTAssertEqual(yrcLine.words?.first?.start ?? .nan, 1.075, accuracy: 0.0001)
+        XCTAssertEqual(qrcLine.words?.first?.start ?? .nan, 1.075, accuracy: 0.0001)
+    }
+
+    func testWordAndCharacterProgressFollowProviderRunTiming() {
         let word = LyricWord(text: "你好", start: 2, duration: 0.8)
 
         XCTAssertEqual(word.progress(at: 1.9), 0, accuracy: 0.0001)
@@ -51,6 +80,13 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(word.progress(at: 2.4), 0.5, accuracy: 0.0001)
         XCTAssertEqual(word.progress(at: 2.8), 1, accuracy: 0.0001)
         XCTAssertEqual(word.progress(at: 3.0), 1, accuracy: 0.0001)
+
+        XCTAssertEqual(word.characterProgress(at: 2.0, characterIndex: 0, characterCount: 2), 0, accuracy: 0.0001)
+        XCTAssertEqual(word.characterProgress(at: 2.2, characterIndex: 0, characterCount: 2), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(word.characterProgress(at: 2.2, characterIndex: 1, characterCount: 2), 0, accuracy: 0.0001)
+        XCTAssertEqual(word.characterProgress(at: 2.4, characterIndex: 0, characterCount: 2), 1, accuracy: 0.0001)
+        XCTAssertEqual(word.characterProgress(at: 2.4, characterIndex: 1, characterCount: 2), 0, accuracy: 0.0001)
+        XCTAssertEqual(word.characterProgress(at: 2.8, characterIndex: 1, characterCount: 2), 1, accuracy: 0.0001)
     }
 
     func testZeroDurationWordSwitchesAtItsTimestampAndInvalidClockDoesNotAdvance() {

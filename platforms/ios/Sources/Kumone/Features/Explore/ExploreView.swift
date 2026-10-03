@@ -261,7 +261,7 @@ struct ExploreView: View {
             }
         }
         .accessibilityIdentifier("exploreContentScrollView")
-        .navigationTitle("新内容")
+        .navigationTitle("新发现")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 discoveryMenu
@@ -320,7 +320,7 @@ struct ExploreView: View {
                 systemImage: "line.3.horizontal.decrease.circle"
             )
         }
-        .accessibilityLabel("筛选新内容：\(model.platform.displayName)、\(model.selectedCategory)")
+        .accessibilityLabel("筛选新发现：\(model.platform.displayName)、\(model.selectedCategory)")
     }
 
     private var discoveryFilterTitle: String {
