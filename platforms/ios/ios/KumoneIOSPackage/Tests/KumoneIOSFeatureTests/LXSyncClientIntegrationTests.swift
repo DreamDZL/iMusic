@@ -165,9 +165,9 @@ final class LXSyncClientIntegrationTests: XCTestCase {
     private func waitForAcknowledgement(_ id: String, on socket: FakeSocket) async throws {
         try await waitUntil {
             socket.sentMessages.contains { message in
-                guard let parts = try? JSONSerialization.jsonObject(with: Data(message.utf8)) as? [Any],
-                      parts.count > 1 else { return false }
-                return (parts[1] as? String) == id
+                guard let object = try? JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any],
+                      let name = object["name"] as? String else { return false }
+                return name.hasSuffix("__\(id)")
             }
         }
     }
@@ -176,10 +176,10 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         var result: LXSyncListData?
         try await waitUntil {
             for message in socket.sentMessages {
-                guard let parts = try? JSONSerialization.jsonObject(with: Data(message.utf8)) as? [Any],
-                      parts.count > 3,
-                      (parts[1] as? String) == id,
-                      let data = try? JSONSerialization.data(withJSONObject: parts[3]),
+                guard let object = try? JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any],
+                      (object["name"] as? String)?.hasSuffix("__\(id)") == true,
+                      let value = object["data"],
+                      let data = try? JSONSerialization.data(withJSONObject: value),
                       let decoded = try? JSONDecoder().decode(LXSyncListData.self, from: data) else { continue }
                 result = decoded
                 return true
@@ -193,10 +193,9 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         var result: LXSyncListData?
         try await waitUntil {
             for message in socket.sentMessages.dropFirst(start) {
-                guard let parts = try? JSONSerialization.jsonObject(with: Data(message.utf8)) as? [Any],
-                      parts.count > 3,
-                      (parts[2] as? [String])?.last == "onListSyncAction",
-                      let arguments = parts[3] as? [[String: Any]],
+                guard let object = try? JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any],
+                      (object["path"] as? [String])?.last == "onListSyncAction",
+                      let arguments = object["data"] as? [[String: Any]],
                       let action = arguments.first,
                       action["action"] as? String == "list_data_overwrite",
                       let rawData = action["data"],
@@ -318,11 +317,10 @@ private final class FakeSocket: LXSyncSocket {
         guard case .string(let frame) = message else { return }
         let decoded = try LXSyncWireCodec.decode(frame)
         sentMessages.append(decoded)
-        guard let parts = try? JSONSerialization.jsonObject(with: Data(decoded.utf8)) as? [Any],
-              parts.count > 2,
-              (parts[0] as? Int) == 0,
-              let id = parts[1] as? String else { return }
-        try sendFrame([1, id, NSNull(), NSNull()])
+        guard let object = try? JSONSerialization.jsonObject(with: Data(decoded.utf8)) as? [String: Any],
+              object["path"] is [String],
+              let id = object["name"] as? String else { return }
+        try sendFrame(["name": id, "error": NSNull(), "data": NSNull()])
     }
 
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
@@ -332,7 +330,11 @@ private final class FakeSocket: LXSyncSocket {
     }
 
     func sendServerCall(id: String, method: String, arguments: [Any] = []) throws {
-        try sendFrame([0, id, [method], arguments, []])
+        try sendFrame([
+            "name": "\(method)__\(id)",
+            "path": [method],
+            "data": arguments,
+        ])
     }
 
     private func sendFrame(_ value: Any) throws {

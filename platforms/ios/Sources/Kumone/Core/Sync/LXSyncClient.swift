@@ -688,58 +688,44 @@ final class LXSyncService: ObservableObject {
     private func handleMessage(_ text: String, generation: Int) async throws {
         guard isCurrentConnection(generation) else { return }
         guard let data = text.data(using: .utf8),
-              let message = try? JSONSerialization.jsonObject(with: data) as? [Any],
-              let type = message.first as? Int else {
+              let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let name = message["name"] as? String else {
             throw LXSyncError.invalidServerResponse
         }
-        switch type {
-        case 0:
-            guard message.count >= 4,
-                  let eventID = message[1] as? String,
-                  let path = message[2] as? [String] else {
-                throw LXSyncError.invalidServerResponse
-            }
-            let arguments = message[3] as? [Any] ?? []
+
+        if let path = message["path"] as? [String], !path.isEmpty {
+            let arguments = message["data"] as? [Any] ?? []
             do {
                 let result = try handleClientCall(path: path, arguments: arguments)
                 if path.last == "list_sync_get_list_data" {
-                    let idJSON = try JSONEncoder().encode(eventID)
-                    guard let id = String(data: idJSON, encoding: .utf8),
+                    let nameJSON = try JSONEncoder().encode(name)
+                    guard let encodedName = String(data: nameJSON, encoding: .utf8),
                           let snapshot = String(data: try listData.encodedJSON(), encoding: .utf8) else {
                         throw LXSyncError.invalidServerResponse
                     }
                     // Keep the wire-model field order intact. The LX server hashes
                     // JSON.stringify(listData), so routing this value through an
                     // unordered NSDictionary can produce a different digest.
-                    try await sendRawMessage("[1,\(id),null,\(snapshot)]")
+                    try await sendRawMessage("{\"name\":\(encodedName),\"error\":null,\"data\":\(snapshot)}")
                 } else {
-                    try await sendMessage([1, eventID, NSNull(), result ?? NSNull()])
+                    try await sendCallResponse(name: name, data: result ?? NSNull())
                 }
                 if path.last == "list_sync_finished" {
                     didFinishListSync = true
                     markSynced()
                 }
             } catch {
-                try? await sendMessage([1, eventID, ["message": error.localizedDescription]])
+                try? await sendCallError(name: name, message: error.localizedDescription)
             }
-        case 1, 3:
-            guard message.count >= 3, let eventID = message[1] as? String else {
-                throw LXSyncError.invalidServerResponse
-            }
-            guard let continuation = pendingCalls.removeValue(forKey: eventID) else { return }
-            if let error = message[2] as? [String: Any], let reason = error["message"] as? String {
-                continuation.resume(throwing: LXSyncError.server(reason))
-            } else {
-                continuation.resume(returning: message.count > 3 ? message[3] : nil)
-            }
-        case 2:
-            guard message.count >= 3, let callbackID = message[1] as? String else {
-                throw LXSyncError.invalidServerResponse
-            }
-            try? await sendMessage([3, callbackID, NSNull(), NSNull()])
-        default:
-            break
+            return
         }
+
+        guard let continuation = pendingCalls.removeValue(forKey: name) else { return }
+        if let error = message["error"], !(error is NSNull) {
+            continuation.resume(throwing: LXSyncError.server(error as? String ?? "LX Sync 请求失败"))
+            return
+        }
+        continuation.resume(returning: message["data"])
     }
 
     private func handleClientCall(path: [String], arguments: [Any]) throws -> Any? {
@@ -924,12 +910,17 @@ final class LXSyncService: ObservableObject {
 
     private func callServer(path: [String], argumentsJSON: String) async throws -> Any? {
         guard socket != nil else { throw LXSyncError.disconnected }
-        let requestID = UUID().uuidString
+        let requestID = "\(path.joined(separator: "."))__\(UUID().uuidString)"
         let pathData = try JSONEncoder().encode(path)
-        guard let pathJSON = String(data: pathData, encoding: .utf8) else {
+        let nameData = try JSONEncoder().encode(requestID)
+        guard let pathJSON = String(data: pathData, encoding: .utf8),
+              let nameJSON = String(data: nameData, encoding: .utf8) else {
             throw LXSyncError.invalidServerResponse
         }
-        let message = "[0,\"\(requestID)\",\(pathJSON),\(argumentsJSON),[]]"
+        // LX Sync uses message2call's object wire format. `data` is kept as
+        // raw JSON so playlist field order stays compatible with the server's
+        // JSON.stringify/MD5 snapshot comparison.
+        let message = "{\"name\":\(nameJSON),\"path\":\(pathJSON),\"data\":\(argumentsJSON)}"
         return try await withCheckedThrowingContinuation { continuation in
             pendingCalls[requestID] = continuation
             Task { [weak self] in
@@ -946,15 +937,32 @@ final class LXSyncService: ObservableObject {
         }
     }
 
+    private func sendCallResponse(name: String, data: Any) async throws {
+        let nameData = try JSONEncoder().encode(name)
+        let responseData = try JSONSerialization.data(
+            withJSONObject: data,
+            options: [.fragmentsAllowed, .withoutEscapingSlashes]
+        )
+        guard let nameJSON = String(data: nameData, encoding: .utf8),
+              let valueJSON = String(data: responseData, encoding: .utf8) else {
+            throw LXSyncError.invalidServerResponse
+        }
+        try await sendRawMessage("{\"name\":\(nameJSON),\"error\":null,\"data\":\(valueJSON)}")
+    }
+
+    private func sendCallError(name: String, message: String) async throws {
+        let nameData = try JSONEncoder().encode(name)
+        let errorData = try JSONEncoder().encode(message)
+        guard let nameJSON = String(data: nameData, encoding: .utf8),
+              let errorJSON = String(data: errorData, encoding: .utf8) else {
+            throw LXSyncError.invalidServerResponse
+        }
+        try await sendRawMessage("{\"name\":\(nameJSON),\"error\":\(errorJSON)}")
+    }
+
     private func rejectCall(_ id: String, error: Error) {
         guard let continuation = pendingCalls.removeValue(forKey: id) else { return }
         continuation.resume(throwing: error)
-    }
-
-    private func sendMessage(_ value: Any) async throws {
-        let data = try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .withoutEscapingSlashes])
-        guard let text = String(data: data, encoding: .utf8) else { throw LXSyncError.invalidServerResponse }
-        try await sendRawMessage(text)
     }
 
     private func sendRawMessage(_ text: String) async throws {

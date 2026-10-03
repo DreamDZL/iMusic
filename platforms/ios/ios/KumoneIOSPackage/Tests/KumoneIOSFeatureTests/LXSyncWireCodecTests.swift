@@ -3,7 +3,7 @@ import XCTest
 
 final class LXSyncWireCodecTests: XCTestCase {
     func testSmallFramesRemainPlainJSON() throws {
-        let message = "[0,\"request-1\",[\"finished\"],[],[]]"
+        let message = #"{"name":"finished__request-1","path":["finished"],"data":[]}"#
 
         XCTAssertEqual(try LXSyncWireCodec.encode(message), message)
         XCTAssertEqual(try LXSyncWireCodec.decode(message), message)
@@ -12,13 +12,13 @@ final class LXSyncWireCodecTests: XCTestCase {
     func testRecognizesLXSyncMobileHeartbeatWithoutParsingItAsJSON() {
         XCTAssertTrue(LXSyncWireCodec.isHeartbeatFrame("ping"))
         XCTAssertFalse(LXSyncWireCodec.isHeartbeatFrame("pong"))
-        XCTAssertFalse(LXSyncWireCodec.isHeartbeatFrame("[0,\"request\"]"))
+        XCTAssertFalse(LXSyncWireCodec.isHeartbeatFrame(#"{"name":"finished__request"}"#))
     }
 
     func testLargePlaylistSnapshotUsesCompressedFrameAndRoundTrips() throws {
         let track = #"{"id":"tx_12345","name":"夜空中最亮的星","artist":"逃跑计划"}"#
         let tracks = Array(repeating: track, count: 40).joined(separator: ",")
-        let message = "[0,\"request-2\",[\"onListSyncAction\"],[{\"action\":\"list_data_overwrite\",\"data\":{\"userList\":[\(tracks)]}}],[]]"
+        let message = #"{"name":"onListSyncAction__request-2","path":["onListSyncAction"],"data":[{"action":"list_data_overwrite","data":{"userList":[\#(tracks)]}}]}"#
 
         let frame = try LXSyncWireCodec.encode(message)
 
