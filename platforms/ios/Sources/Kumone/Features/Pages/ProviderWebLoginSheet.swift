@@ -43,7 +43,7 @@ enum ProviderWebLoginKind: String, Identifiable {
         guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty else { return false }
         let number = raw.lowercased().hasPrefix("o") ? String(raw.dropFirst()) : raw
-        return number.contains(where: { $0 != "0" })
+        return number.allSatisfy(\.isNumber) && number.contains(where: { $0 != "0" })
     }
 
     func looksLoggedIn(_ header: String) -> Bool {
@@ -179,7 +179,7 @@ struct ProviderWebLoginSheet: View {
                 if $0.path.count != $1.path.count { return $0.path.count > $1.path.count }
                 return $0.value < $1.value
             }
-        for cookie in scoped where values[cookie.name] == nil {
+        for cookie in scoped where values[cookie.name] == nil && !cookie.value.isEmpty {
             let key = cookie.name.lowercased()
             let qqUserKeys = ["uin", "qqmusic_uin", "p_uin", "musicid", "loginuin"]
             if provider == .qqMusic,

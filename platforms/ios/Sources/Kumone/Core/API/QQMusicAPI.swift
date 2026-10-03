@@ -74,6 +74,7 @@ actor QQMusicAPI {
 
     enum APIError: LocalizedError {
         case invalidResponse
+        case loginCookieUnavailable
         case unavailable
         case qrCodeUnavailable
         case oauthFailed
@@ -83,7 +84,9 @@ actor QQMusicAPI {
 
         var errorDescription: String? {
             switch self {
-            case .invalidResponse: return "QQ 音乐登录状态无法识别，请重新获取二维码"
+            case .invalidResponse: return "QQ 音乐返回了无法识别的信息，请重新登录后重试"
+            case .loginCookieUnavailable:
+                return "QQ 网页已打开，但没有读取到可用的账号凭据。请确认网页已登录后再点“登录完成”"
             case .unavailable: return "QQ 音乐登录已失效或 Cookie 已过期"
             case .qrCodeUnavailable: return "QQ 当前拒绝了二维码请求，请稍后重试"
             case .oauthFailed: return "QQ 扫码成功，但音乐登录凭证获取失败，请重新扫码"
@@ -394,6 +397,23 @@ actor QQMusicAPI {
             .first
         let authKey = Self.playlistAuthKey(in: cookieValues)
 
+        // QQ's profile CGI is frequently blocked or returns an HTML anti-bot
+        // page to embedded clients even while the desktop web session is
+        // valid. The web login already supplies QQ's numeric account ID and
+        // signed session ticket; use those as the session identity and treat
+        // the profile endpoint as optional metadata enrichment.
+        guard authKey?.isEmpty == false else {
+            throw APIError.loginCookieUnavailable
+        }
+        let cookieProfile = cookieID.map { id in
+            Profile(
+                id: id,
+                name: Self.cookieNickname(in: cookieValues) ?? "QQ 音乐用户",
+                avatarURL: nil,
+                refreshedCookie: nil
+            )
+        }
+
         var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "format", value: "json"),
@@ -413,34 +433,45 @@ actor QQMusicAPI {
             forHTTPHeaderField: "User-Agent"
         )
 
-        let (data, response) = try await session.data(for: request)
-        guard (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true,
-              let object = Self.jsonObject(from: data) else {
-            throw APIError.invalidResponse
-        }
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard !Task.isCancelled else { throw CancellationError() }
+            guard Self.isSuccess(response), let object = Self.jsonObject(from: data) else {
+                if let cookieProfile { return cookieProfile }
+                throw APIError.invalidResponse
+            }
 
-        let dataObject = object["data"] as? [String: Any] ?? object
-        let info = dataObject["info"] as? [String: Any]
-            ?? dataObject["user"] as? [String: Any]
-            ?? dataObject["profile"] as? [String: Any]
-            ?? dataObject
-        let responseID = Self.text(in: info, keys: ["uin", "uid", "user_id", "loginUin"])
-            .flatMap(Self.normalizedQQIdentifier)
-        let code = Self.integer(in: object, keys: ["code", "subcode"])
-        guard let id = responseID ?? cookieID,
-              authKey?.isEmpty == false,
-              code == nil || code == 0 || cookieID != nil else {
-            throw APIError.unavailable
+            let dataObject = object["data"] as? [String: Any] ?? object
+            let info = dataObject["info"] as? [String: Any]
+                ?? dataObject["user"] as? [String: Any]
+                ?? dataObject["profile"] as? [String: Any]
+                ?? dataObject
+            let responseID = Self.text(in: info, keys: ["uin", "uid", "user_id", "loginUin"])
+                .flatMap(Self.normalizedQQIdentifier)
+            let code = Self.integer(in: object, keys: ["code", "subcode"])
+            guard let id = responseID ?? cookieID,
+                  code == nil || code == 0 || cookieID != nil else {
+                if let cookieProfile { return cookieProfile }
+                throw APIError.unavailable
+            }
+            let name = Self.text(in: info, keys: ["nick", "nickname", "name", "nickName"])
+                ?? Self.cookieNickname(in: cookieValues)
+                ?? "QQ 音乐用户"
+            let avatar = Self.text(in: info, keys: ["logo", "avatar", "avatarUrl", "avatar_url"])
+            return Profile(id: id, name: name, avatarURL: avatar,
+                           refreshedCookie: Self.mergedCookie(
+                            original: cookie,
+                            response: response as? HTTPURLResponse
+                           ))
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw error
+        } catch {
+            guard !Task.isCancelled else { throw CancellationError() }
+            if let cookieProfile { return cookieProfile }
+            throw error
         }
-        let name = Self.text(in: info, keys: ["nick", "nickname", "name", "nickName"])
-            ?? Self.cookieNickname(in: cookieValues)
-            ?? "QQ 音乐用户"
-        let avatar = Self.text(in: info, keys: ["logo", "avatar", "avatarUrl", "avatar_url"])
-        return Profile(id: id, name: name, avatarURL: avatar,
-                       refreshedCookie: Self.mergedCookie(
-                        original: cookie,
-                        response: response as? HTTPURLResponse
-                       ))
     }
 
     /// Reads created and collected playlists. QQ exposes no supported personal

@@ -25,9 +25,11 @@ struct NowPlayingView: View {
     @State private var showLyricsOnMobile = false
     @State private var showQualityPicker = false
     @State private var showComments = false
+    @State private var showAddToPlaylist = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     #if os(iOS)
     @State private var showQueueOnMobile = false
+    @State private var showQueueSheet = false
     #endif
 
     var body: some View {
@@ -48,35 +50,38 @@ struct NowPlayingView: View {
             // Pin to the screen width so an intrinsically-wide child can never
             // stretch the ZStack and push the corner overlays off-screen.
             .frame(width: geo.size.width)
-            .overlay(alignment: .topLeading) {
+            .overlay(alignment: .top) {
                 Button {
                     close()
                 } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .frame(width: 36, height: 36)
-                        .background(.white.opacity(0.12), in: Circle())
+                    Capsule()
+                        .fill(.white.opacity(0.48))
+                        .frame(width: 42, height: 5)
+                        .frame(width: 64, height: 36)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.pressable)
-                .padding(.top, 20)
-                .padding(.leading, 20)
+                .accessibilityLabel("关闭播放器")
+                .padding(.top, 10)
             }
             .overlay(alignment: .topTrailing) {
-                Button {
-                    withAnimation(AppAnimation.standard) {
-                        showLyricsOnMobile.toggle()
+                if showLyricsOnMobile {
+                    Button {
+                        withAnimation(AppAnimation.standard) {
+                            showLyricsOnMobile = false
+                        }
+                    } label: {
+                        Image(systemName: "music.note")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.88))
+                            .frame(width: 36, height: 36)
+                            .background { playerGlassCircle }
                     }
-                } label: {
-                    Image(systemName: showLyricsOnMobile ? "music.note" : "quote.bubble")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(showLyricsOnMobile ? Theme.accent : .white.opacity(0.85))
-                        .frame(width: 36, height: 36)
-                        .background(.white.opacity(0.12), in: Circle())
+                    .buttonStyle(.pressable)
+                    .accessibilityLabel("返回歌曲页")
+                    .padding(.top, 20)
+                    .padding(.trailing, 20)
                 }
-                .buttonStyle(.pressable)
-                .padding(.top, 20)
-                .padding(.trailing, 20)
             }
         }
         #if os(macOS)
@@ -132,6 +137,18 @@ struct NowPlayingView: View {
                 SongCommentsSheet(track: track)
             }
         }
+        .sheet(isPresented: $showAddToPlaylist) {
+            if let track = player.currentTrack {
+                AddToPlaylistSheet(track: track)
+            }
+        }
+        #if os(iOS)
+        .sheet(isPresented: $showQueueSheet) {
+            MinimalQueueSheet(backdrop: artworkPalette.colors)
+                .presentationDetents([.fraction(0.5), .large])
+                .presentationDragIndicator(.visible)
+        }
+        #endif
     }
 
     private func close() {
@@ -176,16 +193,26 @@ struct NowPlayingView: View {
         }
     }
 
-    private func artworkGradient(for palette: ArtworkColors) -> LinearGradient {
+    private func artworkGradient(for palette: ArtworkColors) -> some View {
+        // Keep the artwork-derived tone continuous across the page. A gentle
+        // shade avoids the hard color bands from interpolating unrelated
+        // primary and secondary artwork swatches.
         LinearGradient(
             stops: [
-                .init(color: palette.primary, location: 0),
-                .init(color: palette.secondary, location: 0.52),
-                .init(color: .black, location: 1),
+                .init(color: palette.primary.opacity(0.98), location: 0),
+                .init(color: palette.primary.opacity(0.94), location: 0.58),
+                .init(color: palette.primary.opacity(0.78), location: 1),
             ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
+            startPoint: .top,
+            endPoint: .bottom
         )
+        .overlay {
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.48)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+        }
     }
 
     private func transitionArtworkPalette(to next: ArtworkColors) {
@@ -239,44 +266,28 @@ struct NowPlayingView: View {
 
     @ViewBuilder
     private func phoneLandscapeLayout(size: CGSize) -> some View {
-        let artworkSize = min(190, max(120, size.height - 175))
+        if showLyricsOnMobile {
+            appleMusicLyricsPage()
+        } else {
+            let artworkSize = min(size.height - 76, 280)
+            HStack(spacing: 28) {
+                artworkView(size: artworkSize)
 
-        VStack(spacing: 6) {
-            Group {
-                if showLyricsOnMobile {
-                    lyricsColumn
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    HStack(spacing: 18) {
-                        VStack(spacing: 7) {
-                            artworkView(size: artworkSize)
-                            trackMetaView
-                        }
-                        .frame(maxWidth: .infinity)
-
-                        MiniLyricsView {
-                            withAnimation(AppAnimation.standard) {
-                                showLyricsOnMobile = true
-                            }
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
+                VStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    trackMetaView
+                        .padding(.bottom, 8)
+                    NowPlayingScrubber(showsRemainingTime: true)
+                    primaryTransportControls
+                    CompactVolumeControl()
+                    songPageAccessoryControls
+                    Spacer(minLength: 0)
                 }
+                .frame(maxWidth: 420)
             }
-            .frame(maxHeight: .infinity)
-
-            VStack(spacing: 4) {
-                NowPlayingScrubber(onShowQuality: { showQualityPicker = true })
-                    .padding(.horizontal, 24)
-                CompactTransportControls()
-                    .frame(maxWidth: 360)
-            }
-            // Keep transport controls clear of the home indicator while
-            // avoiding the low, nearly clipped placement on short screens.
-            .padding(.bottom, 14)
+            .padding(.horizontal, 36)
+            .padding(.vertical, 36)
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 10)
     }
 
     private func regularLayout(size: CGSize) -> some View {
@@ -305,8 +316,128 @@ struct NowPlayingView: View {
 
     @ViewBuilder
     private func compactLayout(size: CGSize) -> some View {
-        classicCompactLayout(size: size)
+        appleMusicCompactLayout(size: size)
     }
+
+    /// iPhone's primary player follows Apple's Now Playing hierarchy: artwork,
+    /// one compact title/artist row, a timeline, three transport controls,
+    /// volume, and a row for lyrics, output, and queue. Lyrics are the only
+    /// alternate page.
+    private func appleMusicCompactLayout(size: CGSize) -> some View {
+        let isShortScreen = size.height < 680
+        let artworkDim = min(size.width - 56, size.height * (isShortScreen ? 0.37 : 0.43), 360)
+
+        if showLyricsOnMobile {
+            return AnyView(appleMusicLyricsPage())
+        }
+
+        return AnyView(VStack(spacing: 0) {
+            Spacer(minLength: isShortScreen ? 8 : 20)
+
+            artworkView(size: artworkDim)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            trackMetaView
+                .padding(.top, isShortScreen ? 12 : 22)
+                .padding(.bottom, isShortScreen ? 8 : 16)
+
+            NowPlayingScrubber(showsRemainingTime: true)
+                .padding(.bottom, isShortScreen ? 4 : 10)
+
+            primaryTransportControls
+                .padding(.bottom, isShortScreen ? 5 : 12)
+
+            CompactVolumeControl()
+                .padding(.bottom, isShortScreen ? 2 : 10)
+
+            songPageAccessoryControls
+        }
+        .padding(.horizontal, 26)
+        .padding(.top, isShortScreen ? 32 : 42)
+        .padding(.bottom, isShortScreen ? 12 : 18)
+        .animation(.easeInOut(duration: 0.22), value: showLyricsOnMobile))
+    }
+
+    private func appleMusicLyricsPage() -> some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 18)
+
+            HStack(spacing: 12) {
+                artworkView(size: 54)
+                    .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
+                trackMetaView
+            }
+            .padding(.bottom, 18)
+
+            lyricsColumn
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 42)
+        .padding(.bottom, 24)
+        .animation(.easeInOut(duration: 0.22), value: showLyricsOnMobile)
+    }
+
+    private var songPageAccessoryControls: some View {
+        HStack(spacing: 0) {
+            Button {
+                withAnimation(AppAnimation.standard) {
+                    showLyricsOnMobile = true
+                }
+            } label: {
+                Image(systemName: "quote.bubble")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.86))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable)
+            .accessibilityLabel("显示同步歌词")
+
+            RoutePickerButton(diameter: 40, glyphSize: 18)
+                .frame(maxWidth: .infinity)
+
+            #if os(iOS)
+            Button { showQueueSheet = true } label: {
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.86))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable)
+            .accessibilityLabel("播放队列")
+            #endif
+        }
+        .frame(maxWidth: 360)
+    }
+
+    private var primaryTransportControls: some View {
+        HStack(spacing: 0) {
+            Button(action: player.isFMMode ? player.fmTrash : player.previous) {
+                Image(systemName: player.isFMMode ? "trash" : "backward.end.fill")
+                    .font(.system(size: 29, weight: .semibold))
+                    .frame(maxWidth: .infinity, minHeight: 64)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel(player.isFMMode ? "不喜欢" : "上一首")
+
+            playPauseButton
+                .frame(maxWidth: .infinity)
+
+            Button(action: player.next) {
+                Image(systemName: "forward.end.fill")
+                    .font(.system(size: 29, weight: .semibold))
+                    .frame(maxWidth: .infinity, minHeight: 64)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("下一首")
+        }
+        .foregroundStyle(.white)
+        .buttonStyle(.pressable)
+        .frame(maxWidth: 460)
+    }
+
 
     private func classicCompactLayout(size: CGSize) -> some View {
         let artworkDim = min(size.width - 64, size.height * 0.38, 300)
@@ -648,16 +779,31 @@ struct NowPlayingView: View {
 
     // MARK: - Views
 
-    private func sourceName(_ source: String?) -> String {
-        LXCatalogPlatform.displayName(for: source)
-    }
-
     private func isPhoneLandscape(size: CGSize) -> Bool {
         #if os(iOS)
         return UIDevice.current.userInterfaceIdiom == .phone
             && size.width > size.height
         #else
         return false
+        #endif
+    }
+
+    @ViewBuilder
+    private var playerGlassCircle: some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            Circle().fill(.clear).glassEffect(.regular, in: Circle())
+        } else {
+            Circle().fill(.ultraThinMaterial)
+        }
+        #elseif os(macOS)
+        if #available(macOS 26.0, *) {
+            Circle().fill(.clear).glassEffect(.regular, in: Circle())
+        } else {
+            Circle().fill(.ultraThinMaterial)
+        }
+        #else
+        Circle().fill(.ultraThinMaterial)
         #endif
     }
 
@@ -672,53 +818,108 @@ struct NowPlayingView: View {
                     .fill(.white.opacity(0.06))
                     .overlay(
                         Image(systemName: "music.note")
-                            .font(.system(size: 48, weight: .light))
+                            .font(.system(size: min(48, size * 0.42), weight: .light))
                             .foregroundStyle(.white.opacity(0.3))
                     )
             }
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(color: .black.opacity(0.45), radius: 36, y: 18)
-        .scaleEffect(player.isPlaying ? 1 : 0.95)
-        .animation(AppAnimation.bouncy, value: player.isPlaying)
+        .shadow(color: .black.opacity(0.3), radius: 18, y: 9)
     }
 
     private var trackMetaView: some View {
-        VStack(spacing: 5) {
-            HStack(spacing: 8) {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(player.currentTrack?.name ?? "")
-                    .font(.system(size: 21, weight: .bold))
+                    .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                if player.currentTrack?.fee == 1 {
-                    VIPBadge()
-                }
+                    .accessibilityAddTraits(.isHeader)
+                Text(player.currentTrack?.artistNames ?? "")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.68))
+                    .lineLimit(1)
             }
-            Text("\(player.currentTrack?.artistNames ?? "") — \(player.currentTrack?.album.name ?? "")")
-                .font(.system(size: 13.5))
-                .foregroundStyle(.white.opacity(0.65))
-                .lineLimit(1)
-            Text("来源：\(player.currentTrack.map { sourceName($0.source) } ?? "未知")")
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.5))
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            commentsButton
-        }
-        .frame(maxWidth: 400)
-    }
+            if let track = player.currentTrack {
+                let liked = localLibrary.isFavorite(track)
+                Button {
+                    localLibrary.toggleFavorite(track)
+                } label: {
+                    Image(systemName: liked ? "star.fill" : "star")
+                        .font(.system(size: 21, weight: .medium))
+                        .foregroundStyle(liked ? Theme.accent : .white.opacity(0.88))
+                        .frame(width: 42, height: 44)
+                        .background { playerGlassCircle }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+                .accessibilityLabel(liked ? "取消收藏" : "收藏")
 
-    private var commentsButton: some View {
-        Button { showComments = true } label: {
-            Label("评论", systemImage: "text.bubble")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
-                .padding(.horizontal, 12)
-                .frame(minHeight: 44)
-                .background(.white.opacity(0.12), in: Capsule())
+                Menu {
+                    Button {
+                        player.addToPlayNext(track)
+                    } label: {
+                        Label("下一首播放", systemImage: "text.line.first.and.arrowtriangle.forward")
+                    }
+
+                    Button {
+                        showAddToPlaylist = true
+                    } label: {
+                        Label("加入歌单…", systemImage: "music.note.list")
+                    }
+
+                    Button {
+                        showQualityPicker = true
+                    } label: {
+                        Label("音质与音源", systemImage: "waveform")
+                    }
+
+                    Button {
+                        player.toggleShuffle()
+                    } label: {
+                        Label(
+                            player.shuffleEnabled ? "关闭随机播放" : "随机播放",
+                            systemImage: "shuffle"
+                        )
+                    }
+
+                    Button {
+                        player.cycleRepeatMode()
+                    } label: {
+                        Label(
+                            player.repeatMode == .off ? "开启循环播放" : "切换循环模式",
+                            systemImage: player.repeatMode == .one ? "repeat.1" : "repeat"
+                        )
+                    }
+
+                    SleepTimerMenu(player: player)
+
+                    Divider()
+
+                    Button {
+                        Platform.copyToPasteboard(
+                            string: "https://music.163.com/#/song?id=\(track.id)"
+                        )
+                        ToastCenter.shared.show(String(localized: "链接已复制"))
+                    } label: {
+                        Label("复制链接", systemImage: "link")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.88))
+                        .frame(width: 42, height: 44)
+                        .background { playerGlassCircle }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+                .accessibilityLabel("更多操作")
+            }
         }
-        .buttonStyle(.pressable)
-        .accessibilityLabel("查看评论")
+        .frame(maxWidth: 460)
     }
 
     private func leftColumn(artworkSize: CGFloat) -> some View {
@@ -809,18 +1010,15 @@ struct NowPlayingView: View {
         Button {
             player.togglePlayPause()
         } label: {
-            ZStack {
-                Circle()
-                    .fill(.white)
-                    .frame(width: 58, height: 58)
-                    .shadow(color: .black.opacity(0.3), radius: 12, y: 4)
-                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 21, weight: .bold))
-                    .foregroundStyle(.black.opacity(0.85))
-                    .contentTransition(.opacity)
-            }
+            Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                .font(.system(size: 40, weight: .semibold))
+                .foregroundStyle(.white)
+                .contentTransition(.opacity)
+                .frame(width: 72, height: 72)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.pressable)
+        .accessibilityLabel(player.isPlaying ? "暂停" : "播放")
     }
 
     private func circleButton(icon: String, size: CGFloat,
@@ -2581,13 +2779,15 @@ struct NowPlayingScrubber: View {
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var clock = PlayerService.shared.clock
     let onShowQuality: (() -> Void)?
+    let showsRemainingTime: Bool
 
     @State private var isHovering = false
     @State private var isDragging = false
     @State private var dragProgress: Double = 0
 
-    init(onShowQuality: (() -> Void)? = nil) {
+    init(onShowQuality: (() -> Void)? = nil, showsRemainingTime: Bool = false) {
         self.onShowQuality = onShowQuality
+        self.showsRemainingTime = showsRemainingTime
     }
 
     private var fraction: Double {
@@ -2651,7 +2851,9 @@ struct NowPlayingScrubber: View {
                     .accessibilityLabel("选择播放音质，当前为\(qualityDisplayName)")
                 }
                 Spacer()
-                Text(Formatters.duration(player.duration))
+                Text(showsRemainingTime
+                     ? "−\(Formatters.duration(max(player.duration - (isDragging ? dragProgress : clock.progress), 0)))"
+                     : Formatters.duration(player.duration))
             }
             .font(.system(size: 10.5).monospacedDigit())
             .foregroundStyle(.white.opacity(0.55))
