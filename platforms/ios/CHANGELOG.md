@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.39 - 2026-10-04
+
+### Fixed / 修复
+
+**iOS**: QQ Music login now requires a numeric account ID and a QQ Music session ticket before the app reports a usable account. Generic QQ cookies no longer appear as a successful playlist-sync login; stored partial sessions are sent back through desktop web login. A `3a44` track-detail response is shown as an actionable sync failure without claiming an unverified cause.
+
+**iOS**：QQ 音乐登录现在必须同时具备数字账号标识和 QQ 音乐会话票据，才会显示为可同步状态。只有通用 QQ Cookie 时不会再误报登录成功；旧的部分登录状态需要重新进行电脑端网页登录。曲目详情返回 `3a44` 时会明确提示同步失败和重试方式，不会臆断错误原因。
+
+**iOS**: timed lyric runs use one guarded interpolation path for provider timestamps, including zero or invalid durations, while retaining Apple Music's separate song and lyrics pages.
+
+**iOS**：逐词歌词统一使用带边界保护的音源时间插值逻辑，处理零时长和无效时长，同时保留 Apple Music 式歌曲页与独立歌词页。
+
 ## 1.0.38 - 2026-10-04
 
 ### Fixed / 修复

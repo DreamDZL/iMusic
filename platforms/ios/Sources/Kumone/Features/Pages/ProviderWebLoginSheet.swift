@@ -39,13 +39,6 @@ enum ProviderWebLoginKind: String, Identifiable {
         return value == root || value.hasSuffix(".\(root)")
     }
 
-    fileprivate static func isUsableQQIdentifier(_ raw: String?) -> Bool {
-        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty else { return false }
-        let number = raw.lowercased().hasPrefix("o") ? String(raw.dropFirst()) : raw
-        return number.allSatisfy(\.isNumber) && number.contains(where: { $0 != "0" })
-    }
-
     func looksLoggedIn(_ header: String) -> Bool {
         let values = header.split(separator: ";").reduce(into: [String: String]()) { result, item in
             let pair = item.split(separator: "=", maxSplits: 1).map(String.init)
@@ -55,14 +48,10 @@ enum ProviderWebLoginKind: String, Identifiable {
         switch self {
         case .netease: return !(values["music_u"] ?? "").isEmpty
         case .qqMusic:
-            // QQ's desktop web flow commonly yields p_uin/p_skey or qm_keyst
-            // instead of the pair used by the old QR API. Accept the session
-            // forms the profile and playlist endpoints actually understand.
-            let identifiers = ["uin", "qqmusic_uin", "p_uin", "musicid", "loginuin", "wxuin"]
-            let keys = ["qqmusic_key", "qm_keyst", "music_key", "musickey",
-                        "p_skey", "skey", "pskey", "wx_skey", "wxskey"]
-            let hasUser = identifiers.contains { Self.isUsableQQIdentifier(values[$0]) }
-            return hasUser && keys.contains { !(values[$0] ?? "").isEmpty }
+            // Do not close the login sheet for generic QQ cookies. Playlist
+            // metadata can be visible while track details still reject the
+            // session without a QQ Music ticket.
+            return QQMusicLoginCookiePolicy.hasUsableMusicLoginCookie(header)
         case .kugou:
             return !(values["token"] ?? "").isEmpty &&
                 !(values["userid"] ?? values["kugooid"] ?? "").isEmpty
@@ -180,13 +169,6 @@ struct ProviderWebLoginSheet: View {
                 return $0.value < $1.value
             }
         for cookie in scoped where values[cookie.name] == nil && !cookie.value.isEmpty {
-            let key = cookie.name.lowercased()
-            let qqUserKeys = ["uin", "qqmusic_uin", "p_uin", "musicid", "loginuin", "wxuin"]
-            if provider == .qqMusic,
-               qqUserKeys.contains(key),
-               !ProviderWebLoginKind.isUsableQQIdentifier(cookie.value) {
-                continue
-            }
             values[cookie.name] = cookie.value
         }
         return values.sorted { $0.key < $1.key }

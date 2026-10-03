@@ -46,6 +46,11 @@ final class QQMusicSessionStore: ObservableObject {
     private init() {
         storedCookie = ProviderSessionSupport.readCookie(service: keychainService)
         guard let cookie = storedCookie else { return }
+        guard QQMusicLoginCookiePolicy.hasUsableMusicLoginCookie(cookie) else {
+            UserDefaults.standard.removeObject(forKey: validatedAtKey)
+            sessionValidationMessage = "已保存的 QQ 网页状态缺少 QQ 音乐曲目凭据，请退出后重新使用电脑端网页登录"
+            return
+        }
         let validatedAt = UserDefaults.standard.double(forKey: validatedAtKey)
         if validatedAt > 0, Date().timeIntervalSince1970 - validatedAt < validationInterval {
             // Restore a recently server-validated session immediately. The
@@ -179,7 +184,8 @@ final class QQMusicSessionStore: ObservableObject {
               storedCookie == expectedCookie else { return }
         guard let rawCookie else { return }
         let normalized = ProviderSessionSupport.normalizedCookie(rawCookie)
-        guard !normalized.isEmpty, normalized != storedCookie else { return }
+        guard QQMusicLoginCookiePolicy.hasUsableMusicLoginCookie(normalized),
+              normalized != storedCookie else { return }
         do {
             try ProviderSessionSupport.writeCookie(normalized, service: keychainService)
         } catch {

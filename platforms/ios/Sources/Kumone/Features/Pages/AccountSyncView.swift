@@ -292,6 +292,7 @@ struct AccountSyncView: View {
                 } else if let message = qqPlaylists.lastLoginSyncMessage {
                     let hasIssue = message.contains("无法") || message.contains("失败")
                         || message.contains("警告") || message.contains("拒绝")
+                        || message.contains("3a44") || message.contains("未能读取")
                     Label(message, systemImage: hasIssue ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                         .font(.caption)
                         .foregroundStyle(hasIssue ? Color.orange : Color.secondary)

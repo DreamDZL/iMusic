@@ -1,5 +1,37 @@
 import Foundation
 
+/// Generic QQ cookies (`p_skey`/`skey`) identify a QQ account but do not
+/// prove QQ Music's playlist-detail endpoint can read its tracks. Keep the
+/// login gate in one pure policy shared by login UI, session restore, and API.
+enum QQMusicLoginCookiePolicy {
+    private static let userCookieNames = [
+        "uin", "qqmusic_uin", "p_uin", "musicid", "loginuin", "wxuin"
+    ]
+    private static let musicTicketNames = [
+        "qm_keyst", "qqmusic_key", "music_key", "musickey"
+    ]
+
+    static func hasUsableMusicLoginCookie(_ cookie: String) -> Bool {
+        let values = cookie.split(separator: ";").reduce(into: [String: String]()) { result, item in
+            let pair = item.split(separator: "=", maxSplits: 1).map(String.init)
+            guard pair.count == 2 else { return }
+            let name = pair[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = pair[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, !value.isEmpty else { return }
+            result[name] = value
+        }
+
+        let hasNumericUser = userCookieNames.contains { name in
+            guard var value = values[name] else { return false }
+            if value.lowercased().hasPrefix("o") { value.removeFirst() }
+            guard value.allSatisfy(\.isNumber), let number = UInt64(value) else { return false }
+            return number > 0
+        }
+        let hasMusicTicket = musicTicketNames.contains { !(values[$0] ?? "").isEmpty }
+        return hasNumericUser && hasMusicTicket
+    }
+}
+
 /// QQ's QR flow must expose redirect responses so the app can collect the
 /// account cookies and exchange the OAuth code for a Music session.
 private final class QQNoRedirectDelegate: NSObject, URLSessionTaskDelegate {
@@ -96,7 +128,7 @@ actor QQMusicAPI {
             switch self {
             case .invalidResponse: return "QQ 音乐返回了无法识别的信息，请重新登录后重试"
             case .loginCookieUnavailable:
-                return "QQ 网页已打开，但没有读取到可用的账号凭据。请确认网页已登录后再点“登录完成”"
+                return "QQ 网页登录状态缺少读取歌单曲目所需的 QQ 音乐凭据。请在电脑端 QQ 音乐网页完成登录和授权后，再回到 iMusic 点“登录完成”"
             case .unavailable: return "QQ 音乐登录已失效或 Cookie 已过期"
             case .providerRejected(let detail):
                 return "QQ 音乐接口拒绝了请求（\(detail)），请稍后刷新歌单"
@@ -412,14 +444,13 @@ actor QQMusicAPI {
     func profile(cookie: String) async throws -> Profile {
         let cookieValues = Self.cookieFields(cookie)
         let cookieID = Self.qqUserIdentifier(in: cookieValues)
-        let authKey = Self.playlistAuthKey(in: cookieValues)
 
         // QQ's profile CGI is frequently blocked or returns an HTML anti-bot
         // page to embedded clients even while the desktop web session is
-        // valid. The web login already supplies QQ's numeric account ID and
-        // signed session ticket; use those as the session identity and treat
-        // the profile endpoint as optional metadata enrichment.
-        guard authKey?.isEmpty == false else {
+        // valid. However, generic QQ `skey` cookies are insufficient for
+        // QQ Music track details. Require the Music ticket before returning a
+        // profile or allowing the session to be cached as logged in.
+        guard cookieID != nil, QQMusicLoginCookiePolicy.hasUsableMusicLoginCookie(cookie) else {
             throw APIError.loginCookieUnavailable
         }
         let cookieProfile = cookieID.map { id in
@@ -479,11 +510,14 @@ actor QQMusicAPI {
             }
             let name = "QQ 音乐用户"
             let avatar = Self.text(in: info, keys: ["logo", "avatar", "avatarUrl", "avatar_url"])
+            let refreshedCookie = Self.mergedCookie(
+                original: cookie,
+                response: response as? HTTPURLResponse
+            ).flatMap { candidate in
+                QQMusicLoginCookiePolicy.hasUsableMusicLoginCookie(candidate) ? candidate : nil
+            }
             return Profile(id: id, name: name, avatarURL: avatar,
-                           refreshedCookie: Self.mergedCookie(
-                            original: cookie,
-                            response: response as? HTTPURLResponse
-                           ))
+                           refreshedCookie: refreshedCookie)
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as URLError where error.code == .cancelled {
@@ -501,6 +535,9 @@ actor QQMusicAPI {
     func userPlaylists(cookie: String) async throws -> PlaylistListResult {
         let profile = try await profile(cookie: cookie)
         let requestCookie = profile.refreshedCookie ?? cookie
+        guard QQMusicLoginCookiePolicy.hasUsableMusicLoginCookie(requestCookie) else {
+            throw APIError.loginCookieUnavailable
+        }
         let cookieValues = Self.cookieFields(requestCookie)
         let authKey = Self.playlistAuthKey(in: cookieValues) ?? ""
         guard !authKey.isEmpty else { throw APIError.unavailable }
@@ -611,6 +648,9 @@ actor QQMusicAPI {
     ) async throws -> PlaylistTracksResult {
         let profile = try await profile(cookie: cookie)
         let requestCookie = profile.refreshedCookie ?? cookie
+        guard QQMusicLoginCookiePolicy.hasUsableMusicLoginCookie(requestCookie) else {
+            throw APIError.loginCookieUnavailable
+        }
         let isLikedSongs = id == "qq-liked:201"
         let playlistID: Int64
         if isLikedSongs {

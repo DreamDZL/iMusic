@@ -6,6 +6,18 @@ struct LyricWord: Hashable {
     let start: TimeInterval
     let duration: TimeInterval
     var end: TimeInterval { start + duration }
+
+    /// Progress of this provider-timed lyric run at an AVPlayer clock value.
+    /// Keeping the interpolation beside the source timing avoids each view
+    /// inventing its own character split or boundary behavior.
+    func progress(at time: TimeInterval) -> Double {
+        guard time.isFinite, start.isFinite else { return 0 }
+        guard duration.isFinite else { return 0 }
+        guard duration > 0 else {
+            return time >= start ? 1 : 0
+        }
+        return min(max((time - start) / duration, 0), 1)
+    }
 }
 
 struct LyricLine: Identifiable, Hashable {

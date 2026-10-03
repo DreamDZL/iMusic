@@ -314,10 +314,15 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                 if let apiError = error as? QQMusicAPI.APIError,
                    case .providerRejected(let detail) = apiError,
                    detail.localizedCaseInsensitiveContains("3a44") {
-                    failed.append("\(playlist.name)：\(error.localizedDescription)")
-                    // The same opaque provider response is unlikely to be
-                    // playlist-specific. Stop here without labeling it as a
-                    // missing ticket or invalidating the logged-in session.
+                    let diagnostic = "QQ 曲目详情接口返回 3a44，未能读取歌单。此码不能单凭客户端确认登录原因；请在电脑端重新登录 QQ 音乐网页后重试"
+                    session.recordPlaylistValidationFailure(
+                        diagnostic,
+                        expectedSessionRevision: sessionRevision
+                    )
+                    failed.append("\(playlist.name)：\(diagnostic)")
+                    // Treat the observed provider response as a sync failure,
+                    // but do not claim that this opaque code proves a missing
+                    // ticket or invalidates the account session.
                     break
                 }
                 if let apiError = error as? QQMusicAPI.APIError,

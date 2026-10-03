@@ -1217,9 +1217,7 @@ struct LyricMainText: View {
           let unsung = 0.28
           var out = Text(verbatim: "")
           for word in words {
-              let fraction = word.duration > 0
-                  ? min(max((time - word.start) / word.duration, 0), 1)
-                  : (time >= word.start ? 1 : 0)
+              let fraction = word.progress(at: time)
               let alpha = unsung + (1 - unsung) * fraction
               out = out + Text(verbatim: word.text)
                   .foregroundColor(.white.opacity(alpha))
@@ -1230,9 +1228,7 @@ struct LyricMainText: View {
       private func karaokeAlphas(_ words: [LyricWord], at time: TimeInterval) -> [Double] {
           let unsung = 0.28
           return words.flatMap { word in
-              let fraction = word.duration > 0
-                  ? min(max((time - word.start) / word.duration, 0), 1)
-                  : (time >= word.start ? 1 : 0)
+              let fraction = word.progress(at: time)
               let alpha = unsung + (1 - unsung) * fraction
               return Array(repeating: alpha, count: word.text.count)
           }
@@ -1286,9 +1282,7 @@ private struct AMLLyricText: View {
     private func timedText(_ words: [LyricWord], at time: TimeInterval) -> Text {
         var output = Text(verbatim: "")
         for word in words {
-            let progress = word.duration > 0
-                ? min(max((time - word.start) / word.duration, 0), 1)
-                : (time >= word.start ? 1 : 0)
+            let progress = word.progress(at: time)
             let opacity = 0.34 + 0.66 * progress
             output = output + Text(verbatim: word.text)
                 .foregroundColor(.white.opacity(opacity))
