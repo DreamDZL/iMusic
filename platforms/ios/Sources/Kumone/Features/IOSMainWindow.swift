@@ -139,12 +139,12 @@ public struct IOSMainWindow: View {
     private var systemNowPlayingPresentation: some View {
         if #available(iOS 16.4, *) {
             nowPlayingPresentation(
-                usesSystemInteractiveDismissal: true,
+                usesSystemInteractiveDismissal: false,
                 dismissAnimation: nil
             )
-            // The player draws one accessible, high-hit-area grabber itself.
-            // Hiding the presentation container's handle prevents the double
-            // horizontal bar seen above the album artwork on recent iOS.
+            // fullScreenCover does not reliably expose the sheet grabber. Use
+            // the player's single accessible grabber and suppress any system
+            // indicator if this presentation adapts to a sheet.
             .presentationDragIndicator(.hidden)
             .presentationBackground(Color(uiColor: .systemBackground))
         } else {

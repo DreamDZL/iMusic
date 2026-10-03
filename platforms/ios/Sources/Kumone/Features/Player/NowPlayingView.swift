@@ -48,28 +48,9 @@ struct NowPlayingView: View {
                 }
             }
             // Pin to the screen width so an intrinsically-wide child can never
-            // stretch the ZStack and push the corner overlays off-screen.
+            // stretch the ZStack and push content off-screen.
             .frame(width: geo.size.width)
             .simultaneousGesture(playerPageSwipeGesture(height: geo.size.height))
-            .overlay(alignment: .topTrailing) {
-                if showLyricsOnMobile {
-                    Button {
-                        withAnimation(AppAnimation.standard) {
-                            showLyricsOnMobile = false
-                        }
-                    } label: {
-                        Image(systemName: "music.note")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.88))
-                            .frame(width: 36, height: 36)
-                            .background { playerGlassCircle }
-                    }
-                    .buttonStyle(.pressable)
-                    .accessibilityLabel("返回歌曲页")
-                    .padding(.top, 20)
-                    .padding(.trailing, 20)
-                }
-            }
         }
         #if os(macOS)
         // The window toolbar is hidden while this page is up, but SwiftUI keeps
@@ -161,7 +142,7 @@ struct NowPlayingView: View {
         activeIndex = index
         guard let index else { return }
         DispatchQueue.main.async {
-            proxy.scrollTo(index, anchor: .center)
+            proxy.scrollTo(index, anchor: UnitPoint(x: 0.5, y: 0.18))
         }
     }
 
@@ -357,8 +338,6 @@ struct NowPlayingView: View {
 
     private func appleMusicLyricsPage() -> some View {
         VStack(spacing: 0) {
-            Spacer(minLength: 18)
-
             HStack(spacing: 12) {
                 artworkView(size: 54)
                     .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
@@ -370,7 +349,7 @@ struct NowPlayingView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(.horizontal, 24)
-        .padding(.top, 42)
+        .padding(.top, 34)
         .padding(.bottom, 24)
         .animation(.easeInOut(duration: 0.22), value: showLyricsOnMobile)
     }
@@ -1037,57 +1016,59 @@ struct NowPlayingView: View {
     @ViewBuilder
     private var lyricsColumn: some View {
         if let lyrics = player.lyrics, !lyrics.isEmpty {
-            ScrollViewReader { proxy in
-                ScrollView(showsIndicators: false) {
-                    LazyVStack(alignment: .leading, spacing: 26) {
-                        Color.clear.frame(height: 200)
-                        ForEach(lyrics.lines) { line in
-                            bigLyricLine(line, isActive: line.id == activeIndex)
-                                .id(line.id)
+            GeometryReader { geometry in
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        LazyVStack(alignment: .leading, spacing: 26) {
+                            Color.clear.frame(height: geometry.size.height * 0.08)
+                            ForEach(lyrics.lines) { line in
+                                bigLyricLine(line, isActive: line.id == activeIndex)
+                                    .id(line.id)
+                            }
+                            Color.clear.frame(height: geometry.size.height * 0.78)
                         }
-                        Color.clear.frame(height: 240)
+                        .padding(.horizontal, 24)
                     }
-                    .padding(.horizontal, 24)
-                }
-                .mask(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .clear, location: 0),
-                            .init(color: .black, location: 0.12),
-                            .init(color: .black, location: 0.85),
-                            .init(color: .clear, location: 1),
-                        ],
-                        startPoint: .top, endPoint: .bottom
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .black, location: 0.12),
+                                .init(color: .black, location: 0.85),
+                                .init(color: .clear, location: 1),
+                            ],
+                            startPoint: .top, endPoint: .bottom
+                        )
                     )
-                )
-                .onChange(of: lyricsCursor.activeIndex) { index in
-                    guard index != activeIndex else { return }
-                    activeIndex = index
-                    guard !isUserScrolling, let index else { return }
-                    withAnimation(.spring(response: 0.8, dampingFraction: 0.85)) {
-                        proxy.scrollTo(index, anchor: .center)
-                    }
-                }
-                .onAppear {
-                    // The cursor only fires on a line change, which can be many
-                    // seconds away — on re-entering the page, adopt where the
-                    // song already is instead of waiting for the next line.
-                    adoptCursor(proxy: proxy)
-                }
-                .onChange(of: player.currentTrack?.id) { _ in
-                    activeIndex = nil
-                }
-                .simultaneousGesture(
-                    DragGesture().onChanged { _ in
-                        isUserScrolling = true
-                        resumeTask?.cancel()
-                        resumeTask = Task {
-                            try? await Task.sleep(for: .seconds(3))
-                            guard !Task.isCancelled else { return }
-                            isUserScrolling = false
+                    .onChange(of: lyricsCursor.activeIndex) { index in
+                        guard index != activeIndex else { return }
+                        activeIndex = index
+                        guard !isUserScrolling, let index else { return }
+                        withAnimation(.spring(response: 0.8, dampingFraction: 0.85)) {
+                            proxy.scrollTo(index, anchor: UnitPoint(x: 0.5, y: 0.18))
                         }
                     }
-                )
+                    .onAppear {
+                        // Start the active line near the top, matching the
+                        // native lyrics reading position instead of centering
+                        // it in a mostly empty viewport.
+                        adoptCursor(proxy: proxy)
+                    }
+                    .onChange(of: player.currentTrack?.id) { _ in
+                        activeIndex = nil
+                    }
+                    .simultaneousGesture(
+                        DragGesture().onChanged { _ in
+                            isUserScrolling = true
+                            resumeTask?.cancel()
+                            resumeTask = Task {
+                                try? await Task.sleep(for: .seconds(3))
+                                guard !Task.isCancelled else { return }
+                                isUserScrolling = false
+                            }
+                        }
+                    )
+                }
             }
         } else if player.lyrics != nil, player.lyrics?.isInstrumental != true {
             VStack(spacing: 10) {
@@ -1509,7 +1490,7 @@ private struct IOSImmersiveLyricsColumn: View {
         activeIndex = index
         guard let index else { return }
         DispatchQueue.main.async {
-            proxy.scrollTo(index, anchor: .center)
+            proxy.scrollTo(index, anchor: UnitPoint(x: 0.5, y: 0.18))
         }
     }
 

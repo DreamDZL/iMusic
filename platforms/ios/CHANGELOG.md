@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.38 - 2026-10-04
+
+### Fixed / 修复
+
+**iOS**: aligned the QQ playlist-detail fallback request with LX Music Mobile and now try it when QQ returns a successful but empty or truncated page. Playlist copies still require all advertised tracks before saving.
+
+**iOS**：对齐 LX Music Mobile 的 QQ 歌单详情备用请求；QQ 主接口返回空页或不完整页面时会尝试回退。歌单仍需完整读取后才会保存。
+
+**iOS**: use one accessible Now Playing grabber, move the active lyric line to Apple's upper reading position, and remove the extra lyrics-page switch button. The album-art palette and playback controls stay on the song page; lyrics remain a separate control-free page.
+
+**iOS**：播放页只保留一个可访问的拖动把手，并将当前歌词行移至 Apple Music 式的上方阅读位置，移除歌词页多余的切换按钮。专辑色主题和播放控件保留在歌曲页，歌词页独立显示且隐藏播放控制。
+
 ## 1.0.32 - 2026-09-24
 
 ### Added / 新增

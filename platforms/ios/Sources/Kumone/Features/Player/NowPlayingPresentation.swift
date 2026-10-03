@@ -115,9 +115,9 @@ extension EnvironmentValues {
     }
 }
 
-/// Owns only presentation mechanics for Now Playing: the drag indicator and
-/// interactive dismissal offset. Playback layout and safe areas remain in
-/// `NowPlayingView` and SwiftUI's presentation container.
+/// Owns presentation mechanics for Now Playing. The compact player draws one
+/// accessible drag indicator because full-screen covers do not consistently
+/// display the system sheet indicator.
 struct IOSNowPlayingPresentation<Content: View>: View {
     private let usesSystemInteractiveDismissal: Bool
     private let dismissAnimation: Animation?
@@ -151,7 +151,7 @@ struct IOSNowPlayingPresentation<Content: View>: View {
                         dismissDragAction(usesCustomDrag: usesCustomDrag)
                     )
 
-                if isInteractive {
+                if isInteractive && !usesSystemInteractiveDismissal {
                     dragIndicator
                 }
             }

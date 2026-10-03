@@ -598,6 +598,17 @@ actor QQMusicAPI {
     /// Loads one playlist with the signed-in cookie and pages its tracks. The
     /// login sync uses this to make a local copy, and the UI can retry it.
     func playlistTracks(id: String, cookie: String) async throws -> PlaylistTracksResult {
+        try await playlistTracks(id: id, cookie: cookie, expectedTrackCount: 0)
+    }
+
+    /// The account directory's song count is passed into pagination so an
+    /// apparently successful but truncated QQ response can fall back before
+    /// the incomplete copy is rejected.
+    func playlistTracks(
+        id: String,
+        cookie: String,
+        expectedTrackCount: Int
+    ) async throws -> PlaylistTracksResult {
         let profile = try await profile(cookie: cookie)
         let requestCookie = profile.refreshedCookie ?? cookie
         let isLikedSongs = id == "qq-liked:201"
@@ -618,7 +629,7 @@ actor QQMusicAPI {
         let csrf = Self.hash5381(csrfKey)
         var tracks: [Track] = []
         var offset = 0
-        var expectedCount = 0
+        var expectedCount = max(expectedTrackCount, 0)
         var completed = false
         let pageSize = 100
         let maximumPages = 100
@@ -632,6 +643,7 @@ actor QQMusicAPI {
                 csrf: csrf,
                 offset: offset,
                 pageSize: pageSize,
+                expectedPlaylistCount: expectedCount > 0 ? expectedCount : nil,
                 cookie: requestCookie,
                 cookieValues: cookieValues
             )
@@ -654,10 +666,6 @@ actor QQMusicAPI {
 
             offset += rows.count
 
-            if expectedCount > 0, offset >= expectedCount {
-                completed = true
-                break
-            }
             if reportedHasMore == false {
                 guard expectedCount == 0 || offset >= expectedCount else {
                     throw APIError.incompletePlaylist
@@ -688,19 +696,20 @@ actor QQMusicAPI {
         csrf: Int,
         offset: Int,
         pageSize: Int,
+        expectedPlaylistCount: Int?,
         cookie: String,
         cookieValues: [String: String]
     ) async throws -> PlaylistTrackPage {
-        var comm: [String: Any] = [
+        var primaryComm: [String: Any] = [
             "ct": 24, "cv": 4_747_474, "platform": "yqq.json",
             "uin": profileID, "g_tk": csrf,
             "g_tk_new_20200303": csrf,
             "format": "json", "inCharset": "utf-8",
             "outCharset": "utf-8", "notice": 0, "need_new_code": 1
         ]
-        // A web skey/p_skey derives g_tk, but is not a Music authst ticket.
+        // CgiGetDiss uses the logged-in account's current session.
         if let ticket = Self.musicAuthTicket(in: cookieValues) {
-            comm["authst"] = ticket
+            primaryComm["authst"] = ticket
         }
         let commonParam: [String: Any] = [
             "disstid": playlistID,
@@ -714,7 +723,7 @@ actor QQMusicAPI {
         primaryParam["dirid"] = isLikedSongs ? 201 : 0
         primaryParam["onlysonglist"] = false
         let primaryPayload: [String: Any] = [
-            "comm": comm,
+            "comm": primaryComm,
             "playlist": [
                 "module": "music.srfDissInfo.DissInfo",
                 "method": "CgiGetDiss",
@@ -722,12 +731,26 @@ actor QQMusicAPI {
             ]
         ]
 
-        var fallbackParam = commonParam
-        fallbackParam["dirid"] = isLikedSongs ? 201 : 0
-        fallbackParam["enc_host_uin"] = ""
-        fallbackParam["onlysonglist"] = 0
+        // Match LX Music Mobile's public uniform_get_Dissinfo request shape.
+        // Mixing the private profile UIN, g_tk, or authst into this fallback
+        // can make QQ reject an otherwise valid request with 3a44.
+        let fallbackComm: [String: Any] = [
+            "ct": 24, "cv": 4_747_474, "platform": "yqq.json",
+            "uin": 0, "format": "json", "inCharset": "utf-8",
+            "outCharset": "utf-8", "needNewCode": 1
+        ]
+        let fallbackParam: [String: Any] = [
+            "disstid": playlistID,
+            "tag": 1,
+            "song_begin": offset,
+            "song_num": pageSize,
+            "userinfo": 1,
+            "orderlist": 1,
+            "onlysonglist": 0,
+            "enc_host_uin": ""
+        ]
         let fallbackPayload: [String: Any] = [
-            "comm": comm,
+            "comm": fallbackComm,
             "req_1": [
                 "module": "music.srfDissInfo.aiDissInfo",
                 "method": "uniform_get_Dissinfo",
@@ -737,6 +760,8 @@ actor QQMusicAPI {
 
         var firstError: Error?
         var sessionError: Error?
+        var fallbackError: Error?
+        var bestIncompletePage: PlaylistTrackPage?
         for (responseKey, payload) in [("playlist", primaryPayload), ("req_1", fallbackPayload)] {
             do {
                 try Task.checkCancellation()
@@ -753,8 +778,17 @@ actor QQMusicAPI {
 
                 let (data, response) = try await session.data(for: request)
                 guard Self.isSuccess(response),
-                      let root = Self.jsonObject(from: data),
-                      let block = root[responseKey] as? [String: Any],
+                      let root = Self.jsonObject(from: data) else {
+                    throw Self.playlistTracksRejection(
+                        from: data,
+                        response: response,
+                        cookieValues: cookieValues
+                    )
+                }
+                if let rootCode = Self.text(root["code"]), rootCode != "0" {
+                    throw APIError.providerRejected(Self.responseDiagnostic(from: root))
+                }
+                guard let block = root[responseKey] as? [String: Any],
                       Self.integer(in: block, keys: ["code", "result"]) == 0,
                       let result = block["data"] as? [String: Any],
                       let rows = result["songlist"] as? [[String: Any]] else {
@@ -765,37 +799,46 @@ actor QQMusicAPI {
                     )
                 }
                 let hasMoreKeys = ["hasmore", "hasMore", "has_more"]
-                return PlaylistTrackPage(
+                let page = PlaylistTrackPage(
                     rows: rows,
                     totalCount: Self.integer(in: result, keys: ["total_song_num", "songlist_size", "totalNum"]),
                     hasMore: Self.boolean(in: result, keys: hasMoreKeys)
                         ?? Self.boolean(in: block, keys: hasMoreKeys)
                 )
+                let knownCount = max(expectedPlaylistCount ?? 0, page.totalCount ?? 0)
+                let requiredRows = knownCount > offset
+                    ? min(pageSize, knownCount - offset)
+                    : nil
+                let needsFallback = page.rows.isEmpty
+                    || (requiredRows.map { page.rows.count < $0 } ?? false)
+                    || (page.hasMore == true && page.rows.count < pageSize)
+                guard needsFallback else { return page }
+                if bestIncompletePage == nil || page.rows.count > bestIncompletePage!.rows.count {
+                    bestIncompletePage = page
+                }
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error as APIError {
+                if responseKey == "req_1" { fallbackError = fallbackError ?? error }
                 if case .sessionCredentialRejected = error {
                     sessionError = sessionError ?? error
                 }
                 if firstError == nil { firstError = error }
             } catch {
+                if responseKey == "req_1" { fallbackError = fallbackError ?? error }
                 if firstError == nil { firstError = error }
             }
         }
 
-        if let sessionError { throw sessionError }
-        throw firstError ?? APIError.invalidResponse
-    }
-
-    /// The directory's advertised count is independent from the selected
-    /// playlist response, so callers can supply it as a second completeness
-    /// check when the track endpoint omits its own total metadata.
-    func playlistTracks(id: String, cookie: String, expectedTrackCount: Int) async throws -> PlaylistTracksResult {
-        let result = try await playlistTracks(id: id, cookie: cookie)
-        if expectedTrackCount > 0, result.tracks.count < expectedTrackCount {
-            throw APIError.incompletePlaylist
+        if let bestIncompletePage, !bestIncompletePage.rows.isEmpty {
+            if let fallbackError { throw fallbackError }
+            return bestIncompletePage
         }
-        return result
+        if let sessionError { throw sessionError }
+        if let fallbackError { throw fallbackError }
+        if let firstError { throw firstError }
+        if let bestIncompletePage { return bestIncompletePage }
+        throw APIError.invalidResponse
     }
 
     private func fetchPlaylistPages(
