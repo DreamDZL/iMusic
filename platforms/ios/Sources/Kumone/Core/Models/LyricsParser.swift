@@ -66,6 +66,9 @@ enum LyricsParser {
         let verbatimLines = [
             parseYRC(yrc),
             parseLXVerbatim(lxlyric),
+            parseQRC(yrc),
+            parseQRC(lxlyric),
+            parseQRC(lyric),
             parseLXVerbatim(yrc),
             parseYRC(lxlyric),
             parseLXVerbatim(lyric),
@@ -238,6 +241,56 @@ enum LyricsParser {
             idx += 1
         }
         return lines
+    }
+
+    /// Parses QQ Music's plain QRC format after the lyric response is decoded:
+    /// `[lineStartMs,lineDurationMs]text(wordStartMs,wordDurationMs)`. QQ may
+    /// wrap the payload in an XML `LyricContent` attribute and escape its
+    /// contents, so unwrap that form before reading the timed words.
+    static func parseQRC(_ input: String?) -> [LyricLine] {
+        guard let input, !input.isEmpty else { return [] }
+        let body = qrcContent(in: normalize(input))
+        let lineTag = #/^\[(\d+),(\d+)\](.*)$/#
+        let wordTag = #/(.*?)\((\d+),(\d+)\)/#
+        var lines: [LyricLine] = []
+
+        for rawLine in body.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let head = line.firstMatch(of: lineTag) else { continue }
+            let lineStart = (Double(head.output.1) ?? 0) / 1000
+            let content = String(head.output.3)
+            let matches = content.matches(of: wordTag)
+            guard !matches.isEmpty else { continue }
+
+            var words: [LyricWord] = []
+            var text = ""
+            for match in matches {
+                let piece = String(match.output.1)
+                let start = (Double(match.output.2) ?? 0) / 1000
+                let duration = (Double(match.output.3) ?? 0) / 1000
+                guard !piece.isEmpty else { continue }
+                words.append(LyricWord(text: piece, start: start, duration: duration))
+                text += piece
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !words.isEmpty else { continue }
+            lines.append(LyricLine(id: lines.count, time: lineStart, text: trimmed, words: words))
+        }
+        return lines
+    }
+
+    private static func qrcContent(in input: String) -> String {
+        let attribute = #/LyricContent\s*=\s*"([^"]*)"/#
+        guard let value = input.firstMatch(of: attribute) else { return input }
+        return String(value.output.1)
+            .replacingOccurrences(of: "&#xA;", with: "\n", options: .caseInsensitive)
+            .replacingOccurrences(of: "&#10;", with: "\n")
+            .replacingOccurrences(of: "&#13;", with: "\r")
+            .replacingOccurrences(of: "&quot;", with: "\"", options: .caseInsensitive)
+            .replacingOccurrences(of: "&apos;", with: "'", options: .caseInsensitive)
+            .replacingOccurrences(of: "&lt;", with: "<", options: .caseInsensitive)
+            .replacingOccurrences(of: "&gt;", with: ">", options: .caseInsensitive)
+            .replacingOccurrences(of: "&amp;", with: "&", options: .caseInsensitive)
     }
 
     static func parse(_ response: LyricResponse, includeVerbatim: Bool = true) -> ParsedLyrics {

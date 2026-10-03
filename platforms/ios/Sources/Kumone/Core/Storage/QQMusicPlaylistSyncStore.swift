@@ -64,7 +64,7 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
             lastRefreshedSessionRevision = sessionRevision
         } catch {
             guard session.sessionRevision == sessionRevision, session.isLoggedIn else { return }
-            errorMessage = "QQ 歌单暂时无法获取，请稍后重试。"
+            errorMessage = "QQ 歌单暂时无法获取：\(error.localizedDescription)"
         }
     }
 

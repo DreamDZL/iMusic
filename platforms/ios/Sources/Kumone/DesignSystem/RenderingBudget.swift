@@ -81,16 +81,15 @@ final class RenderingBudget: ObservableObject {
         isSceneActive && allowsContinuousEffects && !reduceMotion
     }
 
-    /// Word-by-word lyric highlighting is continuous decorative work. Keep it
-    /// live only while playback is visible and the device has its full visual
-    /// budget; the coarse playback observer still advances the active lyric
-    /// line when this returns `false`.
+    /// Keep karaoke timing active while playback is visible. Its TimelineView
+    /// interval already follows the thermal and Low Power Mode budget, so
+    /// reducing the cadence preserves synchronization without full-rate work.
     nonisolated static func permitsLiveLyricAnimation(
         isPlaying: Bool,
         isSceneActive: Bool,
-        allowsContinuousEffects: Bool
+        allowsContinuousEffects _: Bool
     ) -> Bool {
-        isPlaying && isSceneActive && allowsContinuousEffects
+        isPlaying && isSceneActive
     }
 
     nonisolated static func permitsAudioAnalysis(

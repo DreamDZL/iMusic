@@ -78,7 +78,9 @@ struct SettingsView: View {
                 } label: {
                     Label("LX 多设备同步", systemImage: "arrow.triangle.2.circlepath")
                 }
-                NavigationLink(value: Destination.accountSync) {
+                NavigationLink {
+                    AccountSyncView()
+                } label: {
                     Label("账号同步", systemImage: "person.crop.circle.badge.checkmark")
                 }
                 Button { showNeteaseLogin = true } label: {

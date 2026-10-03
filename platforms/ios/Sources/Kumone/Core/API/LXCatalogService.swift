@@ -1055,25 +1055,35 @@ enum LXCatalogService {
             URLQueryItem(name: "loginUin", value: "0"),
             URLQueryItem(name: "hostUin", value: "0"),
             URLQueryItem(name: "format", value: "json"),
+            URLQueryItem(name: "nobase64", value: "1"),
             URLQueryItem(name: "inCharset", value: "utf8"),
             URLQueryItem(name: "outCharset", value: "utf-8"),
             URLQueryItem(name: "platform", value: "yqq"),
         ]
         let root = try await fetchObject(components.url!, headers: ["Referer": "https://y.qq.com/portal/player.html"]) as? [String: Any]
-        guard int(root?["code"]) == 0, let raw = text(root?["lyric"]),
-              let data = Data(base64Encoded: raw, options: .ignoreUnknownCharacters),
-              let lyric = String(data: data, encoding: .utf8), !lyric.isEmpty else {
+        guard int(root?["code"]) == 0, let raw = text(root?["lyric"]), !raw.isEmpty else {
             throw LXCatalogError.invalidResponse
         }
+        let lyric: String
+        if raw.contains("[") || raw.contains("<") {
+            lyric = raw
+        } else {
+            lyric = Data(base64Encoded: raw, options: .ignoreUnknownCharacters)
+                .flatMap { String(data: $0, encoding: .utf8) } ?? raw
+        }
         let translation: String?
-        if let rawTranslation = text(root?["trans"]),
-           let translationData = Data(base64Encoded: rawTranslation,
-                                      options: .ignoreUnknownCharacters) {
-            translation = String(data: translationData, encoding: .utf8)
+        if let rawTranslation = text(root?["trans"]), !rawTranslation.isEmpty {
+            if rawTranslation.contains("[") || rawTranslation.contains("<") {
+                translation = rawTranslation
+            } else {
+                translation = Data(base64Encoded: rawTranslation,
+                                   options: .ignoreUnknownCharacters)
+                    .flatMap { String(data: $0, encoding: .utf8) } ?? rawTranslation
+            }
         } else {
             translation = nil
         }
-        return NativeLyrics(lyric: lyric, tlyric: translation, rlyric: nil, lxlyric: nil)
+        return NativeLyrics(lyric: lyric, tlyric: translation, rlyric: nil, lxlyric: lyric)
     }
 
     private static func nativeMiguLyrics(for track: Track) async throws -> NativeLyrics {

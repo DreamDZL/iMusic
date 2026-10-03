@@ -40,9 +40,7 @@ final class QQMusicSessionStore: ObservableObject {
         guard ProviderSessionSupport.looksLikeCookie(cookie) else { throw SessionError.invalidCookie }
         sessionRevision &+= 1
         let requestRevision = sessionRevision
-        guard let profile = try? await QQMusicAPI.shared.profile(cookie: cookie) else {
-            throw SessionError.validationFailed
-        }
+        let profile = try await QQMusicAPI.shared.profile(cookie: cookie)
         guard requestRevision == sessionRevision else { throw SessionError.validationFailed }
         do {
             try ProviderSessionSupport.writeCookie(cookie, service: keychainService)
