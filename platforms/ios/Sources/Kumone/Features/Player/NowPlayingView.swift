@@ -50,20 +50,6 @@ struct NowPlayingView: View {
             // Pin to the screen width so an intrinsically-wide child can never
             // stretch the ZStack and push the corner overlays off-screen.
             .frame(width: geo.size.width)
-            .overlay(alignment: .top) {
-                Button {
-                    close()
-                } label: {
-                    Capsule()
-                        .fill(.white.opacity(0.48))
-                        .frame(width: 42, height: 5)
-                        .frame(width: 64, height: 36)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.pressable)
-                .accessibilityLabel("关闭播放器")
-                .padding(.top, 10)
-            }
             .overlay(alignment: .topTrailing) {
                 if showLyricsOnMobile {
                     Button {
@@ -832,14 +818,16 @@ struct NowPlayingView: View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(player.currentTrack?.name ?? "")
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.system(.title2, design: .default, weight: .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.78)
                     .accessibilityAddTraits(.isHeader)
                 Text(player.currentTrack?.artistNames ?? "")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(.title3, design: .default, weight: .medium))
                     .foregroundStyle(.white.opacity(0.68))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.78)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1130,7 +1118,11 @@ struct NowPlayingView: View {
                 }
                 LyricMainText(
                     line: line, isActive: isActive,
-                    font: .system(size: isActive ? 26 : 20, weight: isActive ? .bold : .semibold),
+                    font: .system(
+                        isActive ? .largeTitle : .title3,
+                        design: .default,
+                        weight: isActive ? .bold : .semibold
+                    ),
                     verbatim: settings.verbatimLyrics
                 )
                 if settings.showLyricsTranslation, let translation = line.translation {

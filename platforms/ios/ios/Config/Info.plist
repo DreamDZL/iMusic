@@ -11,7 +11,7 @@
         <string>audio</string>
     </array>
     <key>NSSupportsLiveActivities</key>
-    <true/>
+    <false/>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

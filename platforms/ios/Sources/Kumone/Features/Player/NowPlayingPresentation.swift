@@ -185,6 +185,8 @@ struct IOSNowPlayingPresentation<Content: View>: View {
                     width: NowPlayingPresentationMetrics.indicatorWidth,
                     height: NowPlayingPresentationMetrics.indicatorHeight
                 )
+                .contentShape(Rectangle())
+                .onTapGesture(perform: dismiss)
                 .padding(.top, NowPlayingPresentationMetrics.indicatorTopSpacing)
         }
         .frame(

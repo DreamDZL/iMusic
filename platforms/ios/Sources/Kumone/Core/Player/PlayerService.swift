@@ -328,9 +328,6 @@ final class PlayerService: ObservableObject {
             guard isPlaying else { return }
             engine.rate = playbackRate
             NowPlayingManager.shared.updateElapsed(progress, rate: Double(playbackRate))
-#if os(iOS)
-            syncLiveActivity()
-#endif
         }
     }
 
@@ -476,6 +473,13 @@ final class PlayerService: ObservableObject {
         runtimeStarted = true
 
 #if os(iOS)
+        // Older builds published a custom Live Activity alongside Apple's
+        // native Now Playing card. End any activity left by an upgrade and
+        // keep the system card as the only lock-screen playback surface.
+        if #available(iOS 16.2, *) {
+            MoumusicPlaybackActivityManager.shared.endExistingActivities()
+        }
+
         // Resume after interruptions (phone calls, WeChat voice messages, …).
         NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
@@ -562,27 +566,6 @@ final class PlayerService: ObservableObject {
         }
     }
 
-#if os(iOS)
-    /// Starts or refreshes the system Live Activity. The system performs the
-    /// actual expanded-to-compact Dynamic Island transition when the user
-    /// leaves the app or it moves to the background.
-    private func syncLiveActivity(newTrack: Bool = false) {
-        guard #available(iOS 16.2, *), let track = currentTrack else { return }
-        MoumusicPlaybackActivityManager.shared.synchronize(
-            title: track.name,
-            artist: track.artistNames,
-            artworkURL: track.album.picUrl,
-            elapsed: progress,
-            duration: duration,
-            isPlaying: isPlaying,
-            playbackRate: Double(playbackRate),
-            newTrack: newTrack
-        )
-    }
-#else
-    private func syncLiveActivity(newTrack: Bool = false) {}
-#endif
-
     /// Stop every playback surface when a track cannot start or the queue ends.
     /// Keep the selected track and elapsed position available for retry.
     private func settlePlaybackAsPaused(preservingCurrentItemForRetry: Bool = false) {
@@ -609,7 +592,6 @@ final class PlayerService: ObservableObject {
         } else {
             AudioSpectrum.shared.markIdle()
         }
-        syncLiveActivity()
         persistState()
     }
 
@@ -630,7 +612,6 @@ final class PlayerService: ObservableObject {
                 // The system already silenced us; sync our state and UI.
                 isPlaying = false
                 NowPlayingManager.shared.updateElapsed(progress, rate: 0)
-                syncLiveActivity()
             }
         case .ended:
             let optionsValue = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
@@ -640,14 +621,12 @@ final class PlayerService: ObservableObject {
             guard activateAudioSession() else {
                 isPlaying = false
                 NowPlayingManager.shared.updateElapsed(progress, rate: 0)
-                syncLiveActivity()
                 return
             }
             engine.play()
             engine.rate = playbackRate
             isPlaying = true
             NowPlayingManager.shared.updateElapsed(progress, rate: Double(playbackRate))
-            syncLiveActivity()
         @unknown default:
             break
         }
@@ -762,7 +741,6 @@ final class PlayerService: ObservableObject {
             isPlaying = true
         }
         NowPlayingManager.shared.updateElapsed(progress, rate: isPlaying ? Double(playbackRate) : 0)
-        syncLiveActivity()
     }
 
     func pause() {
@@ -781,7 +759,6 @@ final class PlayerService: ObservableObject {
         isPlaying = false
         AudioSpectrum.shared.reset()
         NowPlayingManager.shared.updateElapsed(progress, rate: 0)
-        syncLiveActivity()
     }
 
     func next() {
@@ -877,7 +854,6 @@ final class PlayerService: ObservableObject {
             target,
             rate: isPlaying ? Double(playbackRate) : 0
         )
-        syncLiveActivity()
 
         guard itemAvailable else {
             // Keep a seek made while a source is resolving for the new item.
@@ -1199,13 +1175,11 @@ final class PlayerService: ObservableObject {
                 isPlaying = false
                 ToastCenter.shared.show("无法启用音频会话，请稍后重试")
                 NowPlayingManager.shared.updateElapsed(progress, rate: 0)
-                syncLiveActivity()
                 return
             }
 #endif
             engine.play()
             isPlaying = true
-            syncLiveActivity()
             return
         }
         advanceToNext(userInitiated: false)
@@ -1246,7 +1220,6 @@ final class PlayerService: ObservableObject {
         scrobbled = false
         startScrobbled = false
         isPlaying = true
-        syncLiveActivity(newTrack: true)
         lyricsCursor.activeIndex = nil
         // Before the URL is even resolved: holds the bars still rather than
         // letting them fall back to the decorative animation for the moment it

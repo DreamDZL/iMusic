@@ -68,100 +68,21 @@ public struct MoumusicPlaybackActivityAttributes: ActivityAttributes {
     }
 }
 
-/// Keeps one now-playing Live Activity in sync with the audio player.
-/// Dynamic Island expansion/compaction is controlled by iOS; the app only
-/// supplies the playback state and does not need to fake an animation.
+/// Cleans up Live Activities created by older versions of the app. Playback
+/// now uses Apple's native Now Playing card exclusively.
 @available(iOS 16.2, *)
 @MainActor
 final class MoumusicPlaybackActivityManager {
     static let shared = MoumusicPlaybackActivityManager()
 
-    private var activity: Activity<MoumusicPlaybackActivityAttributes>?
-    private var sessionID = UUID().uuidString
-    private var lastState: MoumusicPlaybackActivityAttributes.ContentState?
-
     private init() {}
 
-    func synchronize(
-        title: String,
-        artist: String,
-        artworkURL: String?,
-        elapsed: TimeInterval,
-        duration: TimeInterval,
-        isPlaying: Bool,
-        playbackRate: Double = 1,
-        newTrack: Bool = false
-    ) {
-        if newTrack {
-            sessionID = UUID().uuidString
+    func endExistingActivities() {
+        Task {
+            for activity in Activity<MoumusicPlaybackActivityAttributes>.activities {
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
         }
-
-        let state = MoumusicPlaybackActivityAttributes.ContentState(
-            title: title,
-            artist: artist,
-            artworkURL: artworkURL,
-            elapsed: elapsed,
-            duration: duration,
-            isPlaying: isPlaying,
-            playbackRate: playbackRate
-        )
-        lastState = state
-
-        Task { [weak self] in
-            guard let self else { return }
-            await self.upsert(state)
-        }
-    }
-
-    func end() {
-        Task { [weak self] in
-            guard let self else { return }
-            await self.finish()
-        }
-    }
-
-    private func upsert(_ state: MoumusicPlaybackActivityAttributes.ContentState) async {
-        if activity == nil {
-            activity = Activity<MoumusicPlaybackActivityAttributes>.activities.first
-        }
-
-        let content = ActivityContent(state: state, staleDate: nil)
-        if let activity {
-            await activity.update(content)
-            return
-        }
-
-        do {
-            activity = try Activity.request(
-                attributes: MoumusicPlaybackActivityAttributes(sessionID: sessionID),
-                content: content,
-                pushType: nil
-            )
-        } catch {
-            // Live Activities are optional. A rejected request must never
-            // interrupt ordinary audio playback.
-            #if DEBUG
-            print("Moumusic Live Activity unavailable: \(error)")
-            #endif
-        }
-    }
-
-    private func finish() async {
-        guard let activity else { return }
-        let finalState = lastState ?? MoumusicPlaybackActivityAttributes.ContentState(
-            title: "iMusic",
-            artist: "",
-            artworkURL: nil,
-            elapsed: 0,
-            duration: 0,
-            isPlaying: false
-        )
-        await activity.end(
-            ActivityContent(state: finalState, staleDate: nil),
-            dismissalPolicy: .immediate
-        )
-        self.activity = nil
-        self.lastState = nil
     }
 }
 #endif
