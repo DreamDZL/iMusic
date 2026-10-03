@@ -106,7 +106,7 @@ struct SettingsView: View {
                         // QQ's profile CGI sometimes returns an opaque value
                         // such as "3a44" in the nickname field. Keep the
                         // connection state separate from untrusted display data.
-                        Text(qqMusic.isLoggedIn ? "已登录" : "未登录")
+                        Text(qqMusic.settingsStatusText)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)

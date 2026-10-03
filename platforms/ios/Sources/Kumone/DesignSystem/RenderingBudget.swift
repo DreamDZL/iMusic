@@ -87,7 +87,17 @@ final class RenderingBudget: ObservableObject {
     nonisolated static func permitsLiveLyricAnimation(
         isPlaying: Bool,
         isSceneActive: Bool,
-        allowsContinuousEffects _: Bool
+        allowsContinuousEffects: Bool
+    ) -> Bool {
+        isPlaying && isSceneActive && allowsContinuousEffects
+    }
+
+    /// Karaoke is time-driven content, not a decorative effect. Keep it in
+    /// sync during Low Power Mode and thermal throttling; TimelineView uses
+    /// `minimumAnimationInterval` to lower its redraw cadence under pressure.
+    nonisolated static func permitsTimeDrivenLyricUpdates(
+        isPlaying: Bool,
+        isSceneActive: Bool
     ) -> Bool {
         isPlaying && isSceneActive
     }

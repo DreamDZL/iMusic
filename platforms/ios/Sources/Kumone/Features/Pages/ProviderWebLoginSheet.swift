@@ -60,8 +60,7 @@ enum ProviderWebLoginKind: String, Identifiable {
             // forms the profile and playlist endpoints actually understand.
             let identifiers = ["uin", "qqmusic_uin", "p_uin", "musicid", "loginuin", "wxuin"]
             let keys = ["qqmusic_key", "qm_keyst", "music_key", "musickey",
-                        "p_skey", "skey", "pskey", "wx_skey", "wxskey",
-                        "psrf_qqaccess_token", "psrf_qqrefresh_token", "wxrefresh_token"]
+                        "p_skey", "skey", "pskey", "wx_skey", "wxskey"]
             let hasUser = identifiers.contains { Self.isUsableQQIdentifier(values[$0]) }
             return hasUser && keys.contains { !(values[$0] ?? "").isEmpty }
         case .kugou:

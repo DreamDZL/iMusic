@@ -142,6 +142,10 @@ public struct IOSMainWindow: View {
                 usesSystemInteractiveDismissal: true,
                 dismissAnimation: nil
             )
+            // The player draws one accessible, high-hit-area grabber itself.
+            // Hiding the presentation container's handle prevents the double
+            // horizontal bar seen above the album artwork on recent iOS.
+            .presentationDragIndicator(.hidden)
             .presentationBackground(Color(uiColor: .systemBackground))
         } else {
             nowPlayingPresentation(
@@ -254,7 +258,7 @@ public struct IOSMainWindow: View {
 
             // The search role pins the magnifying-glass tab at the trailing
             // edge, matching Music's separated search control.
-            Tab(value: .search, role: .search) {
+            Tab("搜索", systemImage: "magnifyingglass", value: .search, role: .search) {
                 tabStack(.search) { SearchView(query: "") }
             }
         }
@@ -353,8 +357,8 @@ extension IOSMainWindow {
         .init(tab: .home, title: "主页", icon: "house"),
         .init(tab: .new, title: "新内容", icon: "square.grid.2x2"),
         .init(tab: .radio, title: "广播", icon: "dot.radiowaves.left.and.right"),
-        .init(tab: .search, title: "搜索", icon: "magnifyingglass"),
         .init(tab: .library, title: "资料库", icon: "square.stack"),
+        .init(tab: .search, title: "搜索", icon: "magnifyingglass"),
     ]
 }
 

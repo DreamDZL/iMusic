@@ -29,8 +29,30 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
     private var lastRefreshAttempt: Date?
     private var lastRefreshedSessionRevision: Int?
     private var loginSyncTask: Task<Void, Never>?
+    private var loginSyncTaskID: UUID?
+    private var loginSyncTaskRevision: Int?
 
     private init() {}
+
+    func hasValidatedSnapshot(for sessionRevision: Int) -> Bool {
+        lastRefreshedSessionRevision == sessionRevision && errorMessage == nil
+    }
+
+    /// Seeds the first account-sync pass with the response that validated the
+    /// just-completed login, avoiding a duplicate provider request.
+    func acceptValidatedSnapshot(
+        _ result: QQMusicAPI.PlaylistListResult,
+        sessionRevision: Int
+    ) {
+        let session = QQMusicSessionStore.shared
+        guard session.isLoggedIn, session.sessionRevision == sessionRevision else { return }
+        playlists = result.playlists
+        warningMessage = result.warningMessage
+        errorMessage = nil
+        lastRefreshedAt = .now
+        lastRefreshAttempt = .now
+        lastRefreshedSessionRevision = sessionRevision
+    }
 
     /// Refreshes only playlist metadata. Track pages are fetched during the
     /// post-login copy or after a user explicitly retries a local copy.
@@ -65,6 +87,7 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
             session.acceptRefreshedCookie(result.refreshedCookie,
                                           expectedSessionRevision: sessionRevision,
                                           expectedCookie: requestCookie)
+            session.recordPlaylistValidationSuccess(expectedSessionRevision: sessionRevision)
             playlists = result.playlists
             warningMessage = result.warningMessage
             lastRefreshedAt = .now
@@ -72,6 +95,10 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
         } catch {
             guard session.sessionRevision == sessionRevision, session.isLoggedIn else { return }
             errorMessage = "QQ 歌单暂时无法获取：\(error.localizedDescription)"
+            session.recordPlaylistValidationFailure(
+                error.localizedDescription,
+                expectedSessionRevision: sessionRevision
+            )
         }
     }
 
@@ -79,58 +106,87 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
     /// the local library. Track requests run serially and the local copies keep
     /// the existing protection against overwriting edits made in iMusic.
     func syncAfterLogin() async {
-        if let loginSyncTask {
-            await loginSyncTask.value
+        let session = QQMusicSessionStore.shared
+        while session.isLoggedIn {
+            let revision = session.sessionRevision
+            if let task = loginSyncTask, let taskID = loginSyncTaskID {
+                let taskRevision = loginSyncTaskRevision
+                await task.value
+                if loginSyncTaskID == taskID {
+                    loginSyncTask = nil
+                    loginSyncTaskID = nil
+                    loginSyncTaskRevision = nil
+                }
+                guard session.isLoggedIn else { return }
+                if session.sessionRevision != revision || taskRevision != revision { continue }
+                return
+            }
+
+            let taskID = UUID()
+            let task = Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.runLoginSync(sessionRevision: revision)
+            }
+            loginSyncTask = task
+            loginSyncTaskID = taskID
+            loginSyncTaskRevision = revision
+            await task.value
+            if loginSyncTaskID == taskID {
+                loginSyncTask = nil
+                loginSyncTaskID = nil
+                loginSyncTaskRevision = nil
+            }
+            guard session.isLoggedIn else { return }
+            if session.sessionRevision == revision { return }
+        }
+    }
+
+    private func runLoginSync(sessionRevision revision: Int) async {
+        let session = QQMusicSessionStore.shared
+        guard session.isLoggedIn, session.sessionRevision == revision else { return }
+        isSyncingAfterLogin = true
+        lastLoginSyncMessage = nil
+        defer { isSyncingAfterLogin = false }
+
+        // AccountSyncView also refreshes on the session change. Join that
+        // request instead of issuing duplicate playlist calls.
+        while isRefreshing {
+            guard session.isLoggedIn, session.sessionRevision == revision else { return }
+            try? await Task.sleep(for: .milliseconds(100))
+            guard !Task.isCancelled else { return }
+        }
+        guard session.isLoggedIn, session.sessionRevision == revision else { return }
+        if lastRefreshedSessionRevision != revision || errorMessage != nil {
+            await refresh(force: true)
+        }
+        guard session.isLoggedIn, session.sessionRevision == revision else { return }
+        guard lastRefreshedSessionRevision == revision, errorMessage == nil else {
+            lastLoginSyncMessage = errorMessage
             return
         }
-        let session = QQMusicSessionStore.shared
-        guard session.isLoggedIn else { return }
-        let revision = session.sessionRevision
-        let task = Task { @MainActor [weak self] in
-            guard let self else { return }
-            self.isSyncingAfterLogin = true
-            self.lastLoginSyncMessage = nil
-            defer { self.isSyncingAfterLogin = false }
-
-            // AccountSyncView also refreshes on the session change. Join that
-            // request instead of issuing duplicate playlist calls.
-            while self.isRefreshing {
-                guard session.isLoggedIn, session.sessionRevision == revision else { return }
-                try? await Task.sleep(for: .milliseconds(100))
-                guard !Task.isCancelled else { return }
-            }
-            guard session.isLoggedIn, session.sessionRevision == revision else { return }
-            if self.lastRefreshedSessionRevision != revision || self.errorMessage != nil {
-                await self.refresh(force: true)
-            }
-            guard session.isLoggedIn, session.sessionRevision == revision else { return }
-            guard self.lastRefreshedSessionRevision == revision, self.errorMessage == nil else {
-                self.lastLoginSyncMessage = self.errorMessage
-                return
-            }
-            guard !self.playlists.isEmpty else {
-                self.lastLoginSyncMessage = self.warningMessage.map {
-                    "没有导入歌单：\($0)"
-                } ?? "账号中没有可同步的歌单"
-                return
-            }
-
-            let report = await self.importSelected(Set(self.playlists.map(\.id)))
-            guard session.isLoggedIn, session.sessionRevision == revision else { return }
-            if report.failed.isEmpty {
-                self.lastLoginSyncMessage = "QQ 歌单同步完成：新增 \(report.inserted)，更新 \(report.updated)，最新 \(report.unchanged)"
-            } else {
-                self.lastLoginSyncMessage = "已同步 \(report.changedCount) 个，\(report.failed.count) 个歌单暂时失败"
-            }
-            if let warning = self.warningMessage {
-                self.lastLoginSyncMessage = [self.lastLoginSyncMessage, warning]
-                    .compactMap { $0 }
-                    .joined(separator: "；")
-            }
+        guard !playlists.isEmpty else {
+            lastLoginSyncMessage = warningMessage.map {
+                "没有导入歌单：\($0)"
+            } ?? "账号中没有可同步的歌单"
+            return
         }
-        loginSyncTask = task
-        await task.value
-        loginSyncTask = nil
+
+        let report = await importSelected(Set(playlists.map(\.id)))
+        guard session.isLoggedIn, session.sessionRevision == revision else { return }
+        if report.failed.isEmpty {
+            lastLoginSyncMessage = "QQ 歌单同步完成：新增 \(report.inserted)，更新 \(report.updated)，最新 \(report.unchanged)"
+        } else {
+            let details = report.failed.prefix(2).joined(separator: "；")
+            let shortenedDetails = details.count > 220
+                ? String(details.prefix(217)) + "…"
+                : details
+            lastLoginSyncMessage = "已同步 \(report.changedCount) 个，\(report.failed.count) 个歌单暂时失败：\(shortenedDetails)"
+        }
+        if let warning = warningMessage {
+            lastLoginSyncMessage = [lastLoginSyncMessage, warning]
+                .compactMap { $0 }
+                .joined(separator: "；")
+        }
     }
 
     func isImported(_ playlistID: String) -> Bool {
@@ -177,6 +233,7 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
         var updated = 0
         var unchanged = 0
         var failed: [String] = []
+        var successfullyReadTrackList = false
         let localStore = LocalPlaylistStore.shared
 
         for playlist in selected {
@@ -213,6 +270,7 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                     failed.append("\(playlist.name)：QQ 登录状态已变化，未保存本地副本")
                     break
                 }
+                successfullyReadTrackList = true
                 session.acceptRefreshedCookie(tracksResult.refreshedCookie,
                                               expectedSessionRevision: sessionRevision,
                                               expectedCookie: currentCookie)
@@ -253,8 +311,23 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                 failed.append("\(playlist.name)：导入已取消")
                 break
             } catch {
+                if let apiError = error as? QQMusicAPI.APIError,
+                   case .sessionCredentialRejected = apiError {
+                    session.recordPlaylistValidationFailure(
+                        error.localizedDescription,
+                        expectedSessionRevision: sessionRevision
+                    )
+                    failed.append("\(playlist.name)：\(error.localizedDescription)")
+                    // This is a session-wide credential failure; repeating the
+                    // same request for every playlist only adds long waits.
+                    break
+                }
                 failed.append("\(playlist.name)：\(error.localizedDescription)")
             }
+        }
+
+        if failed.isEmpty, successfullyReadTrackList {
+            session.recordTrackListSyncSuccess(expectedSessionRevision: sessionRevision)
         }
 
         return ImportReport(inserted: inserted, updated: updated, unchanged: unchanged, failed: failed)

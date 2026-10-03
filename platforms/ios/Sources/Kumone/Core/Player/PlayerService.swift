@@ -417,6 +417,9 @@ final class PlayerService: ObservableObject {
         return t.isFinite ? t : progress
     }
     private var timeObserver: Any?
+    private var lyricCursorObserver: Any?
+    private var powerStateObservers: [NSObjectProtocol] = []
+    private var lastPublishedSystemLyric: String?
     private var isSceneActive = true
     private var endObserver: NSObjectProtocol?
     private var statusObservation: NSKeyValueObservation?
@@ -505,6 +508,7 @@ final class PlayerService: ObservableObject {
         #endif
 
         installTimeObserver()
+        observePowerStateChanges()
 
         statusObservation = engine.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
             Task { @MainActor in
@@ -517,11 +521,22 @@ final class PlayerService: ObservableObject {
     }
 
     nonisolated static func playbackTimeObserverInterval(isSceneActive: Bool) -> TimeInterval {
-        // Ten foreground samples per second keep line changes responsive;
-        // word highlighting reads AVPlayer's live clock at display cadence.
+        // Five foreground samples per second move the active lyric line.
+        // Per-word highlighting reads AVPlayer's live clock at a separately
+        // throttled display cadence, including under Low Power Mode.
         // The lower background cadence avoids unnecessary work while audio
         // continues playing off-screen.
-        isSceneActive ? 0.1 : 1.0
+        isSceneActive ? 0.2 : 1.0
+    }
+
+    nonisolated static func lyricCursorObserverInterval(
+        lowPowerMode: Bool,
+        thermalState: ProcessInfo.ThermalState
+    ) -> TimeInterval {
+        if thermalState == .critical { return 0.2 }
+        if thermalState == .serious { return 0.15 }
+        if lowPowerMode || thermalState == .fair { return 0.125 }
+        return 0.1
     }
 
     /// Keep lyric and scrubber updates responsive in the foreground, while
@@ -531,6 +546,30 @@ final class PlayerService: ObservableObject {
         isSceneActive = active
         guard runtimeStarted else { return }
         installTimeObserver()
+        installLyricCursorObserver()
+    }
+
+    private func observePowerStateChanges() {
+        guard powerStateObservers.isEmpty else { return }
+        // Read thermal state before registering, matching ProcessInfo's
+        // notification contract. RenderingBudget updates its UI cadence from
+        // the same notifications; this observer only adjusts lyric sampling.
+        _ = ProcessInfo.processInfo.thermalState
+        let names: [Notification.Name] = [
+            .NSProcessInfoPowerStateDidChange,
+            ProcessInfo.thermalStateDidChangeNotification
+        ]
+        powerStateObservers = names.map { name in
+            NotificationCenter.default.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.installLyricCursorObserver()
+                }
+            }
+        }
     }
 
     private func installTimeObserver() {
@@ -551,9 +590,12 @@ final class PlayerService: ObservableObject {
                 let seconds = item.currentTime().seconds
                 guard seconds.isFinite else { return }
 
-                // Lyrics need this cadence to stay in sync; the cursor itself
-                // only publishes when the line actually changes.
-                self.updateLyricsCursor(at: seconds)
+                // Background audio uses the slower shared observer. In the
+                // foreground, a separate lyric-only observer samples at up to
+                // 10 Hz without forcing scrubber or metadata publications.
+                if !self.isSceneActive {
+                    self.updateLyricsCursor(at: seconds)
+                }
 
                 // The scrubber does not. Publishing the position every tick
                 // re-renders it — and SwiftUI rebuilds the display list for the
@@ -566,6 +608,33 @@ final class PlayerService: ObservableObject {
                         rate: self.isPlaying ? Double(self.playbackRate) : 0
                     )
                 }
+            }
+        }
+    }
+
+    private func installLyricCursorObserver() {
+        if let lyricCursorObserver {
+            engine.removeTimeObserver(lyricCursorObserver)
+            self.lyricCursorObserver = nil
+        }
+        guard runtimeStarted, isSceneActive,
+              lyrics?.lines.contains(where: { $0.time.isFinite }) == true else { return }
+
+        let processInfo = ProcessInfo.processInfo
+        let interval = Self.lyricCursorObserverInterval(
+            lowPowerMode: processInfo.isLowPowerModeEnabled,
+            thermalState: processInfo.thermalState
+        )
+        lyricCursorObserver = engine.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: interval, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.isScrubbing, !self.isResolvingSource,
+                      let item = self.engine.currentItem else { return }
+                let seconds = item.currentTime().seconds
+                guard seconds.isFinite else { return }
+                self.updateLyricsCursor(at: seconds)
             }
         }
     }
@@ -797,7 +866,10 @@ final class PlayerService: ObservableObject {
         let snapshotLyric = index.flatMap { lyrics?.lines[$0].text }
             ?? lyrics?.lines.first?.text
         #if os(iOS)
-        NowPlayingManager.shared.updateCurrentLyric(snapshotLyric)
+        if snapshotLyric != lastPublishedSystemLyric {
+            lastPublishedSystemLyric = snapshotLyric
+            NowPlayingManager.shared.updateCurrentLyric(snapshotLyric)
+        }
         #endif
     }
 
@@ -808,6 +880,7 @@ final class PlayerService: ObservableObject {
     private func publishLyrics(_ parsed: ParsedLyrics, for track: Track, generation: Int) {
         lyrics = parsed
         updateLyricsCursor(at: livePlaybackTime)
+        installLyricCursorObserver()
 
         // Many source adapters provide the original lyrics but omit the
         // translation field. Enrich the already-visible lyrics from a public
@@ -1221,6 +1294,8 @@ final class PlayerService: ObservableObject {
         unblockSource = nil
         isTrial = false
         lyrics = nil
+        lastPublishedSystemLyric = nil
+        installLyricCursorObserver()
         scrobbled = false
         startScrobbled = false
         isPlaying = true

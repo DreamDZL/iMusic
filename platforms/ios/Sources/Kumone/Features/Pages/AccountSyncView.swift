@@ -57,7 +57,9 @@ struct AccountSyncView: View {
         }
         .task(id: qqMusic.sessionRevision) {
             guard qqMusic.isLoggedIn else { return }
-            await qqPlaylists.refresh(force: true)
+            if !qqPlaylists.hasValidatedSnapshot(for: qqMusic.sessionRevision) {
+                await qqPlaylists.refresh(force: true)
+            }
             await qqPlaylists.syncAfterLogin()
         }
         .sheet(isPresented: $showLogin) {
@@ -294,6 +296,10 @@ struct AccountSyncView: View {
                         .font(.caption)
                         .foregroundStyle(hasIssue ? Color.orange : Color.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    if message.contains("重新登录") || message.contains("曲目凭据") {
+                        Button("重新登录 QQ 音乐") { showQQLogin = true }
+                            .font(.caption.weight(.semibold))
+                    }
                 }
 
                 HStack(spacing: 8) {
@@ -338,9 +344,14 @@ struct AccountSyncView: View {
                 .disabled(qqPlaylists.isRefreshing || qqPlaylists.playlists.isEmpty)
 
                 if let error = qqPlaylists.errorMessage {
-                    Label(error, systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("重新登录 QQ 音乐") { showQQLogin = true }
+                            .font(.caption.weight(.semibold))
+                    }
                 }
                 if let warning = qqPlaylists.warningMessage {
                     Label(warning, systemImage: "exclamationmark.triangle")
@@ -349,6 +360,16 @@ struct AccountSyncView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
+                if qqMusic.isValidatingStoredSession {
+                    Label("正在验证 QQ 登录并读取歌单…", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if let validationMessage = qqMusic.sessionValidationMessage {
+                    Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Text("登录 QQ 音乐后，可选择读取你创建或收藏的歌单并导入为本地副本。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -356,10 +377,11 @@ struct AccountSyncView: View {
                 Button {
                     showQQLogin = true
                 } label: {
-                    Label("登录 QQ 音乐", systemImage: "qrcode.viewfinder")
+                    Label(qqMusic.isValidatingStoredSession ? "正在验证…" : "登录 QQ 音乐", systemImage: "qrcode.viewfinder")
                         .frame(maxWidth: .infinity, minHeight: 44)
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(qqMusic.isValidatingStoredSession)
             }
         }
         .padding(16)

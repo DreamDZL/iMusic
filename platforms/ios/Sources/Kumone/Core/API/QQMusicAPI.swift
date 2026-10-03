@@ -78,6 +78,7 @@ actor QQMusicAPI {
         case loginCookieUnavailable
         case unavailable
         case providerRejected(String)
+        case sessionCredentialRejected(String, ticketMissing: Bool)
         case playlistListUnavailable(String?)
         case qrCodeUnavailable
         case oauthFailed
@@ -93,6 +94,10 @@ actor QQMusicAPI {
             case .unavailable: return "QQ 音乐登录已失效或 Cookie 已过期"
             case .providerRejected(let detail):
                 return "QQ 音乐接口拒绝了请求（\(detail)），请重新登录后刷新"
+            case .sessionCredentialRejected(let detail, ticketMissing: true):
+                return "QQ 音乐曲目接口拒绝了请求（\(detail)）。当前网页登录 Cookie 未包含 QQ 音乐曲目凭据 qm_keyst/qqmusic_key；请在电脑端 QQ 音乐网页重新登录后，再回到 iMusic 点“登录完成”"
+            case .sessionCredentialRejected(let detail, ticketMissing: false):
+                return "QQ 音乐拒绝了曲目请求（\(detail)）。已停止重复请求剩余歌单；请检查网页登录状态或重新登录后重试"
             case .playlistListUnavailable(let detail):
                 if let detail, !detail.isEmpty {
                     return "QQ 音乐暂时无法读取歌单（\(detail)），请重新登录后刷新"
@@ -501,7 +506,7 @@ actor QQMusicAPI {
         async let createdOutcome = fetchPlaylistPagesOutcome(
             endpoint: createdURL,
             query: [
-                "hostUin": "0", "hostuin": profile.id, "g_tk": csrf,
+                "hostuin": profile.id, "g_tk": csrf,
                 "loginUin": profile.id, "format": "json", "inCharset": "utf8",
                 "outCharset": "utf-8", "notice": "0", "platform": "yqq.json",
                 "needNewCode": "0"
@@ -655,10 +660,18 @@ actor QQMusicAPI {
                   let root = Self.jsonObject(from: data),
                   let block = root["playlist"] as? [String: Any],
                   let result = block["data"] as? [String: Any] else {
-                throw APIError.providerRejected(Self.responseDiagnostic(from: data))
+                throw Self.playlistTracksRejection(
+                    from: data,
+                    response: response,
+                    cookieValues: cookieValues
+                )
             }
             guard Self.integer(in: block, keys: ["code", "result"]) == 0 else {
-                throw APIError.providerRejected(Self.responseDiagnostic(from: data))
+                throw Self.playlistTracksRejection(
+                    from: data,
+                    response: response,
+                    cookieValues: cookieValues
+                )
             }
             if let rawTotal = Self.integer(in: result, keys: ["total_song_num", "songlist_size", "totalNum"]) {
                 expectedCount = max(expectedCount, rawTotal)
@@ -738,11 +751,14 @@ actor QQMusicAPI {
             }
             let url = try Self.url(endpoint, query: query)
             let root = try await getJSON(url, cookie: cookie)
+            if let diagnostic = Self.providerError(in: root) {
+                throw APIError.providerRejected(diagnostic)
+            }
             guard let pageRows = Self.playlistRows(root, listKey: listKey) else {
                 throw APIError.invalidResponse
             }
             rows.append(contentsOf: pageRows)
-            let data = root["data"] as? [String: Any] ?? root
+            let data = Self.playlistData(root)
             let totalKeys = [
                 "total", "totalCount", "totalcount", "total_num", "totalNum", "count",
                 "dissnum", "diss_num", "disscount", "diss_count", "cdnum", "cd_num",
@@ -785,8 +801,8 @@ actor QQMusicAPI {
         guard Self.isSuccess(response), let root = Self.jsonObject(from: data) else {
             throw APIError.invalidResponse
         }
-        if let code = Self.text(in: root, keys: ["code", "subcode"]), code != "0" {
-            throw APIError.providerRejected(Self.responseDiagnostic(from: root))
+        if let diagnostic = Self.providerError(in: root) {
+            throw APIError.providerRejected(diagnostic)
         }
         return root
     }
@@ -796,10 +812,45 @@ actor QQMusicAPI {
         return responseDiagnostic(from: root)
     }
 
+    private static func playlistTracksRejection(
+        from data: Data,
+        response: URLResponse,
+        cookieValues: [String: String]
+    ) -> APIError {
+        let diagnostic = responseDiagnostic(from: data)
+        let status = (response as? HTTPURLResponse)?.statusCode
+        let lowerDiagnostic = diagnostic.lowercased()
+        let explicitTicketFailure = [
+            "3a44", "authst", "ticket missing", "missing ticket",
+            "缺少票据", "缺少曲目凭据", "音乐票据无效"
+        ].contains { lowerDiagnostic.contains($0) }
+        let explicitSessionFailure = explicitTicketFailure || [
+            "unauthorized", "authentication failed", "invalid token",
+            "token expired", "cookie expired", "登录失效", "未登录", "认证失败"
+        ].contains { lowerDiagnostic.contains($0) }
+        if explicitSessionFailure {
+            let ticketMissing = musicAuthTicket(in: cookieValues) == nil && explicitTicketFailure
+            return .sessionCredentialRejected(diagnostic, ticketMissing: ticketMissing)
+        }
+        if status == 401 || status == 403 {
+            return .sessionCredentialRejected(diagnostic, ticketMissing: false)
+        }
+        return .providerRejected(diagnostic)
+    }
+
     private static func responseDiagnostic(from root: [String: Any]) -> String {
         var detailObjects = [root]
+        if let playlist = root["playlist"] as? [String: Any] {
+            detailObjects.append(playlist)
+            if let result = playlist["data"] as? [String: Any] {
+                detailObjects.append(result)
+            }
+        }
         if let data = root["data"] as? [String: Any] {
             detailObjects.append(data)
+            if let nestedData = data["data"] as? [String: Any] {
+                detailObjects.append(nestedData)
+            }
         }
         for object in detailObjects {
             let code = text(in: object, keys: ["code", "subcode", "ret", "errCode"])
@@ -812,6 +863,20 @@ actor QQMusicAPI {
         return "接口没有返回歌单数据"
     }
 
+    private static func providerError(in root: [String: Any]) -> String? {
+        var objects = [root]
+        if let data = root["data"] as? [String: Any] {
+            objects.append(data)
+            if let nested = data["data"] as? [String: Any] { objects.append(nested) }
+        }
+        for object in objects {
+            guard let code = text(in: object, keys: ["code", "subcode", "ret", "errCode"]),
+                  code != "0" else { continue }
+            return responseDiagnostic(from: root)
+        }
+        return nil
+    }
+
     private static func url(_ raw: String, query: [String: String]) throws -> URL {
         guard var components = URLComponents(string: raw) else { throw APIError.invalidResponse }
         components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
@@ -820,8 +885,13 @@ actor QQMusicAPI {
     }
 
     private static func playlistRows(_ root: [String: Any], listKey: String) -> [[String: Any]]? {
-        let data = root["data"] as? [String: Any] ?? root
+        let data = playlistData(root)
         return data[listKey] as? [[String: Any]]
+    }
+
+    private static func playlistData(_ root: [String: Any]) -> [String: Any] {
+        guard let data = root["data"] as? [String: Any] else { return root }
+        return data["data"] as? [String: Any] ?? data
     }
 
     private static func mapPlaylist(_ raw: [String: Any], kind: Playlist.Kind) -> Playlist {
@@ -1066,8 +1136,7 @@ actor QQMusicAPI {
     private static func playlistAuthKey(in cookies: [String: String]) -> String? {
         let accepted = [
             "qm_keyst", "qqmusic_key", "music_key", "musickey",
-            "p_skey", "pskey", "skey", "wx_skey", "wxskey",
-            "psrf_qqaccess_token", "psrf_qqrefresh_token", "wxrefresh_token"
+            "p_skey", "pskey", "skey", "wx_skey", "wxskey"
         ]
         for key in accepted {
             if let value = cookies.first(where: { $0.key.lowercased() == key })?.value,
@@ -1113,7 +1182,12 @@ actor QQMusicAPI {
     /// the wrong profile while the login UI still appears successful.
     private static func qqUserIdentifier(in cookies: [String: String]) -> String? {
         let loginType = cookieValue("login_type", in: cookies)
-        let names = loginType == "2"
+        let isWechatLogin = loginType == "2"
+            || (cookieValue("wx_skey", in: cookies) != nil
+                || cookieValue("wxskey", in: cookies) != nil)
+                && cookieValue("p_skey", in: cookies) == nil
+                && cookieValue("skey", in: cookies) == nil
+        let names = isWechatLogin
             ? ["wxuin", "uin", "p_uin", "qqmusic_uin", "musicid", "loginUin"]
             : ["uin", "qqmusic_uin", "musicid", "loginUin", "p_uin", "wxuin"]
         return names

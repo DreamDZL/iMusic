@@ -129,6 +129,7 @@ struct LyricsPanel: View {
 
     private func lyricLine(_ line: LyricLine, isActive: Bool) -> some View {
         Button {
+            guard line.time.isFinite else { return }
             player.seek(to: line.time)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
@@ -162,6 +163,7 @@ struct LyricsPanel: View {
             .blur(radius: isActive ? 0 : 0.3)
         }
         .buttonStyle(.plain)
+        .disabled(!line.time.isFinite)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isActive)
     }
 }

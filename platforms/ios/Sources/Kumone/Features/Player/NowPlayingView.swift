@@ -300,10 +300,6 @@ struct NowPlayingView: View {
                         .padding(.top, 12)
                     lyricsColumn
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    NowPlayingScrubber(onShowQuality: { showQualityPicker = true })
-                        .frame(maxWidth: 520)
-                    controls
-                        .frame(maxWidth: 620)
                 }
                 .padding(.horizontal, 48)
             } else {
@@ -1123,6 +1119,7 @@ struct NowPlayingView: View {
 
     private func bigLyricLine(_ line: LyricLine, isActive: Bool) -> some View {
         Button {
+            guard line.time.isFinite else { return }
             player.seek(to: line.time)
         } label: {
             VStack(alignment: .leading, spacing: 5) {
@@ -1153,6 +1150,7 @@ struct NowPlayingView: View {
             .scaleEffect(1, anchor: .leading)
         }
         .buttonStyle(.plain)
+        .disabled(!line.time.isFinite)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isActive)
     }
 }
@@ -1186,10 +1184,9 @@ struct LyricMainText: View {
            isActive, verbatim, let words = line.words, !words.isEmpty {
             TimelineView(.animation(
                 minimumInterval: renderingBudget.minimumAnimationInterval,
-                paused: !RenderingBudget.permitsLiveLyricAnimation(
+                paused: !RenderingBudget.permitsTimeDrivenLyricUpdates(
                     isPlaying: player.isPlaying,
-                    isSceneActive: renderingBudget.isSceneActive,
-                    allowsContinuousEffects: renderingBudget.allowsContinuousEffects
+                    isSceneActive: renderingBudget.isSceneActive
                 )
             )) { _ in
                 RubyText(
@@ -1212,10 +1209,9 @@ struct LyricMainText: View {
         } else if isActive, verbatim, let words = line.words, !words.isEmpty {
             TimelineView(.animation(
                 minimumInterval: renderingBudget.minimumAnimationInterval,
-                paused: !RenderingBudget.permitsLiveLyricAnimation(
+                paused: !RenderingBudget.permitsTimeDrivenLyricUpdates(
                     isPlaying: player.isPlaying,
-                    isSceneActive: renderingBudget.isSceneActive,
-                    allowsContinuousEffects: renderingBudget.allowsContinuousEffects
+                    isSceneActive: renderingBudget.isSceneActive
                 )
             )) { _ in
                 karaoke(words, at: player.livePlaybackTime + settings.lyricsOffset).font(font)
@@ -1282,10 +1278,9 @@ private struct AMLLyricText: View {
             if isActive, verbatim, let words = line.words, !words.isEmpty {
                 TimelineView(.animation(
                     minimumInterval: renderingBudget.minimumAnimationInterval,
-                    paused: !RenderingBudget.permitsLiveLyricAnimation(
+                    paused: !RenderingBudget.permitsTimeDrivenLyricUpdates(
                         isPlaying: player.isPlaying,
-                        isSceneActive: renderingBudget.isSceneActive,
-                        allowsContinuousEffects: renderingBudget.allowsContinuousEffects
+                        isSceneActive: renderingBudget.isSceneActive
                     )
                 )) { _ in
                     ZStack(alignment: .leading) {
@@ -1533,6 +1528,7 @@ private struct IOSImmersiveLyricsColumn: View {
 
     private func lyricLine(_ line: LyricLine, isActive: Bool) -> some View {
         Button {
+            guard line.time.isFinite else { return }
             player.seek(to: line.time)
         } label: {
             VStack(alignment: .leading, spacing: 5) {
@@ -1562,6 +1558,7 @@ private struct IOSImmersiveLyricsColumn: View {
             .scaleEffect(isActive ? 1.0 : 0.82, anchor: .leading)
         }
         .buttonStyle(.plain)
+        .disabled(!line.time.isFinite)
         .animation(.spring(response: 0.28, dampingFraction: 0.9), value: isActive)
     }
 }
@@ -2087,6 +2084,10 @@ private struct IOSMinimalLyricsColumn: View {
                                             return
                                         }
                                         guard selectedIndex == line.id else {
+                                            returnToActiveLine(proxy: proxy)
+                                            return
+                                        }
+                                        guard line.time.isFinite else {
                                             returnToActiveLine(proxy: proxy)
                                             return
                                         }
