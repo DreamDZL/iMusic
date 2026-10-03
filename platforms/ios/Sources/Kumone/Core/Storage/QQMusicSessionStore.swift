@@ -13,8 +13,8 @@ final class QQMusicSessionStore: ObservableObject {
 
         var errorDescription: String? {
             switch self {
-            case .emptyCookie: return "请粘贴 QQ 音乐 Cookie"
-            case .invalidCookie: return "Cookie 格式不正确，请粘贴 QQ 音乐网页中的完整 Cookie"
+            case .emptyCookie: return "没有读取到 QQ 音乐登录状态，请先在网页登录"
+            case .invalidCookie: return "QQ 音乐网页登录状态格式不正确，请重新登录"
             case .validationFailed: return "QQ 音乐登录已失效或 Cookie 已过期"
             }
         }

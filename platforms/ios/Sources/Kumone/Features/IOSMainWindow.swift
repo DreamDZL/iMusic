@@ -7,7 +7,6 @@ public struct IOSMainWindow: View {
     @StateObject private var settings = SettingsManager.shared
     @StateObject private var qqMusic = QQMusicSessionStore.shared
     @StateObject private var kugou = KugouSessionStore.shared
-    @StateObject private var bilibili = BilibiliSessionStore.shared
     @StateObject private var toasts = ToastCenter.shared
     @StateObject private var updater = IOSUpdater.shared
     @StateObject private var updateLog = IOSUpdateLogStore.shared
@@ -39,7 +38,6 @@ public struct IOSMainWindow: View {
             .environmentObject(settings)
             .environmentObject(qqMusic)
             .environmentObject(kugou)
-            .environmentObject(bilibili)
             .environmentObject(toasts)
             .tint(Theme.accent)
             .preferredColorScheme(settings.appearance.colorScheme)
@@ -152,7 +150,7 @@ public struct IOSMainWindow: View {
                 usesSystemInteractiveDismissal: true,
                 dismissAnimation: nil
             )
-            .presentationBackground(.clear)
+            .presentationBackground(Color(uiColor: .systemBackground))
         } else {
             nowPlayingPresentation(
                 usesSystemInteractiveDismissal: true,

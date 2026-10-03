@@ -56,13 +56,15 @@ enum ProviderSessionSupport {
         }
     }
 
-    static func deleteCookie(service: String) {
+    @discardableResult
+    static func deleteCookie(service: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: "cookie",
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 
     enum SessionError: LocalizedError {

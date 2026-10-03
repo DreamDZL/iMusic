@@ -172,10 +172,6 @@ struct ExploreView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @StateObject private var model = ExploreViewModel.shared
     @EnvironmentObject private var settings: SettingsManager
-#if os(iOS)
-    @EnvironmentObject private var bilibili: BilibiliSessionStore
-    @State private var showBilibili = false
-#endif
 
     var body: some View {
         ScrollView {
@@ -287,14 +283,6 @@ struct ExploreView: View {
             guard !IOSUITestMode.isEnabled else { return }
             await model.refreshCurrent(force: true)
         }
-#if os(iOS)
-        .fullScreenCover(isPresented: $showBilibili) {
-            NavigationStack {
-                BilibiliContentView()
-                    .environmentObject(bilibili)
-            }
-        }
-#endif
     }
 
     private var discoveryMenu: some View {
@@ -326,15 +314,6 @@ struct ExploreView: View {
                     }
                 }
             }
-#if os(iOS)
-            if settings.bilibiliContentEnabled {
-                Button {
-                    showBilibili = true
-                } label: {
-                    Label("哔哩哔哩", systemImage: "play.rectangle.fill")
-                }
-            }
-#endif
         } label: {
             Label(
                 discoveryFilterTitle,

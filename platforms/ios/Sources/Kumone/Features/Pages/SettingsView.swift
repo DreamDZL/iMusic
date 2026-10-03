@@ -11,7 +11,6 @@ struct SettingsView: View {
     @StateObject private var lxStore = LXSourceStore.shared
     @StateObject private var qqMusic = QQMusicSessionStore.shared
     @StateObject private var kugou = KugouSessionStore.shared
-    @StateObject private var bilibili = BilibiliSessionStore.shared
     @StateObject private var updateLog = IOSUpdateLogStore.shared
     @ObservedObject private var backgroundStore = BackgroundImageStore.shared
 #endif
@@ -20,9 +19,9 @@ struct SettingsView: View {
     @ObservedObject private var equalizer = MoumusicEqualizer.shared
 #if os(iOS)
     @State private var showSourceManager = false
+    @State private var showNeteaseLogin = false
     @State private var showQQMusicLogin = false
     @State private var showKugouLogin = false
-    @State private var showBilibiliLogin = false
 #endif
     // Keep the main controls visible on first launch. Every section remains
     // collapsible, but opening the settings page with every group closed makes
@@ -86,7 +85,19 @@ struct SettingsView: View {
                 NavigationLink(value: Destination.accountSync) {
                     Label("账号同步", systemImage: "person.crop.circle.badge.checkmark")
                 }
-                Text("网易云、QQ 音乐和酷狗登录后，可在对应平台歌曲上使用官方账号音源；自动模式优先尝试账号音源，失败后才按顺序回退到已启用的 LX 音源。哔哩哔哩当前用于账号同步和视频内容。")
+                Button { showNeteaseLogin = true } label: {
+                    HStack {
+                        Label("网易云音乐登录", systemImage: account.isLoggedIn
+                              ? "checkmark.circle.fill" : "person.crop.circle.badge.plus")
+                        Spacer()
+                        Text(account.isLoggedIn ? (account.profile?.nickname ?? "已登录") : "网页登录")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(minHeight: 44)
+                Text("网易云、QQ 音乐和酷狗登录后，可在对应平台歌曲上使用官方账号音源；自动模式优先尝试账号音源，失败后才按顺序回退到已启用的 LX 音源。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button { showQQMusicLogin = true } label: {
@@ -129,27 +140,7 @@ struct SettingsView: View {
                     .frame(minHeight: 44)
                 }
 
-                Button { showBilibiliLogin = true } label: {
-                    HStack {
-                        Label("哔哩哔哩账号同步（仅资料）", systemImage: bilibili.isLoggedIn
-                              ? "checkmark.circle.fill" : "person.crop.circle.badge.plus")
-                        Spacer()
-                        Text(bilibili.isLoggedIn ? (bilibili.profileName ?? "已登录") : "扫码登录")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                .frame(minHeight: 44)
-
-                if bilibili.isLoggedIn {
-                    Button(role: .destructive) { bilibili.signOut() } label: {
-                        Label("退出哔哩哔哩登录", systemImage: "rectangle.portrait.and.arrow.right")
-                    }
-                    .frame(minHeight: 44)
-                }
-
-                Text("网易云、QQ 音乐和酷狗支持对应平台歌曲的官方账号音源；哔哩哔哩用于账号资料、视频推荐和同步。汽水音乐已移除登录和播放，仅保留公开歌单导入；凭据仅保存在本机钥匙串。")
+                Text("网易云、QQ 音乐和酷狗支持对应平台歌曲的官方账号音源。汽水音乐已移除登录和播放，仅保留公开歌单导入；凭据仅保存在本机钥匙串。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -185,11 +176,6 @@ struct SettingsView: View {
             }
 
             SettingsDisclosureSection("首页推荐", isExpanded: sectionBinding("home")) {
-                Toggle("哔哩哔哩内容中心", isOn: $settings.bilibiliContentEnabled)
-                Text("开启后，首页和发现页显示独立的哔哩哔哩入口，可浏览推荐、分区、排行榜并播放视频或仅听音频。关闭后不会请求哔哩哔哩内容接口。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
                 Picker("推荐内容", selection: $settings.homeRecommendationMode) {
                     ForEach(HomeRecommendationMode.allCases) { mode in
                         Text(mode.displayName).tag(mode)
@@ -385,16 +371,22 @@ struct SettingsView: View {
             }
         }
         .sheet(isPresented: $showQQMusicLogin) {
-            QQMusicLoginSheet()
-                .environmentObject(qqMusic)
+            ProviderWebLoginSheet(provider: .qqMusic) { cookie in
+                try await qqMusic.signIn(cookie: cookie)
+            }
+            .presentationDetents([.large])
+        }
+        .sheet(isPresented: $showNeteaseLogin) {
+            ProviderWebLoginSheet(provider: .netease) { cookie in
+                try await account.signInFromWeb(cookieHeader: cookie)
+            }
+            .presentationDetents([.large])
         }
         .sheet(isPresented: $showKugouLogin) {
-            KugouLoginSheet()
-                .environmentObject(kugou)
-        }
-        .sheet(isPresented: $showBilibiliLogin) {
-            BilibiliLoginSheet()
-                .environmentObject(bilibili)
+            ProviderWebLoginSheet(provider: .kugou) { cookie in
+                try await kugou.signIn(cookie: cookie)
+            }
+            .presentationDetents([.large])
         }
         .onChange(of: backgroundStore.photoSelection) { _ in
             Task { await backgroundStore.importSelection() }

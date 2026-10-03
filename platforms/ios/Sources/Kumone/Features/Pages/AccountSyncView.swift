@@ -62,11 +62,17 @@ struct AccountSyncView: View {
             Task { await qqPlaylists.refresh(force: true) }
         }
         .sheet(isPresented: $showLogin) {
+#if os(iOS)
+            ProviderWebLoginSheet(provider: .netease) { cookie in
+                try await account.signInFromWeb(cookieHeader: cookie)
+            }
+#else
             NavigationStack {
                 LoginSheet()
                     .navigationTitle("登录账号")
                     .navigationBarTitleDisplayMode(.inline)
             }
+#endif
             .presentationDetents([.large])
         }
         .sheet(isPresented: $showPlaylistPicker) {
@@ -84,8 +90,14 @@ struct AccountSyncView: View {
             .presentationDetents([.large])
         }
         .sheet(isPresented: $showQQLogin) {
+#if os(iOS)
+            ProviderWebLoginSheet(provider: .qqMusic) { cookie in
+                try await qqMusic.signIn(cookie: cookie)
+            }
+#else
             QQMusicLoginSheet()
                 .environmentObject(qqMusic)
+#endif
                 .presentationDetents([.large])
         }
     }

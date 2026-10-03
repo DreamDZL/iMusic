@@ -62,6 +62,37 @@ final class AccountStore: ObservableObject {
         await refreshLibrary()
     }
 
+    /// Installs cookies captured from NetEase's own web login, then validates
+    /// them against the account endpoint before exposing a signed-in state.
+    func signInFromWeb(cookieHeader: String) async throws {
+        NeteaseClient.shared.clearAuthCookies()
+        profile = nil
+        likedTrackIDs = []
+        userPlaylists = []
+        likedAlbums = []
+        likedArtists = []
+
+        do {
+            try NeteaseClient.shared.ingestCookieString(cookieHeader)
+            guard hasAuthCookie else { throw NeteaseAPIError.needLogin }
+            guard let verifiedProfile = try await NeteaseAPI.userAccount() else {
+                throw NeteaseAPIError.missingProfile
+            }
+            profile = verifiedProfile
+            await refreshLibrary()
+            await refreshSublists()
+            isBootstrapped = true
+        } catch {
+            NeteaseClient.shared.clearAuthCookies()
+            profile = nil
+            likedTrackIDs = []
+            userPlaylists = []
+            likedAlbums = []
+            likedArtists = []
+            throw error
+        }
+    }
+
     func refreshLibrary() async {
         guard let uid = profile?.userId else { return }
         lastPlaylistSyncError = nil

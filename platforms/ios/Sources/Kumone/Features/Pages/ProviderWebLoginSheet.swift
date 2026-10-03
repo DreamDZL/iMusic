@@ -3,38 +3,40 @@ import SwiftUI
 import WebKit
 
 enum ProviderWebLoginKind: String, Identifiable {
+    case netease
     case qqMusic
     case kugou
-    case bilibili
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .netease: return "网易云音乐"
         case .qqMusic: return "QQ 音乐"
         case .kugou: return "酷狗音乐"
-        case .bilibili: return "哔哩哔哩"
         }
     }
 
     var loginURL: URL {
         switch self {
-        // The old /portal/login.html route now returns 404.  Keep the web
-        // fallback on the live QQ Music entry page; the primary iOS button
-        // uses QQMusicQRCodeLoginSheet and does not depend on this route.
+        case .netease: return URL(string: "https://music.163.com/login")!
+        // Load each provider's own web surface in an ephemeral WKWebView.
         case .qqMusic: return URL(string: "https://y.qq.com/")!
         case .kugou: return URL(string: "https://m3ws.kugou.com/loginReg.php?act=login")!
-        case .bilibili: return URL(string: "https://passport.bilibili.com/h5-app/passport/login")!
         }
     }
 
     func accepts(domain: String) -> Bool {
-        let value = domain.lowercased()
         switch self {
-        case .qqMusic: return value.contains("qq.com")
-        case .kugou: return value.contains("kugou.com")
-        case .bilibili: return value.contains("bilibili.com")
+        case .netease: return Self.isDomain(domain, within: "163.com")
+        case .qqMusic: return Self.isDomain(domain, within: "qq.com")
+        case .kugou: return Self.isDomain(domain, within: "kugou.com")
         }
+    }
+
+    private static func isDomain(_ domain: String, within root: String) -> Bool {
+        let value = domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        return value == root || value.hasSuffix(".\(root)")
     }
 
     func looksLoggedIn(_ header: String) -> Bool {
@@ -44,6 +46,7 @@ enum ProviderWebLoginKind: String, Identifiable {
             result[pair[0].trimmingCharacters(in: .whitespaces).lowercased()] = pair[1]
         }
         switch self {
+        case .netease: return !(values["music_u"] ?? "").isEmpty
         case .qqMusic:
             let uin = values["uin"] ?? values["qqmusic_uin"] ?? ""
             return !uin.isEmpty && uin != "0" &&
@@ -51,9 +54,6 @@ enum ProviderWebLoginKind: String, Identifiable {
         case .kugou:
             return !(values["token"] ?? "").isEmpty &&
                 !(values["userid"] ?? values["kugooid"] ?? "").isEmpty
-        case .bilibili:
-            return !(values["sessdata"] ?? "").isEmpty &&
-                !(values["dedeuserid"] ?? "").isEmpty
         }
     }
 }
@@ -93,7 +93,7 @@ struct ProviderWebLoginSheet: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .navigationTitle("扫码登录\(provider.title)")
+            .navigationTitle("网页登录\(provider.title)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -127,14 +127,7 @@ struct ProviderWebLoginSheet: View {
         }
         isReadingCookies = true
         store.getAllCookies { cookies in
-            var values: [String: String] = [:]
-            for cookie in cookies where provider.accepts(domain: cookie.domain) {
-                values[cookie.name] = cookie.value
-            }
-            let header = values
-                .sorted { $0.key < $1.key }
-                .map { "\($0.key)=\($0.value)" }
-                .joined(separator: "; ")
+            let header = self.cookieHeader(from: cookies)
 
             Task { @MainActor in await signIn(cookie: header) }
         }
@@ -160,14 +153,26 @@ struct ProviderWebLoginSheet: View {
     private func cookieHeader(from store: WKHTTPCookieStore) async -> String {
         await withCheckedContinuation { continuation in
             store.getAllCookies { cookies in
-                var values: [String: String] = [:]
-                for cookie in cookies where self.provider.accepts(domain: cookie.domain) {
-                    values[cookie.name] = cookie.value
-                }
-                continuation.resume(returning: values.sorted { $0.key < $1.key }
-                    .map { "\($0.key)=\($0.value)" }.joined(separator: "; "))
+                continuation.resume(returning: self.cookieHeader(from: cookies))
             }
         }
+    }
+
+    private func cookieHeader(from cookies: [HTTPCookie]) -> String {
+        var values: [String: String] = [:]
+        let scoped = cookies.filter { provider.accepts(domain: $0.domain) }
+            .sorted {
+                if $0.name != $1.name { return $0.name < $1.name }
+                if $0.domain.count != $1.domain.count { return $0.domain.count > $1.domain.count }
+                if $0.path.count != $1.path.count { return $0.path.count > $1.path.count }
+                return $0.value < $1.value
+            }
+        for cookie in scoped where values[cookie.name] == nil {
+            values[cookie.name] = cookie.value
+        }
+        return values.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "; ")
     }
 
     @MainActor

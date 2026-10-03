@@ -33,11 +33,12 @@ final class NeteaseClient: @unchecked Sendable {
     private static let log = Logger(subsystem: "im.missuo.kumone", category: "api")
     private static let userAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    private static let cookieKeychainService = "com.moumusic.netease.session"
+    private static let legacySessionInvalidatedKey = "com.moumusic.netease.legacy-session-invalidated.v1"
 
     private let session: URLSession
     private let cookieLock = NSLock()
     private var cookies: [String: String] = [:]
-    private let cookieFileURL: URL
 
     private init() {
         let config = URLSessionConfiguration.default
@@ -49,10 +50,24 @@ final class NeteaseClient: @unchecked Sendable {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Kumone", isDirectory: true)
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        cookieFileURL = support.appendingPathComponent("cookies.json")
-        if let data = try? Data(contentsOf: cookieFileURL),
-           let stored = try? JSONDecoder().decode([String: String].self, from: data) {
-            cookies = stored
+        let legacyCookieFile = support.appendingPathComponent("cookies.json")
+        if let storedCookie = ProviderSessionSupport.readCookie(service: Self.cookieKeychainService) {
+            cookies = Self.parseCookieString(storedCookie)
+            Self.markLegacySessionInvalidated()
+            try? FileManager.default.removeItem(at: legacyCookieFile)
+        } else if !UserDefaults.standard.bool(forKey: Self.legacySessionInvalidatedKey),
+                  let data = try? Data(contentsOf: legacyCookieFile),
+                  let stored = try? JSONDecoder().decode([String: String].self, from: data) {
+            do {
+                try Self.persistToKeychain(stored)
+                cookies = stored
+                Self.markLegacySessionInvalidated()
+                try? FileManager.default.removeItem(at: legacyCookieFile)
+            } catch {
+                Self.log.error("Unable to migrate NetEase session to Keychain")
+            }
+        } else {
+            try? FileManager.default.removeItem(at: legacyCookieFile)
         }
     }
 
@@ -74,31 +89,76 @@ final class NeteaseClient: @unchecked Sendable {
     }
 
     /// Ingests a `;;`-joined raw cookie string as returned by the QR login check.
-    func ingestCookieString(_ raw: String) {
-        var parsed: [String: String] = [:]
-        for cookie in raw.components(separatedBy: ";;") {
-            guard let pair = cookie.components(separatedBy: ";").first,
-                  let eq = pair.firstIndex(of: "=") else { continue }
-            let name = pair[..<eq].trimmingCharacters(in: .whitespaces)
-            let value = String(pair[pair.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
-            guard !name.isEmpty, !value.isEmpty else { continue }
-            parsed[name] = value
-        }
-        setCookies(parsed)
+    func ingestCookieString(_ raw: String) throws {
+        let parsed = Self.parseCookieString(raw)
+        cookieLock.lock()
+        for (key, value) in parsed { cookies[key] = value }
+        let snapshot = cookies
+        cookieLock.unlock()
+        try Self.persistToKeychain(snapshot)
+        Self.markLegacySessionInvalidated()
     }
 
     func clearAuthCookies() {
+        // Invalidate the old file-backed session first. Even if deleting that
+        // file fails, a later launch must not migrate those credentials again.
+        Self.markLegacySessionInvalidated()
         cookieLock.lock()
         cookies.removeValue(forKey: "MUSIC_U")
         cookies.removeValue(forKey: "__csrf")
         let snapshot = cookies
         cookieLock.unlock()
         persist(snapshot)
+        removeLegacyCookieFile()
+    }
+
+    private func removeLegacyCookieFile() {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Kumone", isDirectory: true)
+        let legacyCookieFile = support.appendingPathComponent("cookies.json")
+        guard FileManager.default.fileExists(atPath: legacyCookieFile.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: legacyCookieFile)
+        } catch {
+            Self.log.error("Unable to remove legacy NetEase session file")
+        }
     }
 
     private func persist(_ snapshot: [String: String]) {
-        if let data = try? JSONEncoder().encode(snapshot) {
-            try? data.write(to: cookieFileURL, options: .atomic)
+        do {
+            try Self.persistToKeychain(snapshot)
+            Self.markLegacySessionInvalidated()
+        } catch {
+            Self.log.error("Unable to save NetEase session to Keychain")
+        }
+    }
+
+    private static func persistToKeychain(_ snapshot: [String: String]) throws {
+        let header = snapshot.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "; ")
+        if header.isEmpty {
+            guard ProviderSessionSupport.deleteCookie(service: cookieKeychainService) else {
+                throw ProviderSessionSupport.SessionError.storageFailed
+            }
+        } else {
+            try ProviderSessionSupport.writeCookie(header, service: cookieKeychainService)
+        }
+    }
+
+    private static func markLegacySessionInvalidated() {
+        UserDefaults.standard.set(true, forKey: legacySessionInvalidatedKey)
+        UserDefaults.standard.synchronize()
+    }
+
+    private static func parseCookieString(_ raw: String) -> [String: String] {
+        let normalized = raw.replacingOccurrences(of: ";;", with: ";")
+        return normalized.components(separatedBy: ";").reduce(into: [:]) { parsed, pair in
+            guard let eq = pair.firstIndex(of: "=") else { return }
+            let name = pair[..<eq].trimmingCharacters(in: .whitespaces)
+            let value = String(pair[pair.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, !value.isEmpty else { return }
+            parsed[name] = value
         }
     }
 

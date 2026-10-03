@@ -24,7 +24,6 @@ public final class MusicSessionRefreshCoordinator {
         defer { isRefreshing = false }
         await QQMusicSessionStore.shared.refreshProfile()
         await KugouSessionStore.shared.refreshProfile()
-        await BilibiliSessionStore.shared.refreshProfile()
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastRefreshKey)
     }
 }

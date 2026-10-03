@@ -624,6 +624,14 @@ final class LXSyncService: ObservableObject {
                 continuation.resume(throwing: LXSyncError.disconnected)
                 return
             }
+            // The server may complete a fast sync before this continuation is
+            // installed (the socket begins receiving just before this call).
+            // In that case `finished` already made the service ready, so do not
+            // leave connect() waiting until its handshake timeout.
+            guard !isConnected else {
+                continuation.resume(returning: ())
+                return
+            }
             readyContinuation = continuation
             handshakeTimeoutTask?.cancel()
             handshakeTimeoutTask = Task { [weak self] in

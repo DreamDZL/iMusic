@@ -289,7 +289,6 @@ final class SettingsManager: ObservableObject {
         static let homeRecommendationMode = "settings.homeRecommendationMode"
         static let homeRecommendationPlatform = "settings.homeRecommendationPlatform"
         static let sourcePlatformFallback = "settings.sourcePlatformFallback"
-        static let bilibiliContentEnabled = "settings.bilibiliContentEnabled"
     }
 
     @Published var audioQuality: AudioQuality {
@@ -382,13 +381,17 @@ final class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(enableSourcePlatformFallback, forKey: Keys.sourcePlatformFallback) }
     }
 
-    /// Controls the independent Bilibili video/audio content center.
-    @Published var bilibiliContentEnabled: Bool {
-        didSet { UserDefaults.standard.set(bilibiliContentEnabled, forKey: Keys.bilibiliContentEnabled) }
-    }
-
     private init() {
         let defaults = UserDefaults.standard
+        if !defaults.bool(forKey: "migration.removedBilibiliFeature.v1") {
+            let didRemoveCredential = ProviderSessionSupport.deleteCookie(
+                service: "com.moumusic.bilibili.session"
+            )
+            defaults.removeObject(forKey: "settings.bilibiliContentEnabled")
+            if didRemoveCredential {
+                defaults.set(true, forKey: "migration.removedBilibiliFeature.v1")
+            }
+        }
         audioQuality = defaults.string(forKey: Keys.quality).flatMap(AudioQuality.init(rawValue:)) ?? .exhigh
         playbackSourceMode = defaults.string(forKey: Keys.playbackSourceMode)
             .flatMap(PlaybackSourceMode.init(rawValue:)) ?? .automatic
@@ -417,6 +420,5 @@ final class SettingsManager: ObservableObject {
             ($0 == .aggregate || $0 == .sd) ? nil : $0
         } ?? .wy
         enableSourcePlatformFallback = defaults.object(forKey: Keys.sourcePlatformFallback) as? Bool ?? true
-        bilibiliContentEnabled = defaults.object(forKey: Keys.bilibiliContentEnabled) as? Bool ?? true
     }
 }
