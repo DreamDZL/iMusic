@@ -58,9 +58,10 @@ enum ProviderWebLoginKind: String, Identifiable {
             // QQ's desktop web flow commonly yields p_uin/p_skey or qm_keyst
             // instead of the pair used by the old QR API. Accept the session
             // forms the profile and playlist endpoints actually understand.
-            let identifiers = ["uin", "qqmusic_uin", "p_uin", "musicid", "loginuin"]
+            let identifiers = ["uin", "qqmusic_uin", "p_uin", "musicid", "loginuin", "wxuin"]
             let keys = ["qqmusic_key", "qm_keyst", "music_key", "musickey",
-                        "p_skey", "skey", "pskey", "wx_skey", "wxskey"]
+                        "p_skey", "skey", "pskey", "wx_skey", "wxskey",
+                        "psrf_qqaccess_token", "psrf_qqrefresh_token", "wxrefresh_token"]
             let hasUser = identifiers.contains { Self.isUsableQQIdentifier(values[$0]) }
             return hasUser && keys.contains { !(values[$0] ?? "").isEmpty }
         case .kugou:
@@ -181,7 +182,7 @@ struct ProviderWebLoginSheet: View {
             }
         for cookie in scoped where values[cookie.name] == nil && !cookie.value.isEmpty {
             let key = cookie.name.lowercased()
-            let qqUserKeys = ["uin", "qqmusic_uin", "p_uin", "musicid", "loginuin"]
+            let qqUserKeys = ["uin", "qqmusic_uin", "p_uin", "musicid", "loginuin", "wxuin"]
             if provider == .qqMusic,
                qqUserKeys.contains(key),
                !ProviderWebLoginKind.isUsableQQIdentifier(cookie.value) {

@@ -103,7 +103,10 @@ struct SettingsView: View {
                         Label("QQ 音乐账号播放与同步", systemImage: qqMusic.isLoggedIn
                               ? "checkmark.circle.fill" : "person.crop.circle.badge.plus")
                         Spacer()
-                        Text(qqMusic.isLoggedIn ? (qqMusic.profileName ?? "已登录") : "未登录")
+                        // QQ's profile CGI sometimes returns an opaque value
+                        // such as "3a44" in the nickname field. Keep the
+                        // connection state separate from untrusted display data.
+                        Text(qqMusic.isLoggedIn ? "已登录" : "未登录")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)

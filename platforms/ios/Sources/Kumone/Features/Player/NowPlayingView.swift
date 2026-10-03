@@ -50,6 +50,7 @@ struct NowPlayingView: View {
             // Pin to the screen width so an intrinsically-wide child can never
             // stretch the ZStack and push the corner overlays off-screen.
             .frame(width: geo.size.width)
+            .simultaneousGesture(playerPageSwipeGesture(height: geo.size.height))
             .overlay(alignment: .topTrailing) {
                 if showLyricsOnMobile {
                     Button {
@@ -170,6 +171,26 @@ struct NowPlayingView: View {
         artworkBackdrop.ignoresSafeArea()
     }
 
+    /// The two Apple Music pages are a horizontal pager: a left swipe opens
+    /// lyrics and a right swipe returns to the artwork controls. Ignore
+    /// vertical drags so the lyric list scrolls normally, and ignore swipes
+    /// beginning in the lower control area so seeking cannot change pages.
+    private func playerPageSwipeGesture(height: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 36)
+            .onEnded { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                guard abs(horizontal) > 90,
+                      abs(horizontal) > abs(vertical) * 1.35,
+                      value.startLocation.y < height * 0.72 else { return }
+                let shouldShowLyrics = horizontal < 0
+                guard shouldShowLyrics != showLyricsOnMobile else { return }
+                withAnimation(AppAnimation.standard) {
+                    showLyricsOnMobile = shouldShowLyrics
+                }
+            }
+    }
+
     private var artworkBackdrop: some View {
         TimelineView(.animation(
             minimumInterval: renderingBudget.minimumAnimationInterval,
@@ -186,19 +207,13 @@ struct NowPlayingView: View {
         LinearGradient(
             stops: [
                 .init(color: palette.primary.opacity(0.98), location: 0),
-                .init(color: palette.primary.opacity(0.94), location: 0.58),
-                .init(color: palette.primary.opacity(0.78), location: 1),
+                .init(color: palette.primary.opacity(0.92), location: 0.32),
+                .init(color: palette.secondary.opacity(0.94), location: 0.76),
+                .init(color: .black.opacity(0.96), location: 1),
             ],
             startPoint: .top,
             endPoint: .bottom
         )
-        .overlay {
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.48)],
-                startPoint: .center,
-                endPoint: .bottom
-            )
-        }
     }
 
     private func transitionArtworkPalette(to next: ArtworkColors) {

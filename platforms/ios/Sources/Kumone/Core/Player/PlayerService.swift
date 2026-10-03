@@ -517,7 +517,11 @@ final class PlayerService: ObservableObject {
     }
 
     nonisolated static func playbackTimeObserverInterval(isSceneActive: Bool) -> TimeInterval {
-        isSceneActive ? 0.2 : 1.0
+        // Ten foreground samples per second keep line changes responsive;
+        // word highlighting reads AVPlayer's live clock at display cadence.
+        // The lower background cadence avoids unnecessary work while audio
+        // continues playing off-screen.
+        isSceneActive ? 0.1 : 1.0
     }
 
     /// Keep lyric and scrubber updates responsive in the foreground, while

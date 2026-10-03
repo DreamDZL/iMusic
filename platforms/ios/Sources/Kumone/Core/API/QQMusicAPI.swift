@@ -60,6 +60,7 @@ actor QQMusicAPI {
     struct PlaylistListResult: Sendable {
         let playlists: [Playlist]
         let refreshedCookie: String?
+        let warningMessage: String?
     }
 
     struct PlaylistTracksResult: Sendable {
@@ -76,6 +77,8 @@ actor QQMusicAPI {
         case invalidResponse
         case loginCookieUnavailable
         case unavailable
+        case providerRejected(String)
+        case playlistListUnavailable(String?)
         case qrCodeUnavailable
         case oauthFailed
         case tooManyPlaylists
@@ -88,6 +91,13 @@ actor QQMusicAPI {
             case .loginCookieUnavailable:
                 return "QQ 网页已打开，但没有读取到可用的账号凭据。请确认网页已登录后再点“登录完成”"
             case .unavailable: return "QQ 音乐登录已失效或 Cookie 已过期"
+            case .providerRejected(let detail):
+                return "QQ 音乐接口拒绝了请求（\(detail)），请重新登录后刷新"
+            case .playlistListUnavailable(let detail):
+                if let detail, !detail.isEmpty {
+                    return "QQ 音乐暂时无法读取歌单（\(detail)），请重新登录后刷新"
+                }
+                return "QQ 音乐暂时没有返回可识别的歌单列表，请重新登录后刷新"
             case .qrCodeUnavailable: return "QQ 当前拒绝了二维码请求，请稍后重试"
             case .oauthFailed: return "QQ 扫码成功，但音乐登录凭证获取失败，请重新扫码"
             case .tooManyPlaylists: return "QQ 歌单数量超过安全分页上限，请减少后重试"
@@ -101,7 +111,7 @@ actor QQMusicAPI {
     private let session: URLSession
     private let redirectSession: URLSession
     private let cookieStorage: HTTPCookieStorage
-    private let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148"
+    private let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 
     private init() {
         let configuration = URLSessionConfiguration.ephemeral
@@ -320,7 +330,7 @@ actor QQMusicAPI {
     func musicURL(songMid: String, mediaMid: String?, quality: String,
                   cookie: String) async throws -> ResolvedAudio {
         let fields = Self.cookieFields(cookie)
-        let uin = fields["qqmusic_uin"] ?? fields["uin"] ?? "0"
+        let uin = Self.qqUserIdentifier(in: fields) ?? "0"
         let guid = String(Int.random(in: 100_000_000...2_000_000_000))
         let fileID = mediaMid?.isEmpty == false ? mediaMid! : songMid
         let file = Self.filename(for: quality, mediaMid: fileID)
@@ -390,11 +400,7 @@ actor QQMusicAPI {
 
     func profile(cookie: String) async throws -> Profile {
         let cookieValues = Self.cookieFields(cookie)
-        let cookieID = ["qqmusic_uin", "uin", "musicid", "loginUin", "p_uin"]
-            .compactMap { key in
-                Self.cookieValue(key, in: cookieValues).flatMap(Self.normalizedQQIdentifier)
-            }
-            .first
+        let cookieID = Self.qqUserIdentifier(in: cookieValues)
         let authKey = Self.playlistAuthKey(in: cookieValues)
 
         // QQ's profile CGI is frequently blocked or returns an HTML anti-bot
@@ -416,6 +422,12 @@ actor QQMusicAPI {
 
         var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
         components.queryItems = [
+            URLQueryItem(name: "cid", value: "205360838"),
+            URLQueryItem(name: "userid", value: cookieID ?? "0"),
+            URLQueryItem(name: "reqfrom", value: "1"),
+            URLQueryItem(name: "g_tk", value: String(Self.hash5381(Self.csrfKey(in: cookieValues) ?? ""))),
+            URLQueryItem(name: "loginUin", value: cookieID ?? "0"),
+            URLQueryItem(name: "hostUin", value: "0"),
             URLQueryItem(name: "format", value: "json"),
             URLQueryItem(name: "inCharset", value: "utf8"),
             URLQueryItem(name: "outCharset", value: "utf-8"),
@@ -454,9 +466,7 @@ actor QQMusicAPI {
                 if let cookieProfile { return cookieProfile }
                 throw APIError.unavailable
             }
-            let name = Self.text(in: info, keys: ["nick", "nickname", "name", "nickName"])
-                ?? Self.cookieNickname(in: cookieValues)
-                ?? "QQ 音乐用户"
+            let name = "QQ 音乐用户"
             let avatar = Self.text(in: info, keys: ["logo", "avatar", "avatarUrl", "avatar_url"])
             return Profile(id: id, name: name, avatarURL: avatar,
                            refreshedCookie: Self.mergedCookie(
@@ -488,7 +498,7 @@ actor QQMusicAPI {
         let createdURL = "https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss"
         let collectedURL = "https://c.y.qq.com/fav/fcgi-bin/fcg_get_profile_order_asset.fcg"
 
-        async let createdRows = try? await fetchPlaylistPages(
+        async let createdOutcome = fetchPlaylistPagesOutcome(
             endpoint: createdURL,
             query: [
                 "hostUin": "0", "hostuin": profile.id, "g_tk": csrf,
@@ -499,7 +509,7 @@ actor QQMusicAPI {
             listKey: "disslist", pageSize: 200, inclusiveEnd: false,
             cookie: requestCookie
         )
-        async let collectedRows = try? await fetchPlaylistPages(
+        async let collectedOutcome = fetchPlaylistPagesOutcome(
             endpoint: collectedURL,
             query: [
                 "ct": "20", "cid": "205360956", "userid": profile.id,
@@ -508,10 +518,15 @@ actor QQMusicAPI {
             listKey: "cdlist", pageSize: 80, inclusiveEnd: true,
             cookie: requestCookie
         )
-        let (createdResult, collectedResult) = await (createdRows, collectedRows)
-        guard createdResult != nil || collectedResult != nil else { throw APIError.unavailable }
-        let created = createdResult ?? []
-        let collected = collectedResult ?? []
+        let (createdResult, collectedResult) = await (createdOutcome, collectedOutcome)
+        guard createdResult.rows != nil || collectedResult.rows != nil else {
+            let details = [createdResult.error, collectedResult.error]
+                .compactMap { $0 }
+                .joined(separator: "；")
+            throw APIError.playlistListUnavailable(details.isEmpty ? nil : details)
+        }
+        let created = createdResult.rows ?? []
+        let collected = collectedResult.rows ?? []
         let createdPlaylists = created.map { Self.mapPlaylist($0, kind: .created) }
         let collectedPlaylists = collected.map { Self.mapPlaylist($0, kind: .collected) }
 
@@ -528,7 +543,45 @@ actor QQMusicAPI {
                 if $0.kind != $1.kind { return $0.kind == .created }
                 return $0.name.localizedStandardCompare($1.name) == .orderedAscending
             }
-        return PlaylistListResult(playlists: playlists, refreshedCookie: profile.refreshedCookie)
+        let warnings = [
+            createdResult.error.map { "创建的歌单：\($0)" },
+            collectedResult.error.map { "收藏的歌单：\($0)" },
+        ].compactMap { $0 }
+        return PlaylistListResult(
+            playlists: playlists,
+            refreshedCookie: profile.refreshedCookie,
+            warningMessage: warnings.isEmpty ? nil : warnings.joined(separator: "；")
+        )
+    }
+
+    private struct PlaylistFetchOutcome: @unchecked Sendable {
+        let rows: [[String: Any]]?
+        let error: String?
+    }
+
+    private func fetchPlaylistPagesOutcome(
+        endpoint: String,
+        query: [String: String],
+        listKey: String,
+        pageSize: Int,
+        inclusiveEnd: Bool,
+        cookie: String
+    ) async -> PlaylistFetchOutcome {
+        do {
+            let rows = try await fetchPlaylistPages(
+                endpoint: endpoint,
+                query: query,
+                listKey: listKey,
+                pageSize: pageSize,
+                inclusiveEnd: inclusiveEnd,
+                cookie: cookie
+            )
+            return PlaylistFetchOutcome(rows: rows, error: nil)
+        } catch is CancellationError {
+            return PlaylistFetchOutcome(rows: nil, error: "请求已取消")
+        } catch {
+            return PlaylistFetchOutcome(rows: nil, error: error.localizedDescription)
+        }
     }
 
     /// Loads one playlist with the signed-in cookie and pages its tracks. The
@@ -561,14 +614,21 @@ actor QQMusicAPI {
 
         for page in 0..<maximumPages {
             try Task.checkCancellation()
+            var comm: [String: Any] = [
+                "ct": 24, "cv": 4_747_474, "platform": "yqq.json",
+                "uin": profile.id, "g_tk": csrf,
+                "g_tk_new_20200303": csrf,
+                "format": "json", "inCharset": "utf-8",
+                "outCharset": "utf-8", "notice": 0, "need_new_code": 1
+            ]
+            // A web skey/p_skey can derive g_tk, but it is not the Music
+            // `authst` ticket. Sending it in that field makes valid desktop
+            // web sessions fail on the song-list CGI.
+            if let ticket = Self.musicAuthTicket(in: cookieValues) {
+                comm["authst"] = ticket
+            }
             let payload: [String: Any] = [
-                "comm": [
-                    "ct": 24, "cv": 4_747_474, "platform": "yqq.json",
-                    "uin": profile.id, "g_tk": csrf,
-                    "g_tk_new_20200303": csrf, "authst": authKey,
-                    "format": "json", "inCharset": "utf-8",
-                    "outCharset": "utf-8", "notice": 0, "need_new_code": 1
-                ],
+                "comm": comm,
                 "playlist": [
                     "module": "music.srfDissInfo.DissInfo",
                     "method": "CgiGetDiss",
@@ -594,9 +654,11 @@ actor QQMusicAPI {
             guard Self.isSuccess(response),
                   let root = Self.jsonObject(from: data),
                   let block = root["playlist"] as? [String: Any],
-                  Self.integer(in: block, keys: ["code", "result"]) == 0,
                   let result = block["data"] as? [String: Any] else {
-                throw APIError.unavailable
+                throw APIError.providerRejected(Self.responseDiagnostic(from: data))
+            }
+            guard Self.integer(in: block, keys: ["code", "result"]) == 0 else {
+                throw APIError.providerRejected(Self.responseDiagnostic(from: data))
             }
             if let rawTotal = Self.integer(in: result, keys: ["total_song_num", "songlist_size", "totalNum"]) {
                 expectedCount = max(expectedCount, rawTotal)
@@ -723,10 +785,31 @@ actor QQMusicAPI {
         guard Self.isSuccess(response), let root = Self.jsonObject(from: data) else {
             throw APIError.invalidResponse
         }
-        if let code = Self.integer(in: root, keys: ["code", "subcode"]), code != 0 {
-            throw APIError.unavailable
+        if let code = Self.text(in: root, keys: ["code", "subcode"]), code != "0" {
+            throw APIError.providerRejected(Self.responseDiagnostic(from: root))
         }
         return root
+    }
+
+    private static func responseDiagnostic(from data: Data) -> String {
+        guard let root = jsonObject(from: data) else { return "无法识别的响应" }
+        return responseDiagnostic(from: root)
+    }
+
+    private static func responseDiagnostic(from root: [String: Any]) -> String {
+        var detailObjects = [root]
+        if let data = root["data"] as? [String: Any] {
+            detailObjects.append(data)
+        }
+        for object in detailObjects {
+            let code = text(in: object, keys: ["code", "subcode", "ret", "errCode"])
+            let message = text(in: object, keys: ["message", "msg", "errMsg", "errmsg"])
+            if let code, code != "0" {
+                return message.map { "响应码 \(code)：\($0)" } ?? "响应码 \(code)"
+            }
+            if let message, !message.isEmpty { return message }
+        }
+        return "接口没有返回歌单数据"
     }
 
     private static func url(_ raw: String, query: [String: String]) throws -> URL {
@@ -943,10 +1026,11 @@ actor QQMusicAPI {
         let allowed = Set([
             "uin", "skey", "p_uin", "p_skey", "pt4_token", "qqmusic_uin",
             "qqmusic_key", "qm_keyst", "music_key", "musickey", "musicid",
-            "loginUin", "pskey", "wxskey", "wx_skey"
-        ])
+            "loginUin", "login_type", "wxuin", "wx_skey", "wxskey", "wxrefresh_token",
+            "pskey", "psrf_qqaccess_token", "psrf_qqrefresh_token"
+        ].map { $0.lowercased() })
         var pairs = cookieStorage.cookies?.filter {
-            allowed.contains($0.name)
+            allowed.contains($0.name.lowercased())
         }.map { "\($0.name)=\($0.value)" } ?? []
         if includeQRSig, let qrsig = cookieValue("qrsig"), !qrsig.isEmpty {
             pairs.insert("qrsig=\(qrsig)", at: 0)
@@ -982,13 +1066,22 @@ actor QQMusicAPI {
     private static func playlistAuthKey(in cookies: [String: String]) -> String? {
         let accepted = [
             "qm_keyst", "qqmusic_key", "music_key", "musickey",
-            "p_skey", "pskey", "skey", "wx_skey", "wxskey"
+            "p_skey", "pskey", "skey", "wx_skey", "wxskey",
+            "psrf_qqaccess_token", "psrf_qqrefresh_token", "wxrefresh_token"
         ]
         for key in accepted {
             if let value = cookies.first(where: { $0.key.lowercased() == key })?.value,
                !value.isEmpty {
                 return value
             }
+        }
+        return nil
+    }
+
+    private static func musicAuthTicket(in cookies: [String: String]) -> String? {
+        let accepted = ["qm_keyst", "qqmusic_key", "music_key", "musickey"]
+        for key in accepted {
+            if let value = cookieValue(key, in: cookies), !value.isEmpty { return value }
         }
         return nil
     }
@@ -1013,6 +1106,19 @@ actor QQMusicAPI {
         guard !value.isEmpty, value.allSatisfy({ $0.isNumber }),
               let number = UInt64(value), number > 0 else { return nil }
         return String(number)
+    }
+
+    /// WeChat-backed QQ Music sessions identify the user with `wxuin`; using
+    /// a stale `uin` from the same cookie header can make playlist reads target
+    /// the wrong profile while the login UI still appears successful.
+    private static func qqUserIdentifier(in cookies: [String: String]) -> String? {
+        let loginType = cookieValue("login_type", in: cookies)
+        let names = loginType == "2"
+            ? ["wxuin", "uin", "p_uin", "qqmusic_uin", "musicid", "loginUin"]
+            : ["uin", "qqmusic_uin", "musicid", "loginUin", "p_uin", "wxuin"]
+        return names
+            .compactMap { cookieValue($0, in: cookies).flatMap(normalizedQQIdentifier) }
+            .first
     }
 
     private static func cookieNickname(in cookies: [String: String]) -> String? {

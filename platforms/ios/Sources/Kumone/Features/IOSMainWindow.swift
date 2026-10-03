@@ -25,6 +25,7 @@ public struct IOSMainWindow: View {
     @State private var selectedTab: IOSTab = .home
     @State private var homePath = NavigationPath()
     @State private var newPath = NavigationPath()
+    @State private var radioPath = NavigationPath()
     @State private var searchPath = NavigationPath()
     @State private var libraryPath = NavigationPath()
 
@@ -243,14 +244,18 @@ public struct IOSMainWindow: View {
                 tabStack(.new) { ExploreView() }
             }
 
-            // Search stays a regular tab so the system doesn't add the
-            // dedicated search-tab exit control used by other tab designs.
-            Tab("搜索", systemImage: "magnifyingglass", value: .search) {
-                tabStack(.search) { SearchView(query: "") }
+            Tab("广播", systemImage: "dot.radiowaves.left.and.right", value: .radio) {
+                tabStack(.radio) { FMView() }
             }
 
             Tab("资料库", systemImage: "square.stack", value: .library) {
                 tabStack(.library) { LocalPlaylistsView() }
+            }
+
+            // The search role pins the magnifying-glass tab at the trailing
+            // edge, matching Music's separated search control.
+            Tab(value: .search, role: .search) {
+                tabStack(.search) { SearchView(query: "") }
             }
         }
         .toolbarBackground(.hidden, for: .tabBar)
@@ -286,6 +291,8 @@ public struct IOSMainWindow: View {
             tabStack(.home) { HomeView() }
         case .new:
             tabStack(.new) { ExploreView() }
+        case .radio:
+            tabStack(.radio) { FMView() }
         case .search:
             tabStack(.search) { SearchView(query: "") }
         case .library:
@@ -297,6 +304,7 @@ public struct IOSMainWindow: View {
         switch tab {
         case .home: homePath = NavigationPath()
         case .new: newPath = NavigationPath()
+        case .radio: radioPath = NavigationPath()
         case .search: searchPath = NavigationPath()
         case .library: libraryPath = NavigationPath()
         }
@@ -329,6 +337,7 @@ public struct IOSMainWindow: View {
         switch tab {
         case .home: return $homePath
         case .new: return $newPath
+        case .radio: return $radioPath
         case .search: return $searchPath
         case .library: return $libraryPath
         }
@@ -336,13 +345,14 @@ public struct IOSMainWindow: View {
 }
 
 enum IOSTab: Hashable {
-    case home, new, search, library
+    case home, new, radio, search, library
 }
 
 extension IOSMainWindow {
     static let tabItems: [GlassTabBar.Item] = [
         .init(tab: .home, title: "主页", icon: "house"),
         .init(tab: .new, title: "新内容", icon: "square.grid.2x2"),
+        .init(tab: .radio, title: "广播", icon: "dot.radiowaves.left.and.right"),
         .init(tab: .search, title: "搜索", icon: "magnifyingglass"),
         .init(tab: .library, title: "资料库", icon: "square.stack"),
     ]

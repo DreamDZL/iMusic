@@ -23,6 +23,7 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
     @Published private(set) var isSyncingAfterLogin = false
     @Published private(set) var lastRefreshedAt: Date?
     @Published private(set) var errorMessage: String?
+    @Published private(set) var warningMessage: String?
     @Published private(set) var lastLoginSyncMessage: String?
 
     private var lastRefreshAttempt: Date?
@@ -38,6 +39,7 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
         guard session.isLoggedIn, let requestCookie = session.cookie else {
             playlists = []
             errorMessage = nil
+            warningMessage = nil
             return
         }
         guard !isRefreshing else { return }
@@ -50,7 +52,11 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
         let sessionRevision = session.sessionRevision
         isRefreshing = true
         lastRefreshAttempt = .now
+        // Never reuse a playlist snapshot for a sync started after a refresh
+        // failure. A successful fetch sets this back to the active revision.
+        lastRefreshedSessionRevision = nil
         errorMessage = nil
+        warningMessage = nil
         defer { isRefreshing = false }
 
         do {
@@ -60,6 +66,7 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                                           expectedSessionRevision: sessionRevision,
                                           expectedCookie: requestCookie)
             playlists = result.playlists
+            warningMessage = result.warningMessage
             lastRefreshedAt = .now
             lastRefreshedSessionRevision = sessionRevision
         } catch {
@@ -97,12 +104,14 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                 await self.refresh(force: true)
             }
             guard session.isLoggedIn, session.sessionRevision == revision else { return }
-            guard self.errorMessage == nil else {
+            guard self.lastRefreshedSessionRevision == revision, self.errorMessage == nil else {
                 self.lastLoginSyncMessage = self.errorMessage
                 return
             }
             guard !self.playlists.isEmpty else {
-                self.lastLoginSyncMessage = "账号中没有可同步的歌单"
+                self.lastLoginSyncMessage = self.warningMessage.map {
+                    "没有导入歌单：\($0)"
+                } ?? "账号中没有可同步的歌单"
                 return
             }
 
@@ -112,6 +121,11 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                 self.lastLoginSyncMessage = "QQ 歌单同步完成：新增 \(report.inserted)，更新 \(report.updated)，最新 \(report.unchanged)"
             } else {
                 self.lastLoginSyncMessage = "已同步 \(report.changedCount) 个，\(report.failed.count) 个歌单暂时失败"
+            }
+            if let warning = self.warningMessage {
+                self.lastLoginSyncMessage = [self.lastLoginSyncMessage, warning]
+                    .compactMap { $0 }
+                    .joined(separator: "；")
             }
         }
         loginSyncTask = task

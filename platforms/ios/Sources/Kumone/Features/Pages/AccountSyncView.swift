@@ -55,11 +55,10 @@ struct AccountSyncView: View {
         .task(id: account.isLoggedIn) {
             if account.isLoggedIn { await refresh() }
         }
-        .task {
-            if qqMusic.isLoggedIn { await qqPlaylists.refresh() }
-        }
-        .onChange(of: qqMusic.sessionRevision) { _ in
-            Task { await qqPlaylists.refresh(force: true) }
+        .task(id: qqMusic.sessionRevision) {
+            guard qqMusic.isLoggedIn else { return }
+            await qqPlaylists.refresh(force: true)
+            await qqPlaylists.syncAfterLogin()
         }
         .sheet(isPresented: $showLogin) {
 #if os(iOS)
@@ -289,9 +288,12 @@ struct AccountSyncView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else if let message = qqPlaylists.lastLoginSyncMessage {
-                    Label(message, systemImage: "checkmark.circle.fill")
+                    let hasIssue = message.contains("无法") || message.contains("失败")
+                        || message.contains("警告") || message.contains("拒绝")
+                    Label(message, systemImage: hasIssue ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(hasIssue ? Color.orange : Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 HStack(spacing: 8) {
@@ -311,6 +313,22 @@ struct AccountSyncView: View {
                 }
 
                 Button {
+                    Task { await qqPlaylists.syncAfterLogin() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if qqPlaylists.isSyncingAfterLogin {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                        }
+                        Text(qqPlaylists.isSyncingAfterLogin ? "正在同步 QQ 歌单…" : "立即同步 QQ 歌单")
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(qqPlaylists.isRefreshing || qqPlaylists.isImporting || qqPlaylists.isSyncingAfterLogin)
+
+                Button {
                     showQQPlaylistPicker = true
                 } label: {
                     Label("管理本地歌单副本", systemImage: "music.note.list")
@@ -323,6 +341,12 @@ struct AccountSyncView: View {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+                if let warning = qqPlaylists.warningMessage {
+                    Label(warning, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
                 Text("登录 QQ 音乐后，可选择读取你创建或收藏的歌单并导入为本地副本。")
