@@ -1001,7 +1001,8 @@ actor QQMusicAPI {
                 let routeName = responseKey == "playlist" ? "CgiGetDiss" : "uniform_get_Dissinfo"
                 routeErrors.append("\(routeName)：\(Self.safeRouteFailure(error))")
                 if responseKey == "playlist",
-                   case let .sessionCredentialRejected(_, ticketMissing) = error {
+                   let apiError = error as? APIError,
+                   case let .sessionCredentialRejected(_, ticketMissing) = apiError {
                     sessionError = sessionError ?? .sessionCredentialRejected(
                         "QQ 音乐会话凭据未通过验证",
                         ticketMissing: ticketMissing
