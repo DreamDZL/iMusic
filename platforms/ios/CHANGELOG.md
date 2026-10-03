@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.40 - 2026-10-04
+
+### Fixed / 修复
+
+**iOS**: QQ account-playlist import now falls back to the legacy desktop playlist-detail endpoint after the current and mobile-compatible endpoints fail or return an incomplete page. The fallback validates pagination and never saves a partial local copy. Persistent `3a44` failures now point users to QQ profile/playlist visibility settings without treating the response as proof of an expired login.
+
+**iOS**：QQ 账号歌单导入在当前接口和移动端兼容接口失败或返回不完整分页后，会回退到旧版桌面歌单详情接口；回退数据也会校验分页完整性，不会保存不完整的本地副本。持续返回 `3a44` 时会提示检查 QQ 个人主页/歌单可见性，不再将其当作登录过期的证据。
+
 ## 1.0.39 - 2026-10-04
 
 ### Fixed / 修复
