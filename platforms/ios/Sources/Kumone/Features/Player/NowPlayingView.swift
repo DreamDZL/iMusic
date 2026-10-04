@@ -2443,9 +2443,9 @@ private struct IOSMinimalLyricsColumn: View {
 }
 
 private struct MinimalLyricCentersKey: PreferenceKey {
-    static var defaultValue: [Int: CGRect] = [:]
+    static var defaultValue: [Int: CGFloat] = [:]
 
-    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
         value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
     }
 }
