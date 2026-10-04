@@ -70,6 +70,8 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(qrcLine.text, qrcLine.words?.map(\.text).joined())
         XCTAssertEqual(yrcLine.words?.first?.start ?? .nan, 1.075, accuracy: 0.0001)
         XCTAssertEqual(qrcLine.words?.first?.start ?? .nan, 1.075, accuracy: 0.0001)
+        XCTAssertEqual(yrcLine.words?.last?.duration ?? .nan, 0.4, accuracy: 0.0001)
+        XCTAssertEqual(qrcLine.words?.last?.duration ?? .nan, 0.4, accuracy: 0.0001)
     }
 
     func testWordAndCharacterProgressFollowProviderRunTiming() {

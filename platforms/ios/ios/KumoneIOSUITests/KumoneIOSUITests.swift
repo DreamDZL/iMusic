@@ -14,9 +14,10 @@ final class KumoneIOSUITests: XCTestCase {
         let tabs = app.tabBars.buttons
         let destinations = [
             (tab: "主页", title: "主页"),
-            (tab: "新内容", title: "新内容"),
-            (tab: "搜索", title: "搜索"),
+            (tab: "新发现", title: "新发现"),
+            (tab: "广播", title: "漫游"),
             (tab: "资料库", title: "资料库"),
+            (tab: "搜索", title: "搜索"),
         ]
 
         for destination in destinations {
@@ -39,19 +40,19 @@ final class KumoneIOSUITests: XCTestCase {
                     "Search should show its offline empty-state prompt before the user enters a query"
                 )
             }
-            if destination.tab == "新内容" {
+            if destination.tab == "新发现" {
                 let topAttachment = XCTAttachment(screenshot: app.screenshot())
-                topAttachment.name = "iMusic-新内容-顶部"
+                topAttachment.name = "iMusic-新发现-顶部"
                 topAttachment.lifetime = .keepAlways
                 add(topAttachment)
 
                 XCTAssertTrue(
                     app.staticTexts["按类型浏览"].waitForExistence(timeout: 5),
-                    "New should expose its local genre browser without requiring network content"
+                    "New Discovery should expose its local genre browser without requiring network content"
                 )
                 XCTAssertTrue(
                     app.scrollViews["exploreContentScrollView"].waitForExistence(timeout: 5),
-                    "New should expose a stable, accessible content scroll view"
+                    "New Discovery should expose a stable, accessible content scroll view"
                 )
                 let mandarinGenre = app.buttons["浏览华语音乐"]
                 XCTAssertTrue(mandarinGenre.waitForExistence(timeout: 5))
@@ -59,7 +60,7 @@ final class KumoneIOSUITests: XCTestCase {
                 mandarinGenre.tap()
                 XCTAssertTrue(mandarinGenre.isSelected, "Selecting a genre should update its selected state")
                 let genreAttachment = XCTAttachment(screenshot: app.screenshot())
-                genreAttachment.name = "iMusic-新内容-类型"
+                genreAttachment.name = "iMusic-新发现-类型"
                 genreAttachment.lifetime = .keepAlways
                 add(genreAttachment)
                 continue

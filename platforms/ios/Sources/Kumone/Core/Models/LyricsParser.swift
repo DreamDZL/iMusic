@@ -144,14 +144,18 @@ enum LyricsParser {
             .map { _, text in (TimeInterval.infinity, text) }
     }
 
-    private static func normalize(_ body: String) -> String {
+    private static func normalizePreservingWhitespace(_ body: String) -> String {
         body
             .replacingOccurrences(of: "\\r\\n", with: "\n")
             .replacingOccurrences(of: "\\n", with: "\n")
             .replacingOccurrences(of: "\\r", with: "\n")
             .replacingOccurrences(of: "\\uFEFF", with: "")
+            .replacingOccurrences(of: "\u{FEFF}", with: "")
+    }
+
+    private static func normalize(_ body: String) -> String {
+        normalizePreservingWhitespace(body)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "\u{FEFF}"))
     }
 
     /// Parses an LRC body into (time, text) pairs. Handles multiple timestamps
@@ -199,7 +203,9 @@ enum LyricsParser {
         var lines: [LyricLine] = []
         var idx = 0
         for raw in yrc.components(separatedBy: .newlines) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
+            // Keep lyric-edge spaces until trimTimedWords can shorten the
+            // corresponding timed run instead of silently dropping them.
+            let line = String(raw.drop(while: \.isWhitespace))
             guard let head = line.firstMatch(of: lineTag) else { continue }
             let lineStart = (Double(head.output.1) ?? 0) / 1000
             let contentStart = head.range.upperBound
@@ -236,8 +242,10 @@ enum LyricsParser {
         var lines: [LyricLine] = []
         var idx = 0
 
-        for raw in normalize(body).components(separatedBy: .newlines) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
+        for raw in normalizePreservingWhitespace(body).components(separatedBy: .newlines) {
+            // Preserve trailing lyric whitespace so its run duration is
+            // adjusted in proportion to the visible graphemes below.
+            let line = String(raw.drop(while: \.isWhitespace))
             guard let head = line.firstMatch(of: lineTag) else { continue }
             let minutes = Double(head.output.1) ?? 0
             let seconds = Double(head.output.2) ?? 0
