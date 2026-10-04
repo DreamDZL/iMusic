@@ -72,4 +72,53 @@ final class KumoneIOSUITests: XCTestCase {
             add(attachment)
         }
     }
+
+    @MainActor
+    func testAppleMusicPlayerSongAndLyricsPages() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture"]
+        app.launch()
+
+        let miniPlayer = app.buttons["miniPlayerOpenNowPlaying"]
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 15))
+        miniPlayer.tap()
+
+        let songPage = app.descendants(matching: .any)["appleMusicSongPage"]
+        XCTAssertTrue(songPage.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["nowPlayingArtworkImage"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["showSynchronizedLyrics"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["nowPlayingTransportControls"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["nowPlayingVolumeControl"].exists)
+
+        let songAttachment = XCTAttachment(screenshot: app.screenshot())
+        songAttachment.name = "iMusic-AppleMusic-歌曲页"
+        songAttachment.lifetime = .keepAlways
+        add(songAttachment)
+
+        app.buttons["showSynchronizedLyrics"].tap()
+        let lyricsPage = app.descendants(matching: .any)["appleMusicLyricsPage"]
+        XCTAssertTrue(lyricsPage.waitForExistence(timeout: 10))
+        let lyricsScroll = app.scrollViews["synchronizedLyricsScrollView"]
+        XCTAssertTrue(lyricsScroll.waitForExistence(timeout: 10))
+        let transportControls = app.descendants(matching: .any)["nowPlayingTransportControls"]
+        let volumeControl = app.descendants(matching: .any)["nowPlayingVolumeControl"]
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["showSynchronizedLyrics"].waitForNonExistence(timeout: 5))
+
+        lyricsScroll.swipeRight()
+        XCTAssertTrue(transportControls.waitForExistence(timeout: 5))
+        songPage.swipeLeft()
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 5))
+
+        lyricsScroll.swipeUp()
+        XCTAssertTrue(lyricsPage.exists)
+        XCTAssertFalse(transportControls.exists)
+
+        let lyricsAttachment = XCTAttachment(screenshot: app.screenshot())
+        lyricsAttachment.name = "iMusic-AppleMusic-歌词页"
+        lyricsAttachment.lifetime = .keepAlways
+        add(lyricsAttachment)
+    }
 }

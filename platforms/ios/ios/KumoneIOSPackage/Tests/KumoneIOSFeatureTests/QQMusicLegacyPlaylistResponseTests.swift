@@ -13,7 +13,25 @@ final class QQMusicLegacyPlaylistResponseTests: XCTestCase {
         XCTAssertEqual(values["disstid"], "7217720898")
         XCTAssertEqual(values["new_format"], "1")
         XCTAssertEqual(values["platform"], "yqq.json")
+        XCTAssertEqual(values["loginUin"], "0")
+        XCTAssertEqual(values["hostUin"], "0")
+        XCTAssertEqual(values["g_tk"], "5381")
         XCTAssertNil(QQMusicLegacyPlaylistResponse.endpointURL(playlistID: 0))
+    }
+
+    func testLegacyEndpointCanCarryAccountAndCSRFContext() throws {
+        let url = try XCTUnwrap(QQMusicLegacyPlaylistResponse.endpointURL(
+            playlistID: 7_217_720_898,
+            loginUin: "123456789",
+            hostUin: "123456789",
+            gTk: "987654321"
+        ))
+        let query = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        let values = Dictionary(uniqueKeysWithValues: query.map { ($0.name, $0.value ?? "") })
+
+        XCTAssertEqual(values["loginUin"], "123456789")
+        XCTAssertEqual(values["hostUin"], "123456789")
+        XCTAssertEqual(values["g_tk"], "987654321")
     }
 
     func testDecodeSlicesPagesAndUsesReportedSongCount() throws {

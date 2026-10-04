@@ -520,6 +520,63 @@ final class PlayerService: ObservableObject {
         restoreState()
     }
 
+#if os(iOS)
+    /// A deterministic, silent player state for UI tests. It is reachable only
+    /// through the explicit UI-test launch argument and never starts playback
+    /// or persists the fixture into the user's queue.
+    func installUITestFixture() {
+        sourceResolutionTask?.cancel()
+        lyricsResolutionTask?.cancel()
+        resolveGeneration += 1
+        engine.pause()
+        engine.replaceCurrentItem(with: nil)
+        seekCoordinator.invalidate()
+
+        let track = Track(
+            id: 27_000_001,
+            name: "iMusic 测试曲目",
+            artists: [ArtistRef(id: 27_000_002, name: "测试歌手")],
+            album: AlbumRef(id: 27_000_003, name: "测试专辑", picUrl: "imusic-test://artwork"),
+            durationMS: 180_000,
+            source: "wy"
+        )
+        let lyrics = ParsedLyrics(lines: (0..<14).map { index in
+            let start = Double(index * 4)
+            let first = "第\(index + 1)句"
+            return LyricLine(
+                id: index,
+                time: start,
+                text: "\(first)同步歌词",
+                words: [
+                    LyricWord(text: first, start: start, duration: 1.2),
+                    LyricWord(text: "同步歌词", start: start + 1.2, duration: 1.4),
+                ]
+            )
+        })
+
+        queue = [track]
+        queueItemIDs = [UUID().uuidString]
+        shuffledQueue = []
+        shuffledQueueItemIDs = []
+        shuffleEnabled = false
+        playNextList = []
+        playNextItemIDs = []
+        currentIndex = 0
+        source = .none
+        currentTrack = track
+        isPlaying = false
+        isBuffering = false
+        isResolvingSource = false
+        duration = track.duration
+        progress = 14
+        lyricsCursor.activeIndex = lyrics.activeIndex(at: progress)
+        self.lyrics = lyrics
+        showNowPlaying = false
+        NowPlayingManager.shared.updateMetadata(for: track, duration: track.duration)
+        NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+    }
+#endif
+
     nonisolated static func playbackTimeObserverInterval(isSceneActive: Bool) -> TimeInterval {
         // Five foreground samples per second move the active lyric line.
         // Per-word highlighting reads AVPlayer's live clock at a separately
@@ -642,11 +699,12 @@ final class PlayerService: ObservableObject {
     /// Stop every playback surface when a track cannot start or the queue ends.
     /// Keep the selected track and elapsed position available for retry.
     private func settlePlaybackAsPaused(preservingCurrentItemForRetry: Bool = false) {
+        engine.pause()
+        snapshotPausedPlaybackPosition()
         let state = PausedPlaybackState(
             elapsed: progress,
             preservingCurrentItemForRetry: preservingCurrentItemForRetry
         )
-        engine.pause()
 #if os(iOS)
         deactivateAudioSession()
 #endif
@@ -683,6 +741,8 @@ final class PlayerService: ObservableObject {
             wasPlayingBeforeInterruption = isPlaying
             if isPlaying {
                 // The system already silenced us; sync our state and UI.
+                engine.pause()
+                snapshotPausedPlaybackPosition()
                 isPlaying = false
                 NowPlayingManager.shared.updateElapsed(progress, rate: 0)
             }
@@ -790,6 +850,7 @@ final class PlayerService: ObservableObject {
         guard let track = currentTrack else { return }
         if isPlaying {
             engine.pause()
+            snapshotPausedPlaybackPosition()
 #if os(iOS)
             deactivateAudioSession()
 #endif
@@ -826,12 +887,26 @@ final class PlayerService: ObservableObject {
             isResolvingSource = false
         }
         engine.pause()
+        snapshotPausedPlaybackPosition()
 #if os(iOS)
         deactivateAudioSession()
 #endif
         isPlaying = false
         AudioSpectrum.shared.reset()
         NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+    }
+
+    /// Publishes the precise AVPlayer clock before switching the UI to its
+    /// paused, low-frequency progress source.
+    private func snapshotPausedPlaybackPosition() {
+        guard !isResolvingSource, let item = engine.currentItem else { return }
+        let settledPosition = PlaybackPositionPolicy.pauseSnapshot(
+            livePosition: item.currentTime().seconds,
+            publishedPosition: progress
+        )
+        progress = settledPosition
+        updateLyricsCursor(at: settledPosition)
+        NowPlayingManager.shared.updateElapsed(settledPosition, rate: 0)
     }
 
     func next() {
@@ -943,7 +1018,24 @@ final class PlayerService: ObservableObject {
         engine.seek(to: CMTime(seconds: target, preferredTimescale: 600),
                     toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
             Task { @MainActor in
-                if let self, finished, self.seekCoordinator.isCurrent(generation), self.isPlaying {
+                guard let self, self.seekCoordinator.isCurrent(generation) else {
+                    completion?()
+                    return
+                }
+
+                let actualPosition = self.engine.currentItem?.currentTime().seconds ?? .nan
+                let settledPosition = PlaybackPositionPolicy.settledPosition(
+                    actualPosition: finished ? actualPosition : .nan,
+                    requestedPosition: target
+                )
+                self.progress = settledPosition
+                self.updateLyricsCursor(at: settledPosition)
+                NowPlayingManager.shared.updateElapsed(
+                    settledPosition,
+                    rate: self.isPlaying ? Double(self.playbackRate) : 0
+                )
+
+                if finished, self.isPlaying {
                     self.resumePlaybackAfterSeek()
                 }
                 completion?()

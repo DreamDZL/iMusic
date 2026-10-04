@@ -46,6 +46,39 @@ struct PlaybackSeekCoordinator {
     }
 }
 
+enum PlaybackPositionPolicy {
+    /// While playing, read AVPlayer's clock for smooth rendering. While paused,
+    /// prefer the published value so an asynchronous seek completion can
+    /// invalidate the scrubber and leave it on the settled position.
+    static func displayPosition(
+        isPlaying: Bool,
+        livePosition: TimeInterval,
+        publishedPosition: TimeInterval
+    ) -> TimeInterval {
+        let candidate = isPlaying ? livePosition : publishedPosition
+        guard candidate.isFinite else {
+            return publishedPosition.isFinite ? max(0, publishedPosition) : 0
+        }
+        return max(0, candidate)
+    }
+
+    /// AVPlayer can quantize or reject a seek. Use its settled clock when it
+    /// is valid; otherwise keep the requested position as the UI fallback.
+    static func settledPosition(
+        actualPosition: TimeInterval,
+        requestedPosition: TimeInterval
+    ) -> TimeInterval {
+        guard actualPosition.isFinite, actualPosition >= 0 else {
+            return requestedPosition.isFinite ? max(0, requestedPosition) : 0
+        }
+        return actualPosition
+    }
+
+    static func pauseSnapshot(livePosition: TimeInterval, publishedPosition: TimeInterval) -> TimeInterval {
+        settledPosition(actualPosition: livePosition, requestedPosition: publishedPosition)
+    }
+}
+
 @MainActor
 enum PlaybackItemTransition {
     /// Detaches the outgoing item before asynchronous resolution of its

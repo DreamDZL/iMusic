@@ -1,7 +1,9 @@
 import Foundation
 
 enum IOSUITestMode {
-    static let isEnabled = ProcessInfo.processInfo.arguments.contains("-imusic-ui-testing")
+    private static var arguments: [String] { ProcessInfo.processInfo.arguments }
+    static let isEnabled = arguments.contains("-imusic-ui-testing")
+    static let hasPlayerFixture = isEnabled && arguments.contains("-imusic-ui-player-fixture")
 }
 
 #if os(iOS)

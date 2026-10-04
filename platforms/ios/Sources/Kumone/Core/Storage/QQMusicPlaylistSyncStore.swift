@@ -311,30 +311,28 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                 failed.append("\(playlist.name)：导入已取消")
                 break
             } catch {
-                if let apiError = error as? QQMusicAPI.APIError,
-                   case .providerRejected(let detail) = apiError,
-                   detail.localizedCaseInsensitiveContains("3a44") {
-                    let diagnostic = "QQ 歌单详情接口仍返回 3a44。接口阶段：\(detail)。此码不能证明登录失效；若为个人歌单，请检查 QQ 音乐个人主页和歌单可见性设置后重试"
-                    session.recordPlaylistValidationFailure(
-                        diagnostic,
-                        expectedSessionRevision: sessionRevision
-                    )
-                    failed.append("\(playlist.name)：\(diagnostic)")
-                    // Treat the observed provider response as a sync failure,
-                    // but do not claim that this opaque code proves a missing
-                    // ticket or invalidates the account session.
-                    break
-                }
-                if let apiError = error as? QQMusicAPI.APIError,
-                   case .sessionCredentialRejected = apiError {
-                    session.recordPlaylistValidationFailure(
-                        error.localizedDescription,
-                        expectedSessionRevision: sessionRevision
-                    )
-                    failed.append("\(playlist.name)：\(error.localizedDescription)")
-                    // This is a session-wide credential failure; repeating the
-                    // same request for every playlist only adds long waits.
-                    break
+                if let apiError = error as? QQMusicAPI.APIError {
+                    switch apiError {
+                    case .providerRejected(let detail)
+                        where detail.localizedCaseInsensitiveContains("3a44"):
+                        let diagnostic = "QQ 歌单详情接口仍返回 3a44。接口阶段：\(detail)。此响应不能单独判断登录是否失效；可检查个人主页和歌单访问权限。会继续尝试同步其他歌单"
+                        failed.append("\(playlist.name)：\(diagnostic)")
+                    case .sessionCredentialRejected:
+                        session.recordPlaylistValidationFailure(
+                            error.localizedDescription,
+                            expectedSessionRevision: sessionRevision
+                        )
+                        failed.append("\(playlist.name)：\(error.localizedDescription)")
+                    default:
+                        failed.append("\(playlist.name)：\(error.localizedDescription)")
+                    }
+
+                    // Playlist-scoped errors move on; only credential errors
+                    // make every remaining request futile.
+                    if QQMusicPlaylistSyncPolicy.shouldStopAfterPlaylistFailure(apiError) {
+                        break
+                    }
+                    continue
                 }
                 failed.append("\(playlist.name)：\(error.localizedDescription)")
             }

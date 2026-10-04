@@ -46,6 +46,50 @@ final class PlaybackSeekCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.pendingPosition, 47)
     }
 
+    func testPausedScrubberUsesPublishedSeekPositionInsteadOfStalePlayerClock() {
+        XCTAssertEqual(
+            PlaybackPositionPolicy.displayPosition(
+                isPlaying: false,
+                livePosition: 8,
+                publishedPosition: 31.5
+            ),
+            31.5
+        )
+    }
+
+    func testPlayingScrubberUsesLivePlayerClock() {
+        XCTAssertEqual(
+            PlaybackPositionPolicy.displayPosition(
+                isPlaying: true,
+                livePosition: 8.25,
+                publishedPosition: 8
+            ),
+            8.25
+        )
+    }
+
+    func testSeekCompletionPublishesActualPositionOrFallsBackToRequest() {
+        XCTAssertEqual(
+            PlaybackPositionPolicy.settledPosition(actualPosition: 31.48, requestedPosition: 31.5),
+            31.48
+        )
+        XCTAssertEqual(
+            PlaybackPositionPolicy.settledPosition(actualPosition: .nan, requestedPosition: 31.5),
+            31.5
+        )
+    }
+
+    func testPauseSnapshotUsesLivePlayerClockAndRejectsInvalidValues() {
+        XCTAssertEqual(
+            PlaybackPositionPolicy.pauseSnapshot(livePosition: 31.42, publishedPosition: 31),
+            31.42
+        )
+        XCTAssertEqual(
+            PlaybackPositionPolicy.pauseSnapshot(livePosition: .nan, publishedPosition: 31),
+            31
+        )
+    }
+
     func testInvalidationClearsQueuedPositionAndRejectsStaleCompletion() {
         var coordinator = PlaybackSeekCoordinator()
         let request = coordinator.beginSeek(to: 47, itemAvailable: false)

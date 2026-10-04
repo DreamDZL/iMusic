@@ -62,6 +62,9 @@ public struct IOSMainWindow: View {
                     player: player,
                     account: account
                 )
+                if IOSUITestMode.hasPlayerFixture {
+                    player.installUITestFixture()
+                }
                 if !IOSUITestMode.isEnabled {
                     await LXSyncService.shared.reconnectIfConfigured()
                     updateLog.presentIfNeeded()
@@ -469,6 +472,7 @@ struct IOSMiniPlayerBar: View {
             .buttonStyle(.plain)
             .accessibilityLabel(nowPlayingAccessibilityLabel)
             .accessibilityHint("打开正在播放")
+            .accessibilityIdentifier("miniPlayerOpenNowPlaying")
 
             if !presentation.isInline {
                 Button(action: player.previous) {

@@ -149,7 +149,36 @@ struct NowPlayingView: View {
     // MARK: - Backdrop
 
     private var backdrop: some View {
+#if os(iOS)
+        GeometryReader { geometry in
+            ZStack {
+                if let artworkImage {
+                    Image(platformImage: artworkImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                        .accessibilityLabel("专辑封面背景")
+                        .accessibilityIdentifier("nowPlayingArtworkImage")
+                        .blur(radius: showLyricsOnMobile ? 24 : 0)
+                        .overlay(artworkPalette.colors.primary.opacity(showLyricsOnMobile ? 0.28 : 0.10))
+                } else {
+                    artworkBackdrop
+                }
+
+                LinearGradient(
+                    colors: [.black.opacity(0.12), .clear, .black.opacity(0.84)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+            .animation(.easeInOut(duration: 0.28), value: showLyricsOnMobile)
+        }
+        .background(.black)
+        .ignoresSafeArea()
+#else
         artworkBackdrop.ignoresSafeArea()
+#endif
     }
 
     /// The two Apple Music pages are a horizontal pager: a left swipe opens
@@ -218,6 +247,14 @@ struct NowPlayingView: View {
             return
         }
         let playbackKey = track.playbackKey
+#if os(iOS)
+        if IOSUITestMode.hasPlayerFixture, track.id == 27_000_001 {
+            let image = Self.makeUITestArtwork()
+            artworkImage = image
+            transitionArtworkPalette(to: ArtworkPalette.extract(from: image, cacheKey: "imusic-ui-test-artwork"))
+            return
+        }
+#endif
         var urlString = track.album.picUrl
         if urlString == nil {
             let query = [track.name, track.artistNames].filter { !$0.isEmpty }.joined(separator: " ")
@@ -303,30 +340,31 @@ struct NowPlayingView: View {
     /// alternate page.
     private func appleMusicCompactLayout(size: CGSize) -> some View {
         let isShortScreen = size.height < 680
-        let artworkDim = min(size.width - 56, size.height * (isShortScreen ? 0.37 : 0.43), 360)
 
         if showLyricsOnMobile {
-            return AnyView(appleMusicLyricsPage())
+            return AnyView(appleMusicLyricsPage()
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("appleMusicLyricsPage"))
         }
 
         return AnyView(VStack(spacing: 0) {
-            Spacer(minLength: isShortScreen ? 8 : 20)
-
-            artworkView(size: artworkDim)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Spacer(minLength: isShortScreen ? 22 : 46)
 
             trackMetaView
-                .padding(.top, isShortScreen ? 12 : 22)
-                .padding(.bottom, isShortScreen ? 8 : 16)
+                .padding(.bottom, isShortScreen ? 10 : 18)
 
             NowPlayingScrubber(showsRemainingTime: true)
                 .padding(.bottom, isShortScreen ? 4 : 10)
 
             primaryTransportControls
                 .padding(.bottom, isShortScreen ? 5 : 12)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("nowPlayingTransportControls")
 
             CompactVolumeControl()
                 .padding(.bottom, isShortScreen ? 2 : 10)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("nowPlayingVolumeControl")
 
             songPageAccessoryControls
         }
@@ -334,6 +372,8 @@ struct NowPlayingView: View {
         .padding(.top, isShortScreen ? 32 : 42)
         .padding(.bottom, isShortScreen ? 12 : 18)
         .animation(.easeInOut(duration: 0.22), value: showLyricsOnMobile))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("appleMusicSongPage")
     }
 
     private func appleMusicLyricsPage() -> some View {
@@ -369,6 +409,7 @@ struct NowPlayingView: View {
             }
             .buttonStyle(.pressable)
             .accessibilityLabel("显示同步歌词")
+            .accessibilityIdentifier("showSynchronizedLyrics")
 
             RoutePickerButton(diameter: 40, glyphSize: 18)
                 .frame(maxWidth: .infinity)
@@ -804,6 +845,43 @@ struct NowPlayingView: View {
         .shadow(color: .black.opacity(0.3), radius: 18, y: 9)
     }
 
+#if os(iOS)
+    private static func makeUITestArtwork() -> PlatformImage {
+        let size = CGSize(width: 512, height: 512)
+        return UIGraphicsImageRenderer(size: size).image { renderer in
+            let context = renderer.cgContext
+            let colors = [
+                UIColor(red: 0.04, green: 0.47, blue: 0.55, alpha: 1).cgColor,
+                UIColor(red: 0.16, green: 0.78, blue: 0.68, alpha: 1).cgColor,
+            ] as CFArray
+            let gradient = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: colors,
+                locations: [0, 1]
+            )!
+            context.drawLinearGradient(
+                gradient,
+                start: CGPoint.zero,
+                end: CGPoint(x: size.width, y: size.height),
+                options: []
+            )
+            context.setFillColor(UIColor(red: 0.98, green: 0.70, blue: 0.38, alpha: 0.95).cgColor)
+            context.fillEllipse(in: CGRect(x: 82, y: 84, width: 250, height: 250))
+            context.setFillColor(UIColor(red: 0.18, green: 0.20, blue: 0.48, alpha: 0.95).cgColor)
+            context.fillEllipse(in: CGRect(x: 227, y: 232, width: 226, height: 226))
+            context.setStrokeColor(UIColor.white.withAlphaComponent(0.9).cgColor)
+            context.setLineWidth(14)
+            context.setLineCap(.round)
+            for (index, height) in [74.0, 144, 104, 190, 122, 70].enumerated() {
+                let x = CGFloat(152 + index * 42)
+                context.move(to: CGPoint(x: x, y: 256 - height / 2))
+                context.addLine(to: CGPoint(x: x, y: 256 + height / 2))
+            }
+            context.strokePath()
+        }
+    }
+#endif
+
     private var trackMetaView: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
@@ -1029,6 +1107,7 @@ struct NowPlayingView: View {
                         }
                         .padding(.horizontal, 24)
                     }
+                    .accessibilityIdentifier("synchronizedLyricsScrollView")
                     .mask(
                         LinearGradient(
                             stops: [
@@ -2782,6 +2861,7 @@ private struct MinimalQueueRow: View {
 struct NowPlayingScrubber: View {
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var clock = PlayerService.shared.clock
+    @ObservedObject private var renderingBudget = RenderingBudget.shared
     let onShowQuality: (() -> Void)?
     let showsRemainingTime: Bool
 
@@ -2794,28 +2874,45 @@ struct NowPlayingScrubber: View {
         self.showsRemainingTime = showsRemainingTime
     }
 
-    private var fraction: Double {
+    private func fraction(at playbackPosition: TimeInterval) -> Double {
         guard player.duration > 0 else { return 0 }
-        let value = isDragging ? dragProgress : clock.progress
+        let value = isDragging ? dragProgress : playbackPosition
         return min(max(value / player.duration, 0), 1)
     }
 
     var body: some View {
+        TimelineView(.animation(
+            minimumInterval: renderingBudget.minimumAnimationInterval,
+            paused: !RenderingBudget.permitsTimeDrivenLyricUpdates(
+                isPlaying: player.isPlaying,
+                isSceneActive: renderingBudget.isSceneActive
+            )
+        )) { _ in
+            scrubberContent(position: PlaybackPositionPolicy.displayPosition(
+                isPlaying: player.isPlaying,
+                livePosition: player.livePlaybackTime,
+                publishedPosition: clock.progress
+            ))
+        }
+    }
+
+    private func scrubberContent(position: TimeInterval) -> some View {
         VStack(spacing: 5) {
             GeometryReader { geo in
                 let width = geo.size.width
+                let progress = fraction(at: position)
                 ZStack(alignment: .leading) {
                     Capsule()
                         .fill(.white.opacity(0.25))
                         .frame(height: 4)
                     Capsule()
                         .fill(.white)
-                        .frame(width: max(4, width * fraction), height: 4)
+                        .frame(width: max(4, width * progress), height: 4)
                     Circle()
                         .fill(.white)
                         .frame(width: thumbDiameter, height: thumbDiameter)
                         .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
-                        .offset(x: width * fraction - thumbDiameter / 2)
+                        .offset(x: width * progress - thumbDiameter / 2)
                         .opacity(isHovering || isDragging ? 1 : 0)
                 }
                 .frame(maxHeight: .infinity)
@@ -2823,7 +2920,7 @@ struct NowPlayingScrubber: View {
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            guard player.duration > 0 else { return }
+                            guard player.duration > 0, width > 0 else { return }
                             isDragging = true
                             player.isScrubbing = true
                             dragProgress = min(max(value.location.x / width, 0), 1) * player.duration
@@ -2841,7 +2938,7 @@ struct NowPlayingScrubber: View {
             }
 
             HStack(alignment: .center, spacing: 8) {
-                Text(Formatters.duration(isDragging ? dragProgress : clock.progress))
+                Text(Formatters.duration(isDragging ? dragProgress : position))
                 Spacer()
                 if let onShowQuality {
                     Button(action: onShowQuality) {
@@ -2856,7 +2953,7 @@ struct NowPlayingScrubber: View {
                 }
                 Spacer()
                 Text(showsRemainingTime
-                     ? "−\(Formatters.duration(max(player.duration - (isDragging ? dragProgress : clock.progress), 0)))"
+                     ? "−\(Formatters.duration(max(player.duration - (isDragging ? dragProgress : position), 0)))"
                      : Formatters.duration(player.duration))
             }
             .font(.system(size: 10.5).monospacedDigit())

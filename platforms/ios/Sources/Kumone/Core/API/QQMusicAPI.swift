@@ -22,7 +22,12 @@ enum QQMusicLegacyPlaylistResponse {
         }
     }
 
-    static func endpointURL(playlistID: Int64) -> URL? {
+    static func endpointURL(
+        playlistID: Int64,
+        loginUin: String = "0",
+        hostUin: String = "0",
+        gTk: String = "5381"
+    ) -> URL? {
         guard playlistID > 0,
               var components = URLComponents(string: "https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg") else {
             return nil
@@ -34,8 +39,9 @@ enum QQMusicLegacyPlaylistResponse {
             URLQueryItem(name: "onlysong", value: "0"),
             URLQueryItem(name: "new_format", value: "1"),
             URLQueryItem(name: "disstid", value: String(playlistID)),
-            URLQueryItem(name: "loginUin", value: "0"),
-            URLQueryItem(name: "hostUin", value: "0"),
+            URLQueryItem(name: "loginUin", value: loginUin),
+            URLQueryItem(name: "hostUin", value: hostUin),
+            URLQueryItem(name: "g_tk", value: gTk),
             URLQueryItem(name: "format", value: "json"),
             URLQueryItem(name: "inCharset", value: "utf8"),
             URLQueryItem(name: "outCharset", value: "utf-8"),
@@ -138,6 +144,33 @@ enum QQMusicAccountRequestEnvelope {
             "cv": 0,
             "authst": musicTicket,
         ]
+    }
+}
+
+/// Distinguishes a playlist-scoped provider rejection from a credential error
+/// that makes every remaining playlist request futile.
+enum QQMusicPlaylistSyncPolicy {
+    static func shouldStopAfterPlaylistFailure(_ error: QQMusicAPI.APIError) -> Bool {
+        if case .sessionCredentialRejected = error { return true }
+        return false
+    }
+}
+
+enum QQMusicPlaylistErrorPolicy {
+    /// A bare 403 can be a web endpoint or risk-control rejection, so it is
+    /// playlist-scoped. Only explicit credential diagnostics or HTTP 401
+    /// invalidate the session for subsequent requests.
+    static func isSessionCredentialFailure(statusCode: Int?, diagnostic: String) -> Bool {
+        let lowerDiagnostic = diagnostic.lowercased()
+        let explicitTicketFailure = [
+            "authst", "ticket missing", "missing ticket",
+            "缺少票据", "缺少曲目凭据", "音乐票据无效"
+        ].contains { lowerDiagnostic.contains($0) }
+        let explicitSessionFailure = explicitTicketFailure || [
+            "unauthorized", "authentication failed", "invalid token",
+            "token expired", "cookie expired", "登录失效", "未登录", "认证失败"
+        ].contains { lowerDiagnostic.contains($0) }
+        return explicitSessionFailure || statusCode == 401
     }
 }
 
@@ -999,37 +1032,59 @@ actor QQMusicAPI {
             }
         }
 
-        // Match LX Music Mobile's legacy GET fallback for public playlists.
-        // It has no server-side pagination, so consume up to the app's 10k
-        // track safety limit in this single request and never call it again.
-        if !isLikedSongs, offset == 0,
-           let url = QQMusicLegacyPlaylistResponse.endpointURL(playlistID: playlistID) {
-            do {
-                try Task.checkCancellation()
-                let legacyPage = try await fetchLegacyPlaylistTrackPage(
-                    url: url,
-                    playlistID: playlistID,
-                    pageSize: 10_000,
-                    cookieValues: cookieValues
-                )
-                let knownCount = max(expectedPlaylistCount ?? 0, legacyPage.totalCount ?? 0)
-                let requiredRows = knownCount > offset
-                    ? min(10_000, knownCount - offset)
-                    : nil
-                let expectedEnd = offset + legacyPage.rows.count
-                let contradictsExpectedCount = legacyPage.hasMore == false && knownCount > expectedEnd
-                let isAdequate = (requiredRows.map { legacyPage.rows.count >= $0 } ?? true)
-                    && !contradictsExpectedCount
-                if isAdequate, (!legacyPage.rows.isEmpty || knownCount == 0) {
-                    return legacyPage
+        // Try the legacy GET with the signed-in account first, then anonymously
+        // for public playlists. It has no server-side pagination, so consume up
+        // to the app's 10k track safety limit in each request.
+        if !isLikedSongs, offset == 0 {
+            let csrfKey = Self.csrfKey(in: cookieValues) ?? ""
+            let legacyRequests: [(name: String, url: URL?, cookie: String?)] = [
+                (
+                    "旧版 GET（账号）",
+                    QQMusicLegacyPlaylistResponse.endpointURL(
+                        playlistID: playlistID,
+                        loginUin: profileID,
+                        hostUin: profileID,
+                        gTk: String(Self.hash5381(csrfKey))
+                    ),
+                    cookie
+                ),
+                (
+                    "旧版 GET（公开）",
+                    QQMusicLegacyPlaylistResponse.endpointURL(playlistID: playlistID),
+                    nil
+                ),
+            ]
+
+            for legacyRequest in legacyRequests {
+                guard let url = legacyRequest.url else { continue }
+                do {
+                    try Task.checkCancellation()
+                    let legacyPage = try await fetchLegacyPlaylistTrackPage(
+                        url: url,
+                        playlistID: playlistID,
+                        pageSize: 10_000,
+                        cookie: legacyRequest.cookie,
+                        cookieValues: cookieValues
+                    )
+                    let knownCount = max(expectedPlaylistCount ?? 0, legacyPage.totalCount ?? 0)
+                    let requiredRows = knownCount > offset
+                        ? min(10_000, knownCount - offset)
+                        : nil
+                    let expectedEnd = offset + legacyPage.rows.count
+                    let contradictsExpectedCount = legacyPage.hasMore == false && knownCount > expectedEnd
+                    let isAdequate = (requiredRows.map { legacyPage.rows.count >= $0 } ?? true)
+                        && !contradictsExpectedCount
+                    if isAdequate, (!legacyPage.rows.isEmpty || knownCount == 0) {
+                        return legacyPage
+                    }
+                    if bestIncompletePage == nil || legacyPage.rows.count > bestIncompletePage!.rows.count {
+                        bestIncompletePage = legacyPage
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    routeErrors.append("\(legacyRequest.name)：\(Self.safeRouteFailure(error))")
                 }
-                if bestIncompletePage == nil || legacyPage.rows.count > bestIncompletePage!.rows.count {
-                    bestIncompletePage = legacyPage
-                }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                routeErrors.append("旧版 GET：\(Self.safeRouteFailure(error))")
             }
         }
 
@@ -1055,6 +1110,7 @@ actor QQMusicAPI {
         url: URL,
         playlistID: Int64,
         pageSize: Int,
+        cookie: String?,
         cookieValues: [String: String]
     ) async throws -> PlaylistTrackPage {
         var request = URLRequest(url: url)
@@ -1063,6 +1119,9 @@ actor QQMusicAPI {
         request.setValue("https://y.qq.com/n/yqq/playsquare/\(playlistID).html", forHTTPHeaderField: "Referer")
         request.setValue("https://y.qq.com", forHTTPHeaderField: "Origin")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        if let cookie {
+            request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        }
         let (data, response) = try await session.data(for: request)
         guard Self.isSuccess(response) else {
             throw Self.playlistTracksRejection(from: data, response: response, cookieValues: cookieValues)
@@ -1176,21 +1235,17 @@ actor QQMusicAPI {
     ) -> APIError {
         let diagnostic = responseDiagnostic(from: data)
         let status = (response as? HTTPURLResponse)?.statusCode
-        let lowerDiagnostic = diagnostic.lowercased()
-        let explicitTicketFailure = [
-            "authst", "ticket missing", "missing ticket",
-            "缺少票据", "缺少曲目凭据", "音乐票据无效"
-        ].contains { lowerDiagnostic.contains($0) }
-        let explicitSessionFailure = explicitTicketFailure || [
-            "unauthorized", "authentication failed", "invalid token",
-            "token expired", "cookie expired", "登录失效", "未登录", "认证失败"
-        ].contains { lowerDiagnostic.contains($0) }
-        if explicitSessionFailure {
+        if QQMusicPlaylistErrorPolicy.isSessionCredentialFailure(
+            statusCode: status,
+            diagnostic: diagnostic
+        ) {
+            let lowerDiagnostic = diagnostic.lowercased()
+            let explicitTicketFailure = [
+                "authst", "ticket missing", "missing ticket",
+                "缺少票据", "缺少曲目凭据", "音乐票据无效"
+            ].contains { lowerDiagnostic.contains($0) }
             let ticketMissing = musicAuthTicket(in: cookieValues) == nil && explicitTicketFailure
             return .sessionCredentialRejected(diagnostic, ticketMissing: ticketMissing)
-        }
-        if status == 401 || status == 403 {
-            return .sessionCredentialRejected(diagnostic, ticketMissing: false)
         }
         return .providerRejected(diagnostic)
     }

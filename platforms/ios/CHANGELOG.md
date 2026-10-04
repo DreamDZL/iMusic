@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.45 - 2026-10-04
+
+### Fixed / 修复
+
+**iOS**: the Now Playing song page now uses album artwork as its full-screen, artwork-colored backdrop, while the lyrics page blurs the same artwork and hides playback and volume controls. The scrubber reads AVPlayer's live clock in a local, power-budgeted timeline; pausing and seeking publish the settled position before the UI switches to its paused clock.
+
+**iOS**：正在播放的歌曲页改为以专辑图片铺满背景并使用专辑取色，歌词页模糊同一张专辑图片且隐藏播放和音量控制。进度条通过局部、受功耗预算控制的时间轴读取 AVPlayer 实时进度；暂停和定位结束时会先发布最终位置，避免界面回退。
+
+**QQ Music**: authenticated playlist import now tries the legacy desktop detail endpoint with the account UIN as both login and playlist owner, plus the CSRF token and session cookie, before the public fallback. A `3a44` response no longer stops the rest of the selected playlist sync or changes session-validation state; its diagnostic explains that the code does not establish whether the session is invalid and suggests checking playlist access.
+
+**QQ 音乐**：歌单导入在旧版桌面详情接口中加入作为歌单所有者的账号 UIN、CSRF 参数和登录 Cookie 后再请求，并保留公开歌单回退。某个歌单返回 `3a44` 时会继续尝试其余已选歌单，也不会改写账号验证状态；诊断会说明该响应不能单独判定登录失效，并提示检查歌单访问权限。
+
 ## 1.0.44 - 2026-10-04
 
 ### Fixed / 修复

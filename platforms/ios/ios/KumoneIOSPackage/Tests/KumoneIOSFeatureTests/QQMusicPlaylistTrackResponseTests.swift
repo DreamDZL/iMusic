@@ -71,4 +71,33 @@ final class QQMusicPlaylistTrackResponseTests: XCTestCase {
     func testPlaylistTrackCountAcceptsQQSongnumField() {
         XCTAssertEqual(QQMusicAPI.playlistTrackTotalCount(in: ["songnum": "128"]), 128)
     }
+
+    func testPlaylistScoped3a44DoesNotAbortRemainingPlaylistSync() {
+        let error = QQMusicAPI.APIError.providerRejected("响应码 3a44")
+
+        XCTAssertFalse(QQMusicPlaylistSyncPolicy.shouldStopAfterPlaylistFailure(error))
+    }
+
+    func testSessionCredentialFailureStopsRemainingPlaylistSync() {
+        let error = QQMusicAPI.APIError.sessionCredentialRejected(
+            "QQ 会话凭据未通过验证",
+            ticketMissing: false
+        )
+
+        XCTAssertTrue(QQMusicPlaylistSyncPolicy.shouldStopAfterPlaylistFailure(error))
+    }
+
+    func testBareForbiddenResponseIsPlaylistScopedRatherThanLoginFailure() {
+        XCTAssertFalse(QQMusicPlaylistErrorPolicy.isSessionCredentialFailure(
+            statusCode: 403,
+            diagnostic: "HTTP 403"
+        ))
+    }
+
+    func testExplicitExpiredCookieResponseInvalidatesSession() {
+        XCTAssertTrue(QQMusicPlaylistErrorPolicy.isSessionCredentialFailure(
+            statusCode: 403,
+            diagnostic: "cookie expired"
+        ))
+    }
 }
