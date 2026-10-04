@@ -5,20 +5,29 @@ import XCTest
 
 @MainActor
 final class LXSyncClientIntegrationTests: XCTestCase {
-    func testLXSyncConnectionTicketUsesAES128ECBWithoutPadding() throws {
-        let key = Data((0...15).map(UInt8.init))
-        let plaintext = Data([
-            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
-            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
-        ])
+    func testLXSyncConnectionTicketUsesNodeCompatiblePKCS7Padding() throws {
+        let key = Data("0123456789abcdef".utf8)
+        let plaintext = Data("lx-music connect".utf8)
+        let encrypted = try aesEncrypt(plaintext, key: key)
 
-        XCTAssertEqual(
-            try LXSyncService.aesEncryptNoPadding(plaintext, key: key),
-            Data([
-                0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30,
-                0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4, 0xc5, 0x5a,
-            ])
-        )
+        XCTAssertEqual(plaintext.count, 16)
+        XCTAssertEqual(encrypted.count, 32, "Node's AES-128-ECB default appends a full PKCS#7 block")
+        XCTAssertEqual(try aesDecrypt(encrypted, key: key), plaintext)
+    }
+
+    func testLXSyncHandshakeDiagnosticsDistinguishServerRejectionStatuses() {
+        XCTAssertTrue(LXSyncService.webSocketHandshakeError(
+            responseStatusCode: 401,
+            underlyingError: URLError(.userAuthenticationRequired)
+        ).localizedDescription.contains("设备票据未通过服务器认证"))
+        XCTAssertTrue(LXSyncService.webSocketHandshakeError(
+            responseStatusCode: 403,
+            underlyingError: URLError(.userAuthenticationRequired)
+        ).localizedDescription.contains("HTTP 403"))
+        XCTAssertTrue(LXSyncService.webSocketHandshakeError(
+            responseStatusCode: 502,
+            underlyingError: URLError(.badServerResponse)
+        ).localizedDescription.contains("WebSocket Upgrade"))
     }
 
     func testConnectAndSynchronizePlaylistChangesInBothDirections() async throws {
@@ -51,7 +60,8 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         let query = try XCTUnwrap(URLComponents(url: socketURL, resolvingAgainstBaseURL: false)?.queryItems)
         let ticketBase64 = try XCTUnwrap(query.first(where: { $0.name == "t" })?.value)
         let ticket = try XCTUnwrap(Data(base64Encoded: ticketBase64))
-        XCTAssertEqual(ticket.count, 16, "LX Sync's ticket is one unpadded AES block")
+        XCTAssertEqual(ticket.count, 32, "A 16-byte ticket plaintext receives a complete PKCS#7 block")
+        XCTAssertEqual(fixture.transport.ticketPlaintext, Data("lx-music connect".utf8))
 
         let remotePlaylist = LXSyncUserPlaylist(
             id: "remote-list",
@@ -319,6 +329,7 @@ private final class FakeTransport: LXSyncTransport {
     private let rejectAuthorization: Bool
     private(set) var socket: FakeSocket?
     private(set) var socketURL: URL?
+    private(set) var ticketPlaintext: Data?
 
     init(key: Data, rejectAuthorization: Bool) {
         self.key = key
@@ -349,6 +360,11 @@ private final class FakeTransport: LXSyncTransport {
 
     func webSocketTask(with url: URL) -> LXSyncSocket {
         socketURL = url
+        if let ticketValue = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+            .first(where: { $0.name == "t" })?.value,
+           let ticket = Data(base64Encoded: ticketValue) {
+            ticketPlaintext = try? aesDecrypt(ticket, key: key)
+        }
         let value = FakeSocket()
         socket = value
         return value
@@ -420,6 +436,34 @@ private func aesEncrypt(_ data: Data, key: Data) throws -> Data {
             key.withUnsafeBytes { keyBytes in
                 CCCrypt(
                     CCOperation(kCCEncrypt),
+                    CCAlgorithm(kCCAlgorithmAES),
+                    CCOptions(kCCOptionECBMode | kCCOptionPKCS7Padding),
+                    keyBytes.baseAddress,
+                    key.count,
+                    nil,
+                    inputBytes.baseAddress,
+                    data.count,
+                    outputBytes.baseAddress,
+                    outputCapacity,
+                    &outputLength
+                )
+            }
+        }
+    }
+    guard status == kCCSuccess else { throw NSError(domain: "LXSyncClientIntegrationTests", code: Int(status)) }
+    output.removeSubrange(outputLength..<output.count)
+    return output
+}
+
+private func aesDecrypt(_ data: Data, key: Data) throws -> Data {
+    var output = Data(count: data.count + kCCBlockSizeAES128)
+    let outputCapacity = output.count
+    var outputLength = 0
+    let status = output.withUnsafeMutableBytes { outputBytes in
+        data.withUnsafeBytes { inputBytes in
+            key.withUnsafeBytes { keyBytes in
+                CCCrypt(
+                    CCOperation(kCCDecrypt),
                     CCAlgorithm(kCCAlgorithmAES),
                     CCOptions(kCCOptionECBMode | kCCOptionPKCS7Padding),
                     keyBytes.baseAddress,

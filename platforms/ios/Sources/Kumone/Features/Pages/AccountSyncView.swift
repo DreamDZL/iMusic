@@ -292,20 +292,10 @@ struct AccountSyncView: View {
                 }
             }
 
-            Text("已获取 \(account.userPlaylists.count) 个歌单，包含我喜欢的音乐和收藏歌单。登录后会自动复制到本地；之后自动检查云端更新，并保留你在 iMusic 中的编辑。账号副本与 LX Sync 歌单分别管理。")
+            Text("已获取 \(account.userPlaylists.count) 个云端歌单。请选择需要加入资料库的歌单；只有明确选择的歌单会在后续刷新时自动更新。升级前已导入的副本需重新选择一次。网易云副本与 LX Sync 歌单分别管理。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-
-            if account.isSyncingAfterLogin {
-                Label("正在将网易云歌单同步到本地…", systemImage: "arrow.triangle.2.circlepath")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if let message = account.loginPlaylistSyncMessage {
-                Label(message, systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
 
             HStack(spacing: 8) {
                 Image(systemName: account.lastPlaylistSyncAt == nil ? "clock" : "checkmark.circle.fill")
@@ -322,25 +312,13 @@ struct AccountSyncView: View {
             }
 
             Button {
-                Task {
-                    let report = await account.importSelectedPlaylists(Set(account.userPlaylists.map(\.id)))
-                    ToastCenter.shared.show("新增 \(report.inserted) 个，更新 \(report.updated) 个，\(report.failed.count) 个未完成")
-                }
-            } label: {
-                Label("立即同步网易云歌单", systemImage: "arrow.triangle.2.circlepath")
-                    .frame(maxWidth: .infinity, minHeight: 44)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(isRefreshing || account.isSyncingAfterLogin || account.isSyncingPlaylists || account.userPlaylists.isEmpty)
-
-            Button {
                 showPlaylistPicker = true
             } label: {
-                Label("管理本地歌单副本", systemImage: "music.note.list")
+                Label("选择要导入的歌单", systemImage: "checklist")
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(account.isSyncingAfterLogin || account.userPlaylists.isEmpty)
+            .disabled(isRefreshing || account.isSyncingPlaylists || account.userPlaylists.isEmpty)
 
             if let error = account.lastPlaylistSyncError {
                 Label(error, systemImage: "exclamationmark.triangle")
@@ -364,28 +342,10 @@ struct AccountSyncView: View {
             }
 
             if qqMusic.isLoggedIn {
-                Text("已获取 \(qqPlaylists.playlists.count) 个歌单。包含我喜欢的音乐和收藏歌单。登录后会自动复制到本地；之后自动检查云端更新，并保留你在 iMusic 中的编辑。账号副本与 LX Sync 歌单分别管理。")
+                Text("已获取 \(qqPlaylists.playlists.count) 个云端歌单。请选择需要加入资料库的歌单；只有明确选择的歌单会在后续刷新时自动更新。升级前已导入的副本需重新选择一次。QQ 副本与 LX Sync 歌单分别管理。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-
-                if qqPlaylists.isSyncingAfterLogin {
-                    Label("正在将 QQ 歌单同步到本地…", systemImage: "arrow.triangle.2.circlepath")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if let message = qqPlaylists.lastLoginSyncMessage {
-                    let hasIssue = message.contains("无法") || message.contains("失败")
-                        || message.contains("警告") || message.contains("拒绝")
-                        || message.contains("3a44") || message.contains("未能读取")
-                    Label(message, systemImage: hasIssue ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(hasIssue ? Color.orange : Color.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if message.contains("重新登录") || message.contains("曲目凭据") {
-                        Button("重新登录 QQ 音乐") { showQQLogin = true }
-                            .font(.caption.weight(.semibold))
-                    }
-                }
 
                 HStack(spacing: 8) {
                     Image(systemName: qqPlaylists.lastRefreshedAt == nil ? "clock" : "checkmark.circle.fill")
@@ -404,29 +364,13 @@ struct AccountSyncView: View {
                 }
 
                 Button {
-                    Task { await qqPlaylists.syncAfterLogin() }
-                } label: {
-                    HStack(spacing: 8) {
-                        if qqPlaylists.isSyncingAfterLogin {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                        }
-                        Text(qqPlaylists.isSyncingAfterLogin ? "正在同步 QQ 歌单…" : "立即同步 QQ 歌单")
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(qqPlaylists.isRefreshing || qqPlaylists.isImporting || qqPlaylists.isSyncingAfterLogin)
-
-                Button {
                     showQQPlaylistPicker = true
                 } label: {
-                    Label("管理本地歌单副本", systemImage: "music.note.list")
+                    Label("选择要导入的歌单", systemImage: "checklist")
                         .frame(maxWidth: .infinity, minHeight: 44)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(qqPlaylists.isRefreshing || qqPlaylists.playlists.isEmpty)
+                .disabled(qqPlaylists.isRefreshing || qqPlaylists.isImporting || qqPlaylists.playlists.isEmpty)
 
                 if let error = qqPlaylists.errorMessage {
                     VStack(alignment: .leading, spacing: 8) {
@@ -556,7 +500,6 @@ struct AccountSyncView: View {
             guard qqMusic.isLoggedIn else { return }
             await qqPlaylists.refresh(force: force)
             guard !Task.isCancelled, selectedChannel == channel, channelTaskID == taskID else { return }
-            await qqPlaylists.syncAfterLogin()
         }
     }
 
@@ -870,9 +813,9 @@ struct RemotePlaylistPickerView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("重新同步网易云歌单", systemImage: "arrow.down.circle")
+                    Label("选择网易云歌单", systemImage: "arrow.down.circle")
                         .font(.title3.weight(.semibold))
-                    Text("登录时已自动复制账号中的歌单。这里可以手动重试；你在 iMusic 修改过的本地歌单会保留，不会被云端覆盖。")
+                    Text("勾选需要加入资料库的歌单。已导入且未编辑的副本可在后续刷新时更新；你在 iMusic 修改过的内容会保留。")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -915,11 +858,6 @@ struct RemotePlaylistPickerView: View {
                 }
                 .disabled(isImporting || selectedIDs.isEmpty)
             }
-        }
-        .task {
-            selectedIDs = Set(account.userPlaylists.filter {
-                localPlaylists.containsRemotePlaylist(source: "netease", id: $0.id)
-            }.map(\.id))
         }
     }
 

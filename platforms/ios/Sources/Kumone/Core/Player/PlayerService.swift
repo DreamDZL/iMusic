@@ -377,7 +377,7 @@ final class PlayerService: ObservableObject {
     /// Live playback position straight from the player, for smooth per-frame
     /// karaoke highlighting (the published `progress` is intentionally coarse).
     var livePlaybackTime: TimeInterval {
-        guard !isResolvingSource, let item = engine.currentItem else { return progress }
+        guard !isResolvingSource, !isScrubbing, let item = engine.currentItem else { return progress }
         let t = item.currentTime().seconds
         return t.isFinite ? t : progress
     }
@@ -661,6 +661,7 @@ final class PlayerService: ObservableObject {
     /// Keep the selected track and elapsed position available for retry.
     private func settlePlaybackAsPaused(preservingCurrentItemForRetry: Bool = false) {
         engine.pause()
+        isScrubbing = false
         snapshotPausedPlaybackPosition()
         let state = PausedPlaybackState(
             elapsed: progress,
@@ -687,7 +688,8 @@ final class PlayerService: ObservableObject {
         persistState()
     }
 
-    /// Set while the user drags the seek bar so the time observer doesn't fight the thumb.
+    /// Hold back engine time observers during a drag and until its seek settles,
+    /// so stale AVPlayer ticks cannot rewind the progress or lyrics cursor.
     var isScrubbing = false
 
     #if os(iOS)
@@ -846,6 +848,7 @@ final class PlayerService: ObservableObject {
             lyricsResolutionTask = nil
             resolveGeneration += 1
             isResolvingSource = false
+            isScrubbing = false
         }
         engine.pause()
         snapshotPausedPlaybackPosition()
@@ -961,6 +964,7 @@ final class PlayerService: ObservableObject {
         let target = seconds.isFinite ? max(0, seconds) : 0
         let itemAvailable = !isResolvingSource && engine.currentItem != nil
         let generation = seekCoordinator.beginSeek(to: target, itemAvailable: itemAvailable)
+        isScrubbing = itemAvailable || isResolvingSource
         progress = target
         updateLyricsCursor(at: target)
         NowPlayingManager.shared.updateElapsed(
@@ -991,6 +995,7 @@ final class PlayerService: ObservableObject {
                 )
                 self.progress = settledPosition
                 self.updateLyricsCursor(at: settledPosition)
+                self.isScrubbing = false
                 NowPlayingManager.shared.updateElapsed(
                     settledPosition,
                     rate: self.isPlaying ? Double(self.playbackRate) : 0
@@ -1320,6 +1325,7 @@ final class PlayerService: ObservableObject {
     private func startPlaying(_ track: Track, indexUnchanged: Bool = false,
                               resumeAt: TimeInterval? = nil) {
         let track = track.normalizedForLXPlayback()
+        isScrubbing = false
         isResolvingSource = true
         // Stop and detach the previous item before starting an asynchronous
         // URL/lyric resolution. Otherwise a fast next/previous tap leaves the
@@ -1342,6 +1348,7 @@ final class PlayerService: ObservableObject {
         currentTrack = track
         LocalPlaylistStore.shared.recordRecent(track)
         progress = seekCoordinator.initialPlaybackPosition
+        isScrubbing = seekCoordinator.pendingPosition != nil
         duration = track.duration
         servedQuality = nil
         requestedQuality = nil
@@ -1543,16 +1550,31 @@ final class PlayerService: ObservableObject {
             }
         }
         let seekPosition = seekCoordinator.takePendingPosition()
-        if let seekPosition, seekPosition > 0 {
+        if let seekPosition {
             let initialSeekGeneration = seekCoordinator.beginResolvedItemSeek()
             engine.seek(to: CMTime(seconds: seekPosition, preferredTimescale: 600),
                         toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                 Task { @MainActor in
-                    guard let self, finished,
+                    guard let self,
                           generation == self.resolveGeneration,
-                          self.seekCoordinator.isCurrent(initialSeekGeneration),
-                          self.isPlaying else { return }
-                    guard self.resumePlaybackAfterSeek() else { return }
+                          self.seekCoordinator.isCurrent(initialSeekGeneration) else { return }
+                    let settledPosition = PlaybackPositionPolicy.settledPosition(
+                        actualPosition: finished ? self.engine.currentItem?.currentTime().seconds ?? .nan : .nan,
+                        requestedPosition: seekPosition
+                    )
+                    if !finished {
+                        self.settlePlaybackAsPaused(preservingCurrentItemForRetry: true)
+                    }
+                    self.progress = settledPosition
+                    self.updateLyricsCursor(at: settledPosition)
+                    self.isScrubbing = false
+                    NowPlayingManager.shared.updateElapsed(
+                        settledPosition,
+                        rate: self.isPlaying && finished ? Double(self.playbackRate) : 0
+                    )
+                    if finished, self.isPlaying {
+                        _ = self.resumePlaybackAfterSeek()
+                    }
                 }
             }
         } else {

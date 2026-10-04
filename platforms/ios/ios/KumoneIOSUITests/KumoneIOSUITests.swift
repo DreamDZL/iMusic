@@ -118,7 +118,9 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(songPage.waitForExistence(timeout: 10))
         let artwork = app.descendants(matching: .any)["nowPlayingArtworkImage"]
         XCTAssertTrue(artwork.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["showSynchronizedLyrics"].exists)
+        let accessoryControls = app.buttons["showSynchronizedLyrics"]
+        XCTAssertTrue(accessoryControls.exists)
+        let songAccessoryMidY = accessoryControls.frame.midY
         XCTAssertTrue(app.descendants(matching: .any)["nowPlayingTransportControls"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["nowPlayingVolumeControl"].exists)
 
@@ -137,9 +139,14 @@ final class KumoneIOSUITests: XCTestCase {
         let songTransportControls = app.descendants(matching: .any)["nowPlayingTransportControls"]
         XCTAssertTrue(transportControls.exists)
         XCTAssertTrue(volumeControl.exists)
+        XCTAssertTrue(accessoryControls.exists, "The accessory row must stay visible on both player pages")
+        XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
+                       "The accessory row must not jump when switching to lyrics")
         XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7))
         XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 7))
-        XCTAssertTrue(app.buttons["showSynchronizedLyrics"].waitForNonExistence(timeout: 7))
+        XCTAssertTrue(accessoryControls.exists, "Hiding playback controls must not hide the accessory row")
+        XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
+                       "The accessory row must remain at the same height after controls hide")
 
         lyricsScroll.swipeRight()
         XCTAssertTrue(lyricsPage.exists, "Horizontal swipes must stay on lyrics")
@@ -166,5 +173,24 @@ final class KumoneIOSUITests: XCTestCase {
         lyricsAttachment.name = "iMusic-AppleMusic-歌词页"
         lyricsAttachment.lifetime = .keepAlways
         add(lyricsAttachment)
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let window = app.windows.firstMatch
+        let landscapeExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "frame.size.width > frame.size.height"),
+            object: window
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [landscapeExpectation], timeout: 5), .completed)
+        XCTAssertTrue(accessoryControls.waitForExistence(timeout: 5))
+        let landscapeAccessoryMidY = accessoryControls.frame.midY
+        accessoryControls.tap()
+        XCTAssertTrue(songPage.waitForExistence(timeout: 5))
+        XCTAssertEqual(accessoryControls.frame.midY, landscapeAccessoryMidY, accuracy: 1.0,
+                       "The accessory row must keep its position in landscape")
+        accessoryControls.tap()
+        XCTAssertTrue(lyricsPage.waitForExistence(timeout: 5))
+        XCTAssertEqual(accessoryControls.frame.midY, landscapeAccessoryMidY, accuracy: 1.0,
+                       "The accessory row must remain fixed on landscape lyrics")
+        XCUIDevice.shared.orientation = .portrait
     }
 }

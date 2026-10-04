@@ -52,10 +52,11 @@ enum PlaybackPositionPolicy {
     /// invalidate the scrubber and leave it on the settled position.
     static func displayPosition(
         isPlaying: Bool,
+        isSeeking: Bool = false,
         livePosition: TimeInterval,
         publishedPosition: TimeInterval
     ) -> TimeInterval {
-        let candidate = isPlaying ? livePosition : publishedPosition
+        let candidate = isPlaying && !isSeeking ? livePosition : publishedPosition
         guard candidate.isFinite else {
             return publishedPosition.isFinite ? max(0, publishedPosition) : 0
         }

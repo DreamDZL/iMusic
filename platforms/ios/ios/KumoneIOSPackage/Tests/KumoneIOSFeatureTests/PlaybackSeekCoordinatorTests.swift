@@ -68,6 +68,18 @@ final class PlaybackSeekCoordinatorTests: XCTestCase {
         )
     }
 
+    func testPlayingScrubberKeepsPublishedTargetWhileSeekIsInFlight() {
+        XCTAssertEqual(
+            PlaybackPositionPolicy.displayPosition(
+                isPlaying: true,
+                isSeeking: true,
+                livePosition: 8.25,
+                publishedPosition: 31.5
+            ),
+            31.5
+        )
+    }
+
     func testSeekCompletionPublishesActualPositionOrFallsBackToRequest() {
         XCTAssertEqual(
             PlaybackPositionPolicy.settledPosition(actualPosition: 31.48, requestedPosition: 31.5),

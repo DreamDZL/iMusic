@@ -475,10 +475,10 @@ final class LXSyncService: ObservableObject {
             }
 
             var authKey = try Self.decodeKey(key.key)
-            // LX Sync's ticket is exactly one AES block and the mobile client
-            // encrypts it as AES-128-ECB without padding. PKCS#7 would append
-            // a second block, causing the server to reject the WebSocket.
-            let ticket = try Self.aesEncryptNoPadding(Data("lx-music connect".utf8), key: authKey)
+            // The sync server decrypts this ticket with Node's default AES
+            // auto-padding enabled, so even the 16-byte plaintext needs a
+            // full PKCS#7 padding block.
+            let ticket = try Self.aesEncrypt(Data("lx-music connect".utf8), key: authKey)
             authKey.resetBytes(in: 0..<authKey.count)
             let requestURL = try address.socketURL(clientID: key.clientId, encryptedTicket: ticket.base64EncodedString())
             let task = transport.webSocketTask(with: requestURL)
@@ -1005,14 +1005,33 @@ final class LXSyncService: ObservableObject {
         activeSocketGeneration = nil
         isConnected = false
         statusMessage = "连接已断开"
-        lastError = error.localizedDescription
+        let handshakeError = Self.webSocketHandshakeError(
+            responseStatusCode: responseStatusCode,
+            underlyingError: error
+        )
+        lastError = handshakeError.localizedDescription
         if readyContinuation != nil {
-            failHandshake(shouldReconnect ? error : LXSyncError.server("LX Sync WebSocket 连接被服务端拒绝"))
+            failHandshake(handshakeError)
         }
         let calls = pendingCalls.values
         pendingCalls.removeAll()
         for continuation in calls { continuation.resume(throwing: error) }
         if shouldReconnect { scheduleReconnect() }
+    }
+
+    static func webSocketHandshakeError(
+        responseStatusCode: Int?,
+        underlyingError: Error
+    ) -> Error {
+        guard let responseStatusCode, responseStatusCode != 101 else { return underlyingError }
+        switch responseStatusCode {
+        case 401:
+            return LXSyncError.server("LX Sync WebSocket 设备票据未通过服务器认证（HTTP 401）。请重新连接设备，并检查服务器端鉴权和网络访问限制。")
+        case 403:
+            return LXSyncError.server("LX Sync WebSocket 被服务器拒绝（HTTP 403），请检查服务器访问限制。")
+        default:
+            return LXSyncError.server("LX Sync WebSocket 握手失败（HTTP \(responseStatusCode)），请检查服务地址和反向代理的 WebSocket Upgrade 配置。")
+        }
     }
 
     /// Keep an established library sync alive when the server or transport
@@ -1241,39 +1260,6 @@ final class LXSyncService: ObservableObject {
 
     private static func aesEncrypt(_ data: Data, key: Data) throws -> Data {
         try aesCrypt(data, key: key, operation: CCOperation(kCCEncrypt))
-    }
-
-    static func aesEncryptNoPadding(_ data: Data, key: Data) throws -> Data {
-        guard key.count == kCCKeySizeAES128,
-              data.count.isMultiple(of: kCCBlockSizeAES128) else {
-            throw LXSyncError.invalidServerResponse
-        }
-        var output = Data(count: data.count)
-        let outputCapacity = output.count
-        var outputLength = 0
-        let status = output.withUnsafeMutableBytes { outputBytes in
-            data.withUnsafeBytes { inputBytes in
-                key.withUnsafeBytes { keyBytes in
-                    CCCrypt(
-                        CCOperation(kCCEncrypt),
-                        CCAlgorithm(kCCAlgorithmAES),
-                        CCOptions(kCCOptionECBMode),
-                        keyBytes.baseAddress,
-                        key.count,
-                        nil,
-                        inputBytes.baseAddress,
-                        data.count,
-                        outputBytes.baseAddress,
-                        outputCapacity,
-                        &outputLength
-                    )
-                }
-            }
-        }
-        guard status == kCCSuccess, outputLength == data.count else {
-            throw LXSyncError.authorizationFailed
-        }
-        return output
     }
 
     private static func aesDecrypt(_ data: Data, key: Data) throws -> Data {

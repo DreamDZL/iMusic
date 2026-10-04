@@ -110,9 +110,6 @@ final class QQMusicSessionStore: ObservableObject {
         validationTask = nil
         let revision = sessionRevision
         QQMusicPlaylistSyncStore.shared.acceptValidatedSnapshot(snapshot, sessionRevision: revision)
-        Task { @MainActor in
-            await QQMusicPlaylistSyncStore.shared.syncAfterLogin()
-        }
     }
 
     func signIn(cookie rawCookie: String) async throws {

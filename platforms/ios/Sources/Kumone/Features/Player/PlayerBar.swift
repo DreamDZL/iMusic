@@ -324,7 +324,6 @@ struct ScrubberLane: View {
                     .onEnded { _ in
                         player.seek(to: dragProgress)
                         isDragging = false
-                        player.isScrubbing = false
                     }
             )
         }

@@ -19,8 +19,6 @@ final class AccountStore: ObservableObject {
     @Published private(set) var isSyncingPlaylists = false
     @Published private(set) var lastPlaylistSyncAt: Date?
     @Published private(set) var lastPlaylistSyncError: String?
-    @Published private(set) var isSyncingAfterLogin = false
-    @Published private(set) var loginPlaylistSyncMessage: String?
 
     struct PlaylistSyncReport: Equatable {
         let inserted: Int
@@ -51,7 +49,6 @@ final class AccountStore: ObservableObject {
 
     private init() {}
 
-    private var loginPlaylistSyncTask: Task<Void, Never>?
     private var loginBootstrapTask: Task<Void, Never>?
     private var importedPlaylistSyncTask: Task<Void, Never>?
     private var loginSessionRevision = 0
@@ -78,11 +75,8 @@ final class AccountStore: ObservableObject {
         loginSessionRevision &+= 1
         let revision = loginSessionRevision
         loginBootstrapTask?.cancel()
-        loginPlaylistSyncTask?.cancel()
         importedPlaylistSyncTask?.cancel()
-        isSyncingAfterLogin = false
         isSyncingPlaylists = false
-        loginPlaylistSyncMessage = nil
         lastPlaylistSyncAt = nil
         lastPlaylistSyncError = nil
         NeteaseClient.shared.clearAuthCookies()
@@ -105,14 +99,6 @@ final class AccountStore: ObservableObject {
                 guard let self else { return }
                 await self.refreshLibrary(syncImportedCopies: false, expectedRevision: revision)
                 await self.refreshSublists(expectedRevision: revision)
-                guard !Task.isCancelled,
-                      self.loginSessionRevision == revision,
-                      self.profile?.userId == verifiedProfile.userId,
-                      NeteaseClient.shared.isLoggedIn else { return }
-                self.startPlaylistSyncAfterLogin(
-                    for: verifiedProfile.userId,
-                    sessionRevision: revision
-                )
             }
         } catch {
             if revision == loginSessionRevision {
@@ -266,13 +252,9 @@ final class AccountStore: ObservableObject {
         loginSessionRevision &+= 1
         loginBootstrapTask?.cancel()
         loginBootstrapTask = nil
-        loginPlaylistSyncTask?.cancel()
-        loginPlaylistSyncTask = nil
         importedPlaylistSyncTask?.cancel()
         importedPlaylistSyncTask = nil
-        isSyncingAfterLogin = false
         isSyncingPlaylists = false
-        loginPlaylistSyncMessage = nil
         lastPlaylistSyncAt = nil
         lastPlaylistSyncError = nil
         profile = nil
@@ -289,6 +271,7 @@ final class AccountStore: ObservableObject {
         let mirrored = LocalPlaylistStore.shared.playlists.filter {
             $0.remoteSource == "netease"
                 && $0.remotePlaylistID != nil
+                && LocalPlaylistSyncPolicy.isProviderRefreshEnabled($0)
                 && LocalPlaylistSyncPolicy.shouldRefreshFromProvider($0)
         }
         guard !mirrored.isEmpty else { return }
@@ -312,50 +295,6 @@ final class AccountStore: ObservableObject {
             guard let self else { return }
             await self.syncImportedPlaylistCopies(userID: userID, revision: revision)
             self.importedPlaylistSyncTask = nil
-        }
-    }
-
-    /// Import all playlists visible to the signed-in account into local copies
-    /// after login. This runs in the background so returning from the web view
-    /// stays immediate; later refreshes update only unedited provider copies.
-    private func startPlaylistSyncAfterLogin(for userID: Int, sessionRevision: Int) {
-        guard sessionRevision == loginSessionRevision, profile?.userId == userID else { return }
-        importedPlaylistSyncTask?.cancel()
-        importedPlaylistSyncTask = nil
-        loginPlaylistSyncTask?.cancel()
-        if let lastPlaylistSyncError {
-            loginPlaylistSyncMessage = lastPlaylistSyncError
-            return
-        }
-        let candidates = userPlaylists
-        guard !candidates.isEmpty else {
-            loginPlaylistSyncMessage = "账号中没有可同步的歌单"
-            return
-        }
-        loginPlaylistSyncMessage = nil
-        loginPlaylistSyncTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            self.isSyncingAfterLogin = true
-            defer {
-                if self.loginSessionRevision == sessionRevision {
-                    self.isSyncingAfterLogin = false
-                }
-            }
-            let report = await self.syncPlaylists(
-                candidates,
-                force: false,
-                expectedUserID: userID,
-                expectedSessionRevision: sessionRevision
-            )
-            guard !Task.isCancelled,
-                  self.loginSessionRevision == sessionRevision,
-                  self.profile?.userId == userID,
-                  NeteaseClient.shared.isLoggedIn else { return }
-            if report.failed.isEmpty {
-                self.loginPlaylistSyncMessage = "网易云歌单同步完成：新增 \(report.inserted)，更新 \(report.updated)，最新 \(report.unchanged)"
-            } else {
-                self.loginPlaylistSyncMessage = "已同步 \(report.changedCount) 个，\(report.failed.count) 个歌单暂时失败"
-            }
         }
     }
 
@@ -435,7 +374,8 @@ final class AccountStore: ObservableObject {
                     coverURL: summary.coverURL,
                     sourceName: "网易云",
                     revision: summary.updateTime > 0 ? summary.updateTime : summary.trackCount,
-                    tracks: tracks
+                    tracks: tracks,
+                    enableProviderRefresh: true
                 )
                 if result.inserted { inserted += 1 }
                 else if result.changed { updated += 1 }

@@ -292,27 +292,41 @@ struct NowPlayingView: View {
 
     @ViewBuilder
     private func phoneLandscapeLayout(size: CGSize) -> some View {
-        if showLyricsOnMobile {
-            appleMusicLyricsPage()
-        } else {
-            let artworkSize = min(size.height - 76, 280)
-            HStack(spacing: 28) {
-                artworkView(size: artworkSize)
+        ZStack(alignment: .bottom) {
+            Group {
+                if showLyricsOnMobile {
+                    appleMusicLyricsPage()
+                        .padding(.bottom, 54)
+                } else {
+                    let artworkSize = min(size.height - 124, 240)
+                    HStack(spacing: 28) {
+                        artworkView(size: artworkSize)
 
-                VStack(spacing: 8) {
-                    Spacer(minLength: 0)
-                    trackMetaView
-                        .padding(.bottom, 8)
-                    NowPlayingScrubber(showsRemainingTime: true)
-                    primaryTransportControls
-                    CompactVolumeControl()
-                    songPageAccessoryControls
-                    Spacer(minLength: 0)
+                        VStack(spacing: 8) {
+                            Spacer(minLength: 0)
+                            trackMetaView
+                                .padding(.bottom, 8)
+                            NowPlayingScrubber(showsRemainingTime: true)
+                            primaryTransportControls
+                            CompactVolumeControl()
+                            Spacer(minLength: 0)
+                        }
+                        .frame(maxWidth: 420)
+                    }
+                    .padding(.horizontal, 36)
+                    .padding(.vertical, 36)
+                    .padding(.bottom, 54)
                 }
-                .frame(maxWidth: 420)
             }
-            .padding(.horizontal, 36)
-            .padding(.vertical, 36)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            songPageAccessoryControls
+                .frame(maxWidth: 360)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 26)
+                .padding(.bottom, 8)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("nowPlayingAccessoryControls")
         }
     }
 
@@ -345,46 +359,59 @@ struct NowPlayingView: View {
     private func appleMusicCompactLayout(size: CGSize) -> some View {
         let isShortScreen = size.height < 680
         let artworkSize = min(size.width - 52, size.height * (isShortScreen ? 0.34 : 0.39), 360)
+        let accessoryClearance: CGFloat = isShortScreen ? 54 : 62
 
-        if showLyricsOnMobile {
-            appleMusicLyricsPage()
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("appleMusicLyricsPage")
-        } else {
-            VStack(spacing: 0) {
-                Spacer(minLength: isShortScreen ? 16 : 24)
+        ZStack(alignment: .bottom) {
+            Group {
+                if showLyricsOnMobile {
+                    appleMusicLyricsPage()
+                        .padding(.bottom, accessoryClearance)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("appleMusicLyricsPage")
+                } else {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: isShortScreen ? 16 : 24)
 
-                artworkView(size: artworkSize)
-                    .padding(.bottom, isShortScreen ? 20 : 28)
+                        artworkView(size: artworkSize)
+                            .padding(.bottom, isShortScreen ? 20 : 28)
 
-                trackMetaView
-                    .padding(.bottom, isShortScreen ? 8 : 14)
+                        trackMetaView
+                            .padding(.bottom, isShortScreen ? 8 : 14)
 
-                NowPlayingScrubber(
-                    onShowQuality: { showQualityPicker = true },
-                    showsRemainingTime: true
-                )
-                .padding(.bottom, isShortScreen ? 3 : 8)
+                        NowPlayingScrubber(
+                            onShowQuality: { showQualityPicker = true },
+                            showsRemainingTime: true
+                        )
+                        .padding(.bottom, isShortScreen ? 3 : 8)
 
-                primaryTransportControls
-                    .padding(.bottom, isShortScreen ? 5 : 12)
+                        primaryTransportControls
+                            .padding(.bottom, isShortScreen ? 5 : 12)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityIdentifier("nowPlayingTransportControls")
+
+                        CompactVolumeControl()
+                            .padding(.bottom, isShortScreen ? 2 : 10)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityIdentifier("nowPlayingVolumeControl")
+                    }
+                    .padding(.horizontal, 26)
+                    .padding(.top, isShortScreen ? 32 : 42)
+                    .padding(.bottom, accessoryClearance)
                     .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("nowPlayingTransportControls")
-
-                CompactVolumeControl()
-                    .padding(.bottom, isShortScreen ? 2 : 10)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("nowPlayingVolumeControl")
-
-                songPageAccessoryControls
+                    .accessibilityIdentifier("appleMusicSongPage")
+                }
             }
-            .padding(.horizontal, 26)
-            .padding(.top, isShortScreen ? 32 : 42)
-            .padding(.bottom, isShortScreen ? 12 : 18)
-            .animation(.easeInOut(duration: 0.22), value: showLyricsOnMobile)
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("appleMusicSongPage")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            songPageAccessoryControls
+                .frame(maxWidth: 360)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 26)
+                .padding(.bottom, isShortScreen ? 8 : 18)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("nowPlayingAccessoryControls")
         }
+        .animation(.easeInOut(duration: 0.22), value: showLyricsOnMobile)
     }
 
     private func appleMusicLyricsPage() -> some View {
@@ -410,7 +437,6 @@ struct NowPlayingView: View {
                         CompactVolumeControl()
                             .accessibilityElement(children: .contain)
                             .accessibilityIdentifier("lyricsVolumeControl")
-                        songPageAccessoryControls
                     }
                     .padding(.top, 8)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -2871,6 +2897,7 @@ struct NowPlayingScrubber: View {
         )) { _ in
             scrubberContent(position: PlaybackPositionPolicy.displayPosition(
                 isPlaying: player.isPlaying,
+                isSeeking: player.isScrubbing,
                 livePosition: player.livePlaybackTime,
                 publishedPosition: clock.progress
             ))
@@ -2894,7 +2921,7 @@ struct NowPlayingScrubber: View {
                         .frame(width: thumbDiameter, height: thumbDiameter)
                         .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
                         .offset(x: width * progress - thumbDiameter / 2)
-                        .opacity(isHovering || isDragging ? 1 : 0)
+                        .opacity(isHovering || isDragging || player.isScrubbing ? 1 : 0)
                 }
                 .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
@@ -2909,7 +2936,6 @@ struct NowPlayingScrubber: View {
                         .onEnded { _ in
                             player.seek(to: dragProgress)
                             isDragging = false
-                            player.isScrubbing = false
                         }
                 )
             }

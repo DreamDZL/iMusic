@@ -7,6 +7,9 @@ struct LocalPlaylistsView: View {
     @State private var showCreate = false
     @State private var showSourceManager = false
     @State private var showReorderPlaylists = false
+    @State private var isSelectingPlaylists = false
+    @State private var selectedPlaylistIDs = Set<UUID>()
+    @State private var showDeleteSelectedPlaylists = false
     @State private var newName = ""
 
     var body: some View {
@@ -39,23 +42,40 @@ struct LocalPlaylistsView: View {
                 } else {
                     LazyVStack(spacing: 10) {
                         ForEach(store.playlists) { playlist in
-                            NavigationLink(value: Destination.localPlaylist(playlist.id)) {
-                                playlistRow(playlist)
-                            }
-                            .buttonStyle(.plain)
-                            .contextMenu {
-                                ShareLink(item: store.exportText(playlist)) {
-                                    Label("导出歌单", systemImage: "square.and.arrow.up")
-                                }
-                                Button("删除歌单", role: .destructive) {
-                                    store.delete(id: playlist.id)
-                                }
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    store.delete(id: playlist.id)
+                            if isSelectingPlaylists {
+                                Button {
+                                    togglePlaylistSelection(playlist.id)
                                 } label: {
-                                    Label("删除", systemImage: "trash")
+                                    HStack(spacing: 10) {
+                                        Image(systemName: selectedPlaylistIDs.contains(playlist.id)
+                                              ? "checkmark.circle.fill" : "circle")
+                                            .font(.title3)
+                                            .foregroundStyle(selectedPlaylistIDs.contains(playlist.id)
+                                                             ? Theme.accent : .secondary)
+                                        playlistRow(playlist, showsChevron: false)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("\(playlist.name)，\(selectedPlaylistIDs.contains(playlist.id) ? "已选择" : "未选择")")
+                            } else {
+                                NavigationLink(value: Destination.localPlaylist(playlist.id)) {
+                                    playlistRow(playlist)
+                                }
+                                .buttonStyle(.plain)
+                                .contextMenu {
+                                    ShareLink(item: store.exportText(playlist)) {
+                                        Label("导出歌单", systemImage: "square.and.arrow.up")
+                                    }
+                                    Button("删除歌单", role: .destructive) {
+                                        store.delete(id: playlist.id)
+                                    }
+                                }
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button(role: .destructive) {
+                                        store.delete(id: playlist.id)
+                                    } label: {
+                                        Label("删除", systemImage: "trash")
+                                    }
                                 }
                             }
                         }
@@ -69,36 +89,64 @@ struct LocalPlaylistsView: View {
         }
         .navigationTitle("资料库")
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                if isSelectingPlaylists {
+                    Button("完成") {
+                        isSelectingPlaylists = false
+                        selectedPlaylistIDs.removeAll()
+                    }
+                }
+            }
             ToolbarItemGroup(placement: .primaryAction) {
-                Menu {
-                    Button {
-                        showReorderPlaylists = true
+                if isSelectingPlaylists {
+                    Button(allPlaylistsSelected ? "取消全选" : "全选") {
+                        if allPlaylistsSelected {
+                            selectedPlaylistIDs.removeAll()
+                        } else {
+                            selectedPlaylistIDs = Set(store.playlists.map(\.id))
+                        }
+                    }
+                    Button("删除 \(selectedExistingPlaylistIDs.count)", role: .destructive) {
+                        showDeleteSelectedPlaylists = true
+                    }
+                    .disabled(selectedExistingPlaylistIDs.isEmpty)
+                } else {
+                    Menu {
+                        Button {
+                            showReorderPlaylists = true
+                        } label: {
+                            Label("调整歌单顺序", systemImage: "line.3.horizontal")
+                        }
+                        Button {
+                            isSelectingPlaylists = true
+                        } label: {
+                            Label("批量删除歌单", systemImage: "checklist")
+                        }
+                        .disabled(store.playlists.isEmpty)
+                        Button {
+                            showSourceManager = true
+                        } label: {
+                            Label("管理 LX 音源", systemImage: "waveform.badge.plus")
+                        }
+                        NavigationLink {
+                            SettingsView()
+                        } label: {
+                            Label("设置", systemImage: "gearshape")
+                        }
                     } label: {
-                        Label("调整歌单顺序", systemImage: "line.3.horizontal")
+                        Image(systemName: "ellipsis.circle")
+                            .accessibilityLabel("更多资料库选项")
                     }
                     Button {
-                        showSourceManager = true
+                        showImport = true
                     } label: {
-                        Label("管理 LX 音源", systemImage: "waveform.badge.plus")
+                        Label("导入歌单", systemImage: "square.and.arrow.down")
                     }
-                    NavigationLink {
-                        SettingsView()
+                    Button {
+                        showCreate = true
                     } label: {
-                        Label("设置", systemImage: "gearshape")
+                        Label("新建歌单", systemImage: "plus")
                     }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .accessibilityLabel("更多资料库选项")
-                }
-                Button {
-                    showImport = true
-                } label: {
-                    Label("导入歌单", systemImage: "square.and.arrow.down")
-                }
-                Button {
-                    showCreate = true
-                } label: {
-                    Label("新建歌单", systemImage: "plus")
                 }
             }
         }
@@ -120,6 +168,20 @@ struct LocalPlaylistsView: View {
                 newName = ""
             }
             Button("取消", role: .cancel) { newName = "" }
+        }
+        .confirmationDialog(
+            "删除选中的 \(selectedExistingPlaylistIDs.count) 个歌单？",
+            isPresented: $showDeleteSelectedPlaylists,
+            titleVisibility: .visible
+        ) {
+            Button("删除歌单", role: .destructive) {
+                store.delete(ids: selectedExistingPlaylistIDs)
+                selectedPlaylistIDs.removeAll()
+                isSelectingPlaylists = false
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("这些歌单将从 iMusic 资料库中移除。")
         }
     }
 
@@ -201,7 +263,27 @@ struct LocalPlaylistsView: View {
         return count == 0 ? "收藏的歌曲会保存在这里" : "\(count) 首歌曲 · 可通过 LX Sync 同步"
     }
 
-    private func playlistRow(_ playlist: LocalPlaylist) -> some View {
+    private var allPlaylistsSelected: Bool {
+        !currentPlaylistIDs.isEmpty && currentPlaylistIDs.isSubset(of: selectedPlaylistIDs)
+    }
+
+    private var currentPlaylistIDs: Set<UUID> {
+        Set(store.playlists.map(\.id))
+    }
+
+    private var selectedExistingPlaylistIDs: Set<UUID> {
+        selectedPlaylistIDs.intersection(currentPlaylistIDs)
+    }
+
+    private func togglePlaylistSelection(_ id: UUID) {
+        if selectedPlaylistIDs.contains(id) {
+            selectedPlaylistIDs.remove(id)
+        } else {
+            selectedPlaylistIDs.insert(id)
+        }
+    }
+
+    private func playlistRow(_ playlist: LocalPlaylist, showsChevron: Bool = true) -> some View {
         HStack(spacing: 12) {
             CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(160), animated: false)
                 .frame(width: 68, height: 68)
@@ -226,9 +308,11 @@ struct LocalPlaylistsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
+            if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
         }
         .padding(12)
         .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))

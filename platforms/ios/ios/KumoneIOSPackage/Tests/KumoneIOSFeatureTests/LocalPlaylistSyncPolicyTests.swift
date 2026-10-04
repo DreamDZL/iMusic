@@ -47,6 +47,21 @@ final class LocalPlaylistSyncPolicyTests: XCTestCase {
         XCTAssertEqual(store.favoriteTracks.map(\.name), ["保留歌曲"])
     }
 
+    @MainActor
+    func testPlaylistBatchDeletionRemovesOnlySelectedPlaylists() throws {
+        let suiteName = "LocalPlaylistBatchDeleteTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = LocalPlaylistStore(defaults: defaults)
+        let first = try XCTUnwrap(store.create(name: "删除一"))
+        let second = try XCTUnwrap(store.create(name: "删除二"))
+        let retained = try XCTUnwrap(store.create(name: "保留"))
+
+        store.delete(ids: [first, second])
+
+        XCTAssertEqual(store.playlists.map(\.id), [retained])
+    }
+
     func testEditedProviderPlaylistStopsRefreshingFromProvider() {
         let localCopy = LocalPlaylist(
             name: "Edited copy",
@@ -69,6 +84,36 @@ final class LocalPlaylistSyncPolicyTests: XCTestCase {
         XCTAssertTrue(LocalPlaylistSyncPolicy.shouldRefreshFromProvider(imported))
         XCTAssertTrue(LocalPlaylistSyncPolicy.shouldApplyProviderSnapshot(to: imported))
         XCTAssertTrue(LocalPlaylistSyncPolicy.shouldApplyProviderSnapshot(to: nil))
+    }
+
+    func testProviderPlaylistRefreshRequiresExplicitSelection() {
+        let legacyImport = LocalPlaylist(
+            name: "旧版自动导入",
+            remoteSource: "netease",
+            remotePlaylistID: "legacy"
+        )
+        let selectedImport = LocalPlaylist(
+            name: "已选择导入",
+            remoteSource: "qq",
+            remotePlaylistID: "selected",
+            providerSyncEnabled: true
+        )
+
+        XCTAssertFalse(LocalPlaylistSyncPolicy.isProviderRefreshEnabled(legacyImport))
+        XCTAssertTrue(LocalPlaylistSyncPolicy.isProviderRefreshEnabled(selectedImport))
+    }
+
+    func testNewOptionalProviderFlagDecodesLegacyPlaylistData() throws {
+        let oldPlaylist = LocalPlaylist(
+            name: "存量歌单",
+            remoteSource: "qq",
+            remotePlaylistID: "old"
+        )
+        let legacyEncodedData = try JSONEncoder().encode(oldPlaylist)
+        let decoded = try JSONDecoder().decode(LocalPlaylist.self, from: legacyEncodedData)
+
+        XCTAssertNil(decoded.providerSyncEnabled)
+        XCTAssertFalse(LocalPlaylistSyncPolicy.isProviderRefreshEnabled(decoded))
     }
 
     func testQQPlaylistCopyCanRefreshUntilItHasLocalEdits() {
