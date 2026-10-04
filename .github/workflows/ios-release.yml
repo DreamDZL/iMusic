@@ -33,10 +33,16 @@ jobs:
             echo "No available iPhone simulator was found" >&2
             exit 1
           fi
+          # Restart the simulator so stale Accessibility/XCTest services do not
+          # prevent the UI test runner from initializing.
+          xcrun simctl shutdown "$destination_id" || true
+          xcrun simctl boot "$destination_id"
+          xcrun simctl bootstatus "$destination_id" -b
           xcodebuild test \
             -project KumoneIOS.xcodeproj \
             -scheme KumoneIOS \
             -destination "platform=iOS Simulator,id=$destination_id" \
+            -destination-timeout 120 \
             -parallel-testing-enabled NO \
             -derivedDataPath build/test-derived \
             CODE_SIGNING_ALLOWED=NO
