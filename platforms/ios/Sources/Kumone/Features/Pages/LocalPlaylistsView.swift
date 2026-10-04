@@ -336,6 +336,15 @@ struct LikedSongsView: View {
                               systemImage: isSelectingFavorites ? "checkmark" : "checklist")
                     }
                 }
+                if isSelectingFavorites, !visibleTracks.isEmpty {
+                    let keys = Set(visibleTracks.map(\.playbackKey))
+                    let allSelected = keys.isSubset(of: selectedFavoriteKeys)
+                    Button(allSelected ? "取消全选" : "全选") {
+                        if allSelected { selectedFavoriteKeys.subtract(keys) }
+                        else { selectedFavoriteKeys.formUnion(keys) }
+                    }
+                    .accessibilityIdentifier("favoriteSelectAll")
+                }
                 if isSelectingFavorites, !selectedFavoriteKeys.isEmpty {
                     Button(role: .destructive) {
                         store.removeFavorites(playbackKeys: selectedFavoriteKeys)
@@ -619,6 +628,16 @@ struct LocalPlaylistDetailView: View {
                 } label: {
                     Label(isSelectingTracks ? "完成选择" : "选择歌曲",
                           systemImage: isSelectingTracks ? "checkmark" : "checklist")
+                }
+                if isSelectingTracks, let playlist = store.playlist(id: playlistID) {
+                    let keys = Set(filteredTracks(playlist.tracks).map(\.playbackKey))
+                    let allSelected = !keys.isEmpty && keys.isSubset(of: selectedTrackKeys)
+                    Button(allSelected ? "取消全选" : "全选") {
+                        if allSelected { selectedTrackKeys.subtract(keys) }
+                        else { selectedTrackKeys.formUnion(keys) }
+                    }
+                    .disabled(keys.isEmpty)
+                    .accessibilityIdentifier("playlistSelectAll")
                 }
                 if isSelectingTracks, let playlist = store.playlist(id: playlistID), !selectedTrackKeys.isEmpty {
                     Button {

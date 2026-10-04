@@ -275,6 +275,7 @@ actor QQMusicAPI {
         case tooManyPlaylists
         case tooManyTracks
         case incompletePlaylist
+        case accountDirectoryUnavailable
 
         var errorDescription: String? {
             switch self {
@@ -298,6 +299,7 @@ actor QQMusicAPI {
             case .tooManyPlaylists: return "QQ 歌单数量超过安全分页上限，请减少后重试"
             case .tooManyTracks: return "QQ 歌单歌曲数量超过安全分页上限，未保存不完整副本"
             case .incompletePlaylist: return "QQ 歌单内容未能完整获取，请重试；未保存部分副本"
+            case .accountDirectoryUnavailable: return "QQ 音乐暂时未返回账号歌单标识，请刷新重试；未保存不完整副本"
             }
         }
     }
@@ -806,11 +808,22 @@ actor QQMusicAPI {
             throw APIError.loginCookieUnavailable
         }
         let isLikedSongs = id == "qq-liked:201"
-        let playlistID: Int64
+        let directoryID: Int?
         if isLikedSongs {
+            directoryID = 201
+        } else if id.hasPrefix("qq-directory:") {
+            guard let parsed = Int(id.dropFirst("qq-directory:".count)), parsed > 0 else {
+                throw APIError.invalidResponse
+            }
+            directoryID = parsed
+        } else {
+            directoryID = nil
+        }
+        let playlistID: Int64
+        if directoryID != nil {
             playlistID = 0
         } else if id.range(of: #"^\d+$"#, options: .regularExpression) != nil,
-                  let parsedID = Int64(id) {
+                  let parsedID = Int64(id), parsedID > 0 {
             playlistID = parsedID
         } else {
             throw APIError.invalidResponse
@@ -820,6 +833,9 @@ actor QQMusicAPI {
         guard let musicTicket = Self.musicAuthTicket(in: cookieValues) else {
             throw APIError.loginCookieUnavailable
         }
+        let encryptedHostUin = directoryID != nil
+            ? try await fetchEncryptedHostUin(profileID: profile.id, cookie: requestCookie, cookieValues: cookieValues)
+            : nil
         var tracks: [Track] = []
         var playlistName: String?
         var offset = 0
@@ -833,6 +849,8 @@ actor QQMusicAPI {
             let trackPage = try await fetchPlaylistTrackPage(
                 playlistID: playlistID,
                 isLikedSongs: isLikedSongs,
+                directoryID: directoryID,
+                encryptedHostUin: encryptedHostUin,
                 profileID: profile.id,
                 musicTicket: musicTicket,
                 offset: offset,
@@ -897,6 +915,8 @@ actor QQMusicAPI {
     private func fetchPlaylistTrackPage(
         playlistID: Int64,
         isLikedSongs: Bool,
+        directoryID: Int?,
+        encryptedHostUin: String?,
         profileID: String,
         musicTicket: String,
         offset: Int,
@@ -905,41 +925,11 @@ actor QQMusicAPI {
         cookie: String,
         cookieValues: [String: String]
     ) async throws -> PlaylistTrackPage {
-        // `CgiGetDiss` is the account-bound route. Send QQ's ticket-bearing
-        // client envelope with the signed-in UIN and cookie; do not reuse the
-        // public web envelope from `uniform_get_Dissinfo`.
-        let primaryComm = QQMusicAccountRequestEnvelope.common(
-            userID: profileID,
-            musicTicket: musicTicket
-        )
-        let commonParam: [String: Any] = [
-            "disstid": playlistID,
-            "tag": true,
-            "song_begin": offset,
-            "song_num": pageSize,
-            "userinfo": true,
-            "orderlist": true
-        ]
-        var primaryParam = commonParam
-        primaryParam["dirid"] = isLikedSongs ? 201 : 0
-        primaryParam["onlysonglist"] = false
-        let primaryPayload: [String: Any] = [
-            "comm": primaryComm,
-            "playlist": [
-                "module": "music.srfDissInfo.DissInfo",
-                "method": "CgiGetDiss",
-                "param": primaryParam
-            ]
-        ]
-
-        // Match LX Music Mobile's mobile playlist endpoint and full-list
-        // request size. It deliberately stays anonymous; account credentials
-        // are sent only to the account-bound CgiGetDiss route below.
-        let fallbackPayload = Self.mobilePlaylistDetailPayload(
-            playlistID: playlistID,
-            offset: offset,
-            expectedPlaylistCount: expectedPlaylistCount,
-            pageSize: pageSize
+        let routes = try Self.playlistTrackRoutes(
+            playlistID: playlistID, isLikedSongs: isLikedSongs, directoryID: directoryID,
+            profileID: profileID, musicTicket: musicTicket,
+            encryptedHostUin: encryptedHostUin, offset: offset,
+            pageSize: pageSize, expectedPlaylistCount: expectedPlaylistCount
         )
 
         var sessionError: APIError?
@@ -950,7 +940,7 @@ actor QQMusicAPI {
         // first, then uniform_get_Dissinfo when QQ returns a nonzero subcode
         // or omits cdlist. Try the authenticated owner request before the
         // anonymous public request so private playlists still have a chance.
-        if !isLikedSongs, offset == 0 {
+        if directoryID == nil, offset == 0 {
             let csrfKey = Self.csrfKey(in: cookieValues) ?? ""
             let legacyRequests: [(name: String, url: URL?, cookie: String?)] = [
                 (
@@ -1006,7 +996,9 @@ actor QQMusicAPI {
         // The mobile-compatible endpoint is the first fallback after the
         // legacy response; the account-bound paginated API remains a final
         // alternative for private playlists and multi-page responses.
-        for (responseKey, payload) in [("req_1", fallbackPayload), ("playlist", primaryPayload)] {
+        for route in routes {
+            let responseKey = route.responseKey
+            let payload = route.payload
             do {
                 try Task.checkCancellation()
                 let body = try JSONSerialization.data(withJSONObject: payload)
@@ -1015,7 +1007,7 @@ actor QQMusicAPI {
                 request.timeoutInterval = 20
                 request.httpBody = body
                 request.httpShouldHandleCookies = false
-                if responseKey == "playlist" {
+                if route.authenticated {
                     request.setValue(cookie, forHTTPHeaderField: "Cookie")
                 }
                 request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
@@ -1082,9 +1074,9 @@ actor QQMusicAPI {
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error as APIError {
-                let routeName = responseKey == "playlist" ? "CgiGetDiss" : "uniform_get_Dissinfo"
+                let routeName = route.authenticated ? "CgiGetDiss" : "uniform_get_Dissinfo"
                 routeErrors.append("\(routeName)：\(Self.safeRouteFailure(error))")
-                if responseKey == "playlist",
+                if route.authenticated,
                    let apiError = error as? APIError,
                    case let .sessionCredentialRejected(_, ticketMissing) = apiError {
                     sessionError = sessionError ?? APIError.sessionCredentialRejected(
@@ -1093,7 +1085,7 @@ actor QQMusicAPI {
                     )
                 }
             } catch {
-                let routeName = responseKey == "playlist" ? "CgiGetDiss" : "uniform_get_Dissinfo"
+                let routeName = route.authenticated ? "CgiGetDiss" : "uniform_get_Dissinfo"
                 routeErrors.append("\(routeName)：\(Self.safeRouteFailure(error))")
             }
         }
@@ -1114,6 +1106,93 @@ actor QQMusicAPI {
         }
         if let bestIncompletePage { return bestIncompletePage }
         throw APIError.invalidResponse
+    }
+
+    struct PlaylistTrackRoute {
+        let responseKey: String
+        let payload: [String: Any]
+        let authenticated: Bool
+    }
+
+    /// Private liked-song directories require the account's encrypted UIN.
+    /// A zero diss ID is never sent to the anonymous public-playlist route.
+    static func playlistTrackRoutes(
+        playlistID: Int64, isLikedSongs: Bool, directoryID: Int? = nil,
+        profileID: String, musicTicket: String, encryptedHostUin: String?,
+        offset: Int, pageSize: Int, expectedPlaylistCount: Int?
+    ) throws -> [PlaylistTrackRoute] {
+        let accountDirectory = isLikedSongs ? 201 : directoryID
+        if let accountDirectory {
+            guard accountDirectory > 0 else { throw APIError.invalidResponse }
+            guard let encryptedHostUin,
+                  !encryptedHostUin.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  encryptedHostUin != profileID else { throw APIError.accountDirectoryUnavailable }
+        }
+        let responseKey = "music.srfDissInfo.DissInfo"
+        let primary = PlaylistTrackRoute(responseKey: responseKey, payload: [
+            "comm": QQMusicAccountRequestEnvelope.common(userID: profileID, musicTicket: musicTicket),
+            responseKey: [
+                "module": responseKey,
+                "method": "CgiGetDiss",
+                "param": [
+                    "disstid": accountDirectory != nil ? Int64(0) : playlistID,
+                    "dirid": accountDirectory ?? 0,
+                    "enc_host_uin": encryptedHostUin ?? "",
+                    "song_begin": max(offset, 0), "song_num": pageSize,
+                    "tag": true, "userinfo": true, "orderlist": true, "onlysonglist": false,
+                ],
+            ],
+        ], authenticated: true)
+        if accountDirectory != nil { return [primary] }
+        return [PlaylistTrackRoute(responseKey: "req_1", payload: mobilePlaylistDetailPayload(
+            playlistID: playlistID, offset: offset,
+            expectedPlaylistCount: expectedPlaylistCount, pageSize: pageSize
+        ), authenticated: false), primary]
+    }
+
+    static func encryptedHostUin(in root: [String: Any], profileID: String) -> String? {
+        guard integer(in: root, keys: ["code", "subcode"]).map({ $0 == 0 }) ?? true,
+              let data = root["data"] as? [String: Any],
+              let creator = data["creator"] as? [String: Any],
+              let encrypted = text(creator["encrypt_uin"])?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !encrypted.isEmpty, encrypted != profileID else { return nil }
+        return encrypted
+    }
+
+    private func fetchEncryptedHostUin(
+        profileID: String, cookie: String, cookieValues: [String: String]
+    ) async throws -> String {
+        if let encrypted = cookieValues["euin"]?.removingPercentEncoding?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !encrypted.isEmpty, encrypted != profileID { return encrypted }
+        for host in ["c6.y.qq.com", "c.y.qq.com"] {
+            try Task.checkCancellation()
+            var components = URLComponents(string: "https://\(host)/rsc/fcgi-bin/fcg_get_profile_homepage.fcg")!
+            components.queryItems = [
+                URLQueryItem(name: "ct", value: "20"),
+                URLQueryItem(name: "cv", value: "4747474"),
+                URLQueryItem(name: "cid", value: "205360838"),
+                URLQueryItem(name: "userid", value: profileID),
+                URLQueryItem(name: "format", value: "json"),
+            ]
+            var request = URLRequest(url: components.url!)
+            request.timeoutInterval = 20
+            request.httpShouldHandleCookies = false
+            request.setValue(cookie, forHTTPHeaderField: "Cookie")
+            request.setValue("https://y.qq.com/", forHTTPHeaderField: "Referer")
+            request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+            do {
+                let (data, response) = try await session.data(for: request)
+                try Task.checkCancellation()
+                if Self.isSuccess(response), let root = Self.jsonObject(from: data),
+                   let encrypted = Self.encryptedHostUin(in: root, profileID: profileID) {
+                    return encrypted
+                }
+            } catch is CancellationError { throw CancellationError() }
+            catch let error as URLError where error.code == .cancelled { throw CancellationError() }
+            catch { continue }
+        }
+        throw APIError.accountDirectoryUnavailable
     }
 
     static func mobilePlaylistDetailPayload(
@@ -1321,7 +1400,7 @@ actor QQMusicAPI {
                 detailObjects.append(result)
             }
         }
-        for key in ["req_1", "req_0"] {
+        for key in ["req_1", "req_0", "music.srfDissInfo.DissInfo"] {
             if let request = root[key] as? [String: Any] {
                 detailObjects.append(request)
                 if let result = request["data"] as? [String: Any] {
@@ -1435,11 +1514,20 @@ actor QQMusicAPI {
         return data["data"] as? [String: Any] ?? data
     }
 
-    private static func mapPlaylist(_ raw: [String: Any], kind: Playlist.Kind) -> Playlist {
-        let rawID = text(raw["dissid"]) ?? text(raw["tid"]) ?? text(raw["dirid"])
-            ?? text(raw["id"]) ?? text(raw["diss_id"]) ?? ""
-        let isLiked = text(raw["dirid"]) == "201" || text(raw["dirId"]) == "201"
-        let id = isLiked ? "qq-liked:201" : rawID
+    static func mapPlaylist(_ raw: [String: Any], kind: Playlist.Kind) -> Playlist {
+        let directoryID = integer(in: raw, keys: ["dirid", "dirId"])
+        let isLiked = directoryID == 201
+        let publicKeys = kind == .created && (directoryID ?? 0) > 0
+            ? ["dissid", "tid", "diss_id"] : ["dissid", "tid", "diss_id", "id"]
+        let publicID = publicKeys.compactMap { key -> String? in
+            guard let value = text(raw[key]), let numeric = Int64(value), numeric > 0 else { return nil }
+            return value
+        }.first
+        let id: String
+        if isLiked { id = "qq-liked:201" }
+        else if let publicID { id = publicID }
+        else if kind == .created, let directoryID, directoryID > 0 { id = "qq-directory:\(directoryID)" }
+        else { id = "" }
         let image = text(raw["diss_cover"]) ?? text(raw["logo"])
             ?? text(raw["picurl"]) ?? text(raw["cover"])
         let coverURL: String? = {
@@ -1709,7 +1797,7 @@ actor QQMusicAPI {
         let allowed = Set([
             "uin", "skey", "p_uin", "p_skey", "pt4_token", "qqmusic_uin",
             "qqmusic_key", "qm_keyst", "music_key", "musickey", "musicid",
-            "loginUin", "login_type", "wxuin", "wx_skey", "wxskey", "wxrefresh_token",
+            "euin", "loginUin", "login_type", "wxuin", "wx_skey", "wxskey", "wxrefresh_token",
             "pskey", "psrf_qqaccess_token", "psrf_qqrefresh_token"
         ].map { $0.lowercased() })
         var pairs = cookieStorage.cookies?.filter {

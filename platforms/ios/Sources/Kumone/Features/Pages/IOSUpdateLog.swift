@@ -34,9 +34,10 @@ struct IOSUpdateLogSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     private let items: [(String, String, String)] = [
-        ("arrow.triangle.2.circlepath", "版本自检", "启动后先进入主界面，再在后台查询 GitHub 最新版本；检查失败不会挡住播放。"),
-        ("waveform", "播放与音质", "优先使用已登录账号的可用音质，失败后按当前设置回退到已启用的 LX 音源。"),
-        ("text.bubble", "歌词与体验", "继续优化歌词、封面和播放切换，并保留设置中手动查看更新日志的入口。"),
+        ("person.crop.circle", "账号同步", "顶部切换网易云与 QQ，分别管理登录、刷新和歌单副本；QQ 私人目录补充加密账号标识。"),
+        ("waveform", "第三方音源", "在线播放和下载仅使用启用的 LX 音源；未报告实际音质时显示请求档位。"),
+        ("text.bubble", "逐句歌词", "只通过歌词按钮切页；无操作 3 秒隐藏控制，点下半屏唤出，滚动浏览后才能点歌词定位。"),
+        ("checklist", "批量操作", "收藏歌曲和歌单详情的批量删除支持全选与取消全选。"),
     ]
 
     var body: some View {

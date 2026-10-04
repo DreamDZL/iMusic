@@ -74,6 +74,36 @@ final class KumoneIOSUITests: XCTestCase {
     }
 
     @MainActor
+    func testAccountSyncShowsOnlySelectedChannel() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing"]
+        app.launch()
+        let library = app.tabBars.buttons["资料库"]
+        XCTAssertTrue(library.waitForExistence(timeout: 15))
+        library.tap()
+        app.buttons["更多资料库选项"].tap()
+        app.buttons["设置"].tap()
+        let accountLink = app.buttons["账号同步"]
+        if !accountLink.isHittable { app.swipeUp() }
+        XCTAssertTrue(accountLink.waitForExistence(timeout: 5))
+        accountLink.tap()
+        let picker = app.segmentedControls["accountSyncChannelPicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["accountLogin-netease"].exists)
+        XCTAssertFalse(app.buttons["accountLogin-qq"].exists)
+        picker.buttons["QQ 音乐"].tap()
+        XCTAssertTrue(app.buttons["accountLogin-qq"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["accountLogin-netease"].exists)
+        picker.buttons["网易云"].tap()
+        XCTAssertTrue(app.buttons["accountLogin-netease"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["accountLogin-qq"].exists)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "iMusic-账号同步-渠道切换"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor
     func testAppleMusicPlayerSongAndLyricsPages() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
@@ -112,19 +142,24 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(app.buttons["showSynchronizedLyrics"].waitForNonExistence(timeout: 7))
 
         lyricsScroll.swipeRight()
-        XCTAssertTrue(songTransportControls.waitForExistence(timeout: 5))
-        // Start the gesture on the album art (inside the page's swipe region),
-        // not the full-page accessibility container whose midpoint can fall
-        // over the intentionally gesture-protected transport controls.
-        artwork.swipeLeft()
-        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7))
+        XCTAssertTrue(lyricsPage.exists, "Horizontal swipes must stay on lyrics")
+        XCTAssertFalse(songTransportControls.exists)
+        XCTAssertFalse(transportControls.exists)
 
         lyricsScroll.swipeUp()
         XCTAssertTrue(lyricsPage.exists)
         XCTAssertFalse(transportControls.exists)
-
         lyricsPage.coordinate(withNormalizedOffset: CGVector(dx: 0.82, dy: 0.94)).tap()
         XCTAssertTrue(transportControls.waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["showSynchronizedLyrics"].exists, "Lyrics need the same bottom toolbar")
+        XCTAssertTrue(app.staticTexts["0:14"].exists, "Scrolling and revealing controls must not seek")
+        XCTAssertTrue(app.buttons["选择播放音质，当前为请求 320 kbps"].exists)
+        app.buttons["showSynchronizedLyrics"].tap()
+        XCTAssertTrue(songTransportControls.waitForExistence(timeout: 5))
+        XCTAssertTrue(songPage.exists)
+        artwork.swipeLeft()
+        XCTAssertTrue(songPage.exists, "Switch pages only with the lyrics button")
+        app.buttons["showSynchronizedLyrics"].tap()
         XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7))
 
         let lyricsAttachment = XCTAttachment(screenshot: app.screenshot())

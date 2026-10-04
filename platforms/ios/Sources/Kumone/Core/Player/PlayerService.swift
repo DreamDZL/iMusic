@@ -60,15 +60,6 @@ enum PlaybackMode: String, CaseIterable, Identifiable {
     }
 }
 
-enum PlaybackResolutionPolicy {
-    static func requiresOfficialAccount(
-        mode: PlaybackSourceMode,
-        hasMatchingAccount: Bool
-    ) -> Bool {
-        mode == .official && !hasMatchingAccount
-    }
-}
-
 /// Consistent stopped state when a selected track cannot reach playable audio.
 /// Keeping the elapsed position lets the user retry after fixing the source.
 struct PausedPlaybackState: Equatable {
@@ -273,6 +264,8 @@ final class PlayerService: ObservableObject {
     @Published private(set) var isResolvingSource = false
     @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var servedQuality: String?
+    /// Resolved request tier when a source does not report actual audio metadata.
+    @Published private(set) var requestedQuality: String?
     @Published private(set) var unblockSource: String?
     @Published private(set) var isTrial = false
     let clock = PlaybackClock()
@@ -359,35 +352,7 @@ final class PlayerService: ObservableObject {
     func availableQualitiesForCurrentTrack() async -> [AudioQuality] {
         guard let track = currentTrack else { return [] }
 #if os(iOS)
-        let playbackMode = SettingsManager.shared.playbackSourceMode
-        var names: Set<String> = []
-        if playbackMode != .official {
-            names.formUnion(await LXUserAPIService.shared.availableQualityNames(for: track))
-        }
-        let source = (track.source ?? track.sourceMetadata["source"] ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let isNativeNetease = source.isEmpty || ["wy", "163", "netease",
-                                                  "neteasecloudmusic", "cloudmusic"].contains(source)
-        if playbackMode != .thirdParty,
-           NeteaseClient.shared.isLoggedIn,
-           isNativeNetease {
-            names.formUnion(await NeteaseAPI.officialQualityNames(
-                for: track.id, duration: track.duration
-            ))
-        }
-        let isQQMusic = ["tx", "qq", "qqmusic", "qq-music"].contains(source)
-        if playbackMode != .thirdParty,
-           QQMusicSessionStore.shared.isLoggedIn,
-           isQQMusic {
-            names.formUnion(await officialQualityNames(for: track))
-        }
-        let isKugou = ["kg", "kugou"].contains(source)
-        if playbackMode != .thirdParty,
-           KugouSessionStore.shared.isLoggedIn,
-           isKugou {
-            names.formUnion(await officialQualityNames(for: track))
-        }
+        let names = Set(await LXUserAPIService.shared.availableQualityNames(for: track))
         var seenTypes = Set<String>()
         let available = AudioQuality.allCases.filter {
             names.contains($0.lxType) && seenTypes.insert($0.lxType).inserted
@@ -433,14 +398,8 @@ final class PlayerService: ObservableObject {
     private var startScrobbled = false
 #if os(iOS)
     private var audioSessionActive = false
-    /// Account URLs are tried for the matching catalogue before the enabled
-    /// LX sources. A provider downgrade is reported using the actual tier.
     private var pendingNeteaseTrackIDs: [String: Int] = [:]
 
-    private struct OfficialAudio {
-        let url: URL
-        let quality: String
-    }
 #endif
     private var runtimeStarted = false
 
@@ -569,6 +528,8 @@ final class PlayerService: ObservableObject {
         isResolvingSource = false
         duration = track.duration
         progress = 14
+        requestedQuality = "320k"
+        servedQuality = nil
         lyricsCursor.activeIndex = lyrics.activeIndex(at: progress)
         self.lyrics = lyrics
         showNowPlaying = false
@@ -934,7 +895,7 @@ final class PlayerService: ObservableObject {
     /// Recomputes the current lyric line, publishing only on a change.
     /// The lead makes a line light up just before it is sung.
     private func updateLyricsCursor(at seconds: TimeInterval) {
-        let index = lyrics?.activeIndex(at: seconds + SettingsManager.shared.lyricsOffset)
+        let index = lyrics?.activeIndex(at: seconds)
         if index != lyricsCursor.activeIndex {
             lyricsCursor.activeIndex = index
         }
@@ -1383,6 +1344,7 @@ final class PlayerService: ObservableObject {
         progress = seekCoordinator.initialPlaybackPosition
         duration = track.duration
         servedQuality = nil
+        requestedQuality = nil
         unblockSource = nil
         isTrial = false
         lyrics = nil
@@ -1432,53 +1394,25 @@ final class PlayerService: ObservableObject {
 #endif
         var resolvedURL: URL?
         var servedByLXQuality: String?
+        var resolvedRequestQuality: String?
 #if os(macOS)
         var data: SongURLData?
 #endif
 
 #if os(iOS)
-        // Prefer a matching account source in automatic mode. If it fails,
-        // automatic mode falls back to the enabled LX sources.
+        // Cached downloads and enabled LX sources are the only iOS audio routes.
         if let local = DownloadManager.shared.record(for: track),
            FileManager.default.fileExists(atPath: local.fileURL.path) {
             resolvedURL = local.fileURL
             servedByLXQuality = local.qualityVerified == true ? local.quality : nil
+            resolvedRequestQuality = local.quality
         } else {
-            let sourceValue = (track.source ?? track.sourceMetadata["source"] ?? "")
-                .lowercased()
-            let isNativeNetease = sourceValue.isEmpty || ["wy", "163", "netease",
-                                                           "neteasecloudmusic", "cloudmusic"].contains(sourceValue)
-            let isQQMusic = ["tx", "qq", "qqmusic", "qq-music"].contains(sourceValue)
-            let isKugou = ["kg", "kugou"].contains(sourceValue)
-            let playbackMode = SettingsManager.shared.playbackSourceMode
-            let hasOfficialAccount = (isNativeNetease && NeteaseClient.shared.isLoggedIn)
-                || (isQQMusic && QQMusicSessionStore.shared.isLoggedIn)
-                || (isKugou && KugouSessionStore.shared.isLoggedIn)
-            let hasLXSource = !LXSourceStore.shared.playbackSources.isEmpty
-            if PlaybackResolutionPolicy.requiresOfficialAccount(
-                mode: playbackMode,
-                hasMatchingAccount: hasOfficialAccount
-            ) {
+            guard !LXSourceStore.shared.playbackSources.isEmpty else {
                 guard generation == resolveGeneration else { return }
-                ToastCenter.shared.show("仅官方音源模式需要登录这首歌曲所属平台的账号")
+                ToastCenter.shared.show("请先在设置 → LX 音源中启用第三方音源")
                 settlePlaybackAsPaused()
                 return
             }
-            guard hasLXSource || (playbackMode != .thirdParty && hasOfficialAccount) else {
-                guard generation == resolveGeneration else { return }
-                ToastCenter.shared.show("请先登录账号或在设置 → LX 音源中选择播放音源")
-                settlePlaybackAsPaused()
-                return
-            }
-            if playbackMode != .thirdParty, hasOfficialAccount,
-               let official = await resolveOfficialAudio(
-                for: track, quality: SettingsManager.shared.audioQuality
-               ) {
-                resolvedURL = official.url
-                servedByLXQuality = official.quality
-            }
-
-            if resolvedURL == nil, playbackMode != .official, hasLXSource {
             do {
                 var resolved: LXUserAPIService.ResolvedURL?
                 var lastError: Error?
@@ -1505,6 +1439,7 @@ final class PlayerService: ObservableObject {
                 }
                 resolvedURL = resolved.url
                 servedByLXQuality = resolved.qualityIsVerified ? resolved.quality : nil
+                resolvedRequestQuality = resolved.quality
             } catch {
                 guard generation == resolveGeneration else { return }
                 consecutiveFailures += 1
@@ -1514,7 +1449,6 @@ final class PlayerService: ObservableObject {
                 // can adjust the source or retry after reading the real error.
                 settlePlaybackAsPaused()
                 return
-            }
             }
         }
 #else
@@ -1561,6 +1495,7 @@ final class PlayerService: ObservableObject {
         consecutiveFailures = 0
 #if os(iOS)
         servedQuality = servedByLXQuality
+        requestedQuality = resolvedRequestQuality
         NowPlayingManager.shared.updateResolvedQuality(servedQuality, for: track)
 #else
         servedQuality = servedByLXQuality ?? data?.level
@@ -1674,144 +1609,6 @@ final class PlayerService: ObservableObject {
         ToastCenter.shared.show("音频源无法播放\(reason.map { "：\($0)" } ?? "")")
         settlePlaybackAsPaused()
     }
-
-#if os(iOS)
-    /// Resolve a full-length provider URL using the account belonging to the
-    /// track's catalogue. The returned quality is the provider's response.
-    private func resolveOfficialAudio(for track: Track, quality: AudioQuality) async -> OfficialAudio? {
-        let source = (track.source ?? track.sourceMetadata["source"] ?? "").lowercased()
-        let candidates = qualityCandidates(startingAt: quality)
-
-        if source.isEmpty || ["wy", "163", "netease", "neteasecloudmusic", "cloudmusic"].contains(source),
-           NeteaseClient.shared.isLoggedIn {
-            for candidate in candidates {
-                guard let data = (try? await NeteaseAPI.songURL(
-                    ids: [track.id], level: candidate.neteaseLevel
-                ))?.first,
-                data.freeTrialInfo == nil,
-                data.time <= 0 || track.duration <= 0
-                    || TimeInterval(data.time) / 1000 >= max(45, track.duration * 0.65),
-                let rawURL = data.url,
-                let url = validAudioURL(rawURL) else { continue }
-                return OfficialAudio(url: url, quality: NeteaseAPI.officialQuality(for: data).lxType)
-            }
-        }
-
-        if ["tx", "qq", "qqmusic", "qq-music"].contains(source),
-           QQMusicSessionStore.shared.isLoggedIn,
-           let cookie = QQMusicSessionStore.shared.cookie {
-            let songMid = track.sourceMetadata["songmid"] ?? String(track.id)
-            let mediaMid = track.sourceMetadata["strMediaMid"]?.isEmpty == false
-                ? track.sourceMetadata["strMediaMid"]
-                : track.sourceMetadata["media_mid"]
-            var attempted = Set<String>()
-            for candidate in candidates {
-                let token = qqQualityToken(for: candidate)
-                guard attempted.insert(token).inserted,
-                      let resolved = try? await QQMusicAPI.shared.musicURL(
-                        songMid: songMid, mediaMid: mediaMid, quality: token, cookie: cookie
-                      ),
-                      let actual = AudioQuality(lxType: resolved.quality) else { continue }
-                return OfficialAudio(url: resolved.url, quality: actual.lxType)
-            }
-        }
-
-        if ["kg", "kugou"].contains(source),
-           KugouSessionStore.shared.isLoggedIn,
-           let cookie = KugouSessionStore.shared.cookie,
-           let hash = track.sourceMetadata["hash"] ?? track.sourceMetadata["Hash"], !hash.isEmpty {
-            let albumID = track.sourceMetadata["albumId"]
-            let albumAudioID = track.sourceMetadata["albumAudioId"]
-                ?? track.sourceMetadata["albumAudioID"]
-                ?? track.sourceMetadata["mixsongid"]
-            var attempted = Set<String>()
-            for candidate in candidates {
-                let token = candidate.lxType
-                guard attempted.insert(token).inserted,
-                      let resolved = try? await KugouAPI.shared.musicURL(
-                        hash: hash, quality: token, cookie: cookie,
-                        albumID: albumID, albumAudioID: albumAudioID
-                      ),
-                      let actual = AudioQuality(lxType: resolved.quality) else { continue }
-                return OfficialAudio(url: resolved.url, quality: actual.lxType)
-            }
-        }
-
-        return nil
-    }
-
-    /// Probe the authenticated provider instead of advertising a fixed list
-    /// of labels. This keeps the quality picker honest: VIP-only tiers and
-    /// unavailable Hi-Res variants are omitted, and a provider downgrade is
-    /// represented by the quality returned by its API.
-    private func officialQualityNames(for track: Track) async -> [String] {
-        let source = (track.source ?? track.sourceMetadata["source"] ?? "").lowercased()
-        var available: [String] = []
-
-        func append(_ quality: AudioQuality) {
-            if !available.contains(quality.lxType) {
-                available.append(quality.lxType)
-            }
-        }
-
-        if ["tx", "qq", "qqmusic", "qq-music"].contains(source),
-           let cookie = QQMusicSessionStore.shared.cookie {
-            let songMid = track.sourceMetadata["songmid"] ?? String(track.id)
-            let mediaMid = track.sourceMetadata["strMediaMid"]?.isEmpty == false
-                ? track.sourceMetadata["strMediaMid"]
-                : track.sourceMetadata["media_mid"]
-            for requested in ["flac", "320k", "128k"] {
-                if let resolved = try? await QQMusicAPI.shared.musicURL(
-                    songMid: songMid, mediaMid: mediaMid, quality: requested, cookie: cookie
-                ), let quality = AudioQuality(lxType: resolved.quality),
-                   validAudioURL(resolved.url.absoluteString) != nil {
-                    append(quality)
-                }
-            }
-        }
-
-        if ["kg", "kugou"].contains(source),
-           let cookie = KugouSessionStore.shared.cookie,
-           let hash = track.sourceMetadata["hash"], !hash.isEmpty {
-            let albumID = track.sourceMetadata["albumId"]
-            let albumAudioID = track.sourceMetadata["albumAudioID"]
-            for requested in ["jymaster", "atmos", "dolby", "flac24bit", "flac", "320k", "128k"] {
-                if let resolved = try? await KugouAPI.shared.musicURL(
-                    hash: hash, quality: requested, cookie: cookie,
-                    albumID: albumID, albumAudioID: albumAudioID
-                ), let quality = AudioQuality(lxType: resolved.quality),
-                   validAudioURL(resolved.url.absoluteString) != nil {
-                    append(quality)
-                }
-            }
-        }
-
-        return available
-    }
-
-    private func qualityCandidates(startingAt quality: AudioQuality) -> [AudioQuality] {
-        guard let index = AudioQuality.allCases.firstIndex(of: quality) else {
-            return AudioQuality.allCases
-        }
-        return Array(AudioQuality.allCases[index...])
-    }
-
-    private func qqQualityToken(for quality: AudioQuality) -> String {
-        switch quality {
-        case .master, .atmos, .dolby, .surround, .hires, .lossless: return "flac"
-        case .exhigh, .higher: return "320k"
-        case .standard: return "128k"
-        }
-    }
-
-    private func validAudioURL(_ rawURL: String) -> URL? {
-        guard let url = URL(string: rawURL.replacingOccurrences(of: "http://", with: "https://")),
-              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
-            return nil
-        }
-        return url
-    }
-#endif
 
     /// Resolves the asset's audio track, giving up after `timeout` so a slow or
     /// uncooperative source delays playback no longer than it would today.

@@ -128,29 +128,16 @@ enum AudioQuality: String, CaseIterable, Identifiable {
 /// matching catalogue, then fall back to enabled LX sources when it cannot
 /// provide a full-length URL.
 enum PlaybackSourceMode: String, CaseIterable, Identifiable {
-    case automatic
-    case official
     case thirdParty
 
     var id: String { rawValue }
 
     var displayName: String {
-        switch self {
-        case .automatic: return String(localized: "自动（账号优先，三方备用）")
-        case .official: return String(localized: "账号音源（官方）")
-        case .thirdParty: return String(localized: "第三方音源")
-        }
+        String(localized: "第三方音源")
     }
 
     var explanation: String {
-        switch self {
-        case .automatic:
-            return String(localized: "优先使用已登录账号的完整音频；账号不可用时按已启用的 LX 音源顺序回退")
-        case .official:
-            return String(localized: "网易云、QQ 音乐、酷狗按对应平台使用已登录账号的官方播放；未登录或不可用时不会偷偷换源")
-        case .thirdParty:
-            return String(localized: "只使用已导入并启用的 LX 音源")
-        }
+        String(localized: "只使用已导入并启用的 LX 音源")
     }
 }
 
@@ -228,8 +215,6 @@ final class SettingsManager: ObservableObject {
         static let showRomaji = "settings.showLyricsRomaji"
         static let lyricsAnnotation = "settings.lyricsAnnotation"
         static let lyricsDisplayStyle = "settings.lyricsDisplayStyle"
-        static let verbatimLyrics = "settings.verbatimLyrics"
-        static let lyricsOffset = "settings.lyricsOffset"
         static let volume = "settings.volume"
         static let fmMode = "settings.fmMode"
         static let unblock = "settings.enableUnblock"
@@ -281,18 +266,6 @@ final class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(lyricsDisplayStyle.rawValue, forKey: Keys.lyricsDisplayStyle) }
     }
 
-    /// Karaoke-style word-by-word highlighting when the song has verbatim
-    /// (yrc) lyrics; falls back to line highlighting when it doesn't.
-    @Published var verbatimLyrics: Bool {
-        didSet { UserDefaults.standard.set(verbatimLyrics, forKey: Keys.verbatimLyrics) }
-    }
-
-    /// Positive values move the displayed lyric forward to compensate for a
-    /// source whose timestamps arrive slightly behind its audio.
-    @Published var lyricsOffset: Double {
-        didSet { UserDefaults.standard.set(lyricsOffset, forKey: Keys.lyricsOffset) }
-    }
-
     /// Resolve gray tracks from third-party sources (UnblockNeteaseMusic-style).
     @Published var enableUnblock: Bool {
         didSet { UserDefaults.standard.set(enableUnblock, forKey: Keys.unblock) }
@@ -339,8 +312,11 @@ final class SettingsManager: ObservableObject {
             }
         }
         audioQuality = defaults.string(forKey: Keys.quality).flatMap(AudioQuality.init(rawValue:)) ?? .exhigh
-        playbackSourceMode = defaults.string(forKey: Keys.playbackSourceMode)
-            .flatMap(PlaybackSourceMode.init(rawValue:)) ?? .automatic
+        // Platform-account audio was removed from the product flow. Migrate
+        // older installs to the only supported route so stored preferences
+        // cannot silently keep requesting an official stream.
+        playbackSourceMode = .thirdParty
+        defaults.set(PlaybackSourceMode.thirdParty.rawValue, forKey: Keys.playbackSourceMode)
         appearance = defaults.string(forKey: Keys.appearance).flatMap(AppAppearance.init) ?? .auto
         showLyricsTranslation = defaults.object(forKey: Keys.showTranslation) as? Bool ?? true
         showLyricsRomaji = defaults.object(forKey: Keys.showRomaji) as? Bool ?? false
@@ -348,8 +324,8 @@ final class SettingsManager: ObservableObject {
         lyricsAnnotation = defaults.string(forKey: Keys.lyricsAnnotation)
             .flatMap(LyricsAnnotation.init) ?? (legacyRomaji ? .romaji : .off)
         lyricsDisplayStyle = .amll
-        verbatimLyrics = defaults.object(forKey: Keys.verbatimLyrics) as? Bool ?? true
-        lyricsOffset = defaults.object(forKey: Keys.lyricsOffset) as? Double ?? 0
+        defaults.removeObject(forKey: "settings.verbatimLyrics")
+        defaults.removeObject(forKey: "settings.lyricsOffset")
         enableUnblock = defaults.object(forKey: Keys.unblock) as? Bool ?? false
         autoCheckUpdates = defaults.object(forKey: Keys.autoCheckUpdates) as? Bool ?? true
         showDesktopLyrics = defaults.object(forKey: Keys.desktopLyrics) as? Bool ?? false

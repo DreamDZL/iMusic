@@ -3,35 +3,67 @@ import SwiftUI
 /// Optional account page for platform account metadata, listening history, and
 /// one-way playlist copies into iMusic's local library.
 struct AccountSyncView: View {
+    private enum Channel: String, CaseIterable, Identifiable {
+        case netease
+        case qq
+
+        var id: String { rawValue }
+        var title: String { self == .netease ? "网易云" : "QQ 音乐" }
+    }
+
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var qqMusic: QQMusicSessionStore
     @StateObject private var syncStore = ListeningSyncStore.shared
     @StateObject private var qqPlaylists = QQMusicPlaylistSyncStore.shared
-    @EnvironmentObject private var player: PlayerService
 
+    @State private var selectedChannel: Channel = .netease
     @State private var showLogin = false
     @State private var isRefreshing = false
+    @State private var refreshToken: UUID?
     @State private var records: [PlayRecordItem] = []
+    @State private var recordsUserID: Int?
     @State private var recordsError: String?
     @State private var showPlaylistPicker = false
     @State private var showQQPlaylistPicker = false
     @State private var showQQLogin = false
 
+    private var channelTaskID: String {
+        selectedChannel == .netease
+            ? "netease:\(account.isLoggedIn):\(account.profile?.userId ?? 0)"
+            : "qq:\(qqMusic.isLoggedIn):\(qqMusic.sessionRevision)"
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                Picker("同步渠道", selection: $selectedChannel) {
+                    ForEach(Channel.allCases) { channel in
+                        Text(channel.title).tag(channel)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("accountSyncChannelPicker")
+
                 sourceOnlyNotice
 
-                if account.isLoggedIn, let profile = account.profile {
-                    profileCard(profile)
-                    cloudPlaylistsCard
-                    syncCard
-                    recentRecords
-                } else {
-                    loginCard
+                switch selectedChannel {
+                case .netease:
+                    if account.isLoggedIn, let profile = account.profile {
+                        profileCard(profile)
+                        cloudPlaylistsCard
+                        syncCard
+                        recentRecords
+                    } else {
+                        accountLoginCard(channel: .netease)
+                    }
+                case .qq:
+                    if qqMusic.isLoggedIn {
+                        qqProfileCard
+                        qqMusicPlaylistsCard
+                    } else {
+                        accountLoginCard(channel: .qq)
+                    }
                 }
-
-                qqMusicPlaylistsCard
 
                 PlayerClearanceSpacer()
             }
@@ -40,10 +72,11 @@ struct AccountSyncView: View {
         }
         .navigationTitle("账号同步")
         .toolbar {
-            if account.isLoggedIn || qqMusic.isLoggedIn {
+            if (selectedChannel == .netease && account.isLoggedIn)
+                || (selectedChannel == .qq && qqMusic.isLoggedIn) {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        Task { await refresh(forceQQ: true) }
+                        Task { await refreshSelectedChannel(force: true) }
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
@@ -52,15 +85,15 @@ struct AccountSyncView: View {
                 }
             }
         }
-        .task(id: account.isLoggedIn) {
-            if account.isLoggedIn { await refresh() }
-        }
-        .task(id: qqMusic.sessionRevision) {
-            guard qqMusic.isLoggedIn else { return }
-            if !qqPlaylists.hasValidatedSnapshot(for: qqMusic.sessionRevision) {
-                await qqPlaylists.refresh(force: true)
+        .onChange(of: account.profile?.userId) { _, userID in
+            if recordsUserID != userID {
+                records = []
+                recordsError = nil
+                recordsUserID = userID
             }
-            await qqPlaylists.syncAfterLogin()
+        }
+        .task(id: channelTaskID) {
+            await refreshSelectedChannel(force: false)
         }
         .sheet(isPresented: $showLogin) {
 #if os(iOS)
@@ -107,10 +140,10 @@ struct AccountSyncView: View {
 
     private var sourceOnlyNotice: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("账号音源与同步", systemImage: "lock.shield.fill")
+            Label("账号资料与歌单同步", systemImage: "lock.shield.fill")
                 .font(.headline)
                 .foregroundStyle(Theme.accent)
-            Text("登录后可以同步账号资料、每日推荐、播放记录和听歌时长。播放设置为“自动”或“账号音源”时，会优先尝试对应平台账号能提供的完整音频；失败后才按设置回退到 LX 音源。")
+            Text("登录仅用于读取账号资料、歌单和播放记录；歌曲播放始终使用你启用的第三方音源。两个渠道分别管理，切换后只显示当前平台的数据。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -124,20 +157,36 @@ struct AccountSyncView: View {
         }
     }
 
-    private var loginCard: some View {
+    @ViewBuilder
+    private func accountLoginCard(channel: Channel) -> some View {
+        let providerName = channel == .netease ? "网易云音乐" : "QQ 音乐"
+        let validating = channel == .qq && qqMusic.isValidatingStoredSession
+        let validationMessage = channel == .qq ? qqMusic.sessionValidationMessage : nil
         VStack(spacing: 14) {
             Image(systemName: "person.crop.circle.badge.plus")
                 .font(.system(size: 46, weight: .medium))
                 .foregroundStyle(Theme.accent)
-            Text("登录以开启同步")
+            Text("登录\(providerName)以开启同步")
                 .font(.title3.weight(.semibold))
-            Text("不会强制改变音源；是否优先使用账号音源由设置中的播放来源控制。")
+            Text("登录只用于同步账号信息和歌单，不会改变播放音源。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            if validating {
+                Label("正在验证已保存的登录状态…", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let validationMessage {
+                Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Button {
-                showLogin = true
+                if channel == .netease { showLogin = true }
+                else { showQQLogin = true }
             } label: {
-                Label("登录网易云账号", systemImage: "person.crop.circle.badge.checkmark")
+                Label("登录\(providerName)", systemImage: channel == .netease
+                      ? "person.crop.circle.badge.checkmark" : "qrcode.viewfinder")
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
@@ -145,12 +194,35 @@ struct AccountSyncView: View {
                     .background(Theme.accentGradient, in: Capsule())
             }
             .buttonStyle(.pressable)
+            .disabled(validating)
+            .accessibilityIdentifier("accountLogin-\(channel.rawValue)")
             .frame(minHeight: 48)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 28)
         .padding(.horizontal, 20)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    private var qqProfileCard: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "person.crop.circle.fill")
+                .font(.system(size: 54))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 64, height: 64)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(qqMusic.profileName ?? "QQ 音乐用户")
+                    .font(.title3.weight(.semibold))
+                Text(qqMusic.sessionValidationMessage == nil ? "账号状态已验证" : "歌单同步需要检查")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("退出", role: .destructive) { qqMusic.signOut() }
+                .font(.subheadline.weight(.medium))
+        }
+        .padding(16)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private func profileCard(_ profile: UserProfile) -> some View {
@@ -190,7 +262,7 @@ struct AccountSyncView: View {
                 syncMetric(title: "歌曲数", value: "\(syncStore.syncedTrackCount)")
                 syncMetric(title: "状态", value: "已开启")
             }
-            Text("播放歌曲达到有效时长后，iMusic 会把匹配到的歌曲播放记录和时长同步到账号。没有可用账号音频时，LX 音源负责提供回退音频地址。")
+            Text("播放歌曲达到有效时长后，iMusic 会把匹配到的歌曲播放记录和时长同步到账号。播放音频由已启用的第三方音源提供。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -220,7 +292,7 @@ struct AccountSyncView: View {
                 }
             }
 
-            Text("已获取 \(account.userPlaylists.count) 个歌单，包含我喜欢的音乐和收藏歌单。登录后会自动复制到本地；之后自动检查云端更新，并保留你在 iMusic 中的编辑。")
+            Text("已获取 \(account.userPlaylists.count) 个歌单，包含我喜欢的音乐和收藏歌单。登录后会自动复制到本地；之后自动检查云端更新，并保留你在 iMusic 中的编辑。账号副本与 LX Sync 歌单分别管理。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -243,16 +315,28 @@ struct AccountSyncView: View {
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
                     Button("刷新") {
-                        Task { await refresh(forceQQ: true) }
+                        Task { await refreshSelectedChannel(force: true) }
                 }
                 .font(.caption.weight(.semibold))
                 .disabled(isRefreshing || account.isSyncingPlaylists)
             }
 
             Button {
+                Task {
+                    let report = await account.importSelectedPlaylists(Set(account.userPlaylists.map(\.id)))
+                    ToastCenter.shared.show("新增 \(report.inserted) 个，更新 \(report.updated) 个，\(report.failed.count) 个未完成")
+                }
+            } label: {
+                Label("立即同步网易云歌单", systemImage: "arrow.triangle.2.circlepath")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isRefreshing || account.isSyncingAfterLogin || account.isSyncingPlaylists || account.userPlaylists.isEmpty)
+
+            Button {
                 showPlaylistPicker = true
             } label: {
-                Label("查看与重新同步歌单", systemImage: "arrow.triangle.2.circlepath")
+                Label("管理本地歌单副本", systemImage: "music.note.list")
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.borderedProminent)
@@ -271,7 +355,7 @@ struct AccountSyncView: View {
     private var qqMusicPlaylistsCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                Label("QQ 音乐歌单", systemImage: "music.note.list")
+                Label("云端歌单", systemImage: "music.note.list")
                     .font(.headline)
                 Spacer()
                 if qqPlaylists.isRefreshing {
@@ -280,7 +364,7 @@ struct AccountSyncView: View {
             }
 
             if qqMusic.isLoggedIn {
-                Text("已获取 \(qqPlaylists.playlists.count) 个歌单。登录后会自动复制到本地；本地增删只影响 iMusic，并可通过 LX Sync 同步到你的设备。")
+                Text("已获取 \(qqPlaylists.playlists.count) 个歌单。包含我喜欢的音乐和收藏歌单。登录后会自动复制到本地；之后自动检查云端更新，并保留你在 iMusic 中的编辑。账号副本与 LX Sync 歌单分别管理。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -313,7 +397,7 @@ struct AccountSyncView: View {
                     .foregroundStyle(.secondary)
                     Spacer(minLength: 0)
                     Button("刷新") {
-                        Task { await qqPlaylists.refresh(force: true) }
+                        Task { await refreshSelectedChannel(force: true) }
                     }
                     .font(.caption.weight(.semibold))
                     .disabled(qqPlaylists.isRefreshing || qqPlaylists.isImporting)
@@ -398,7 +482,7 @@ struct AccountSyncView: View {
         // The status metric is the short third label in this compact card.
         // Resolve its value from the server result instead of displaying a
         // permanent “enabled” state after a failed weblog request.
-        let shownValue = title.count <= 4 ? syncStore.statusText : value
+        let shownValue = title == "状态" ? syncStore.statusText : value
         return VStack(alignment: .leading, spacing: 5) {
             Text(shownValue)
                 .font(.subheadline.weight(.semibold))
@@ -425,38 +509,57 @@ struct AccountSyncView: View {
                 Text(recordsError)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-            } else if records.isEmpty && !isRefreshing {
+            } else if (recordsUserID != account.profile?.userId || records.isEmpty) && !isRefreshing {
                 Text("暂时没有播放记录。登录只用于同步账号信息，不会影响 LX 音源播放。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-            } else {
+            } else if recordsUserID == account.profile?.userId {
                 TrackListView(tracks: records.map(\.song), style: .compact, source: .none, context: .recents)
             }
         }
     }
 
-    private func refresh(forceQQ: Bool = false) async {
-        guard account.isLoggedIn || qqMusic.isLoggedIn else { return }
+    private func refreshSelectedChannel(force: Bool) async {
+        let channel = selectedChannel
+        let taskID = channelTaskID
+        let token = UUID()
+        refreshToken = token
         isRefreshing = true
-        recordsError = nil
-        defer { isRefreshing = false }
+        defer { if refreshToken == token { isRefreshing = false } }
 
-        if account.isLoggedIn {
-            if forceQQ {
-                await account.refreshForOpen(force: true)
+        switch channel {
+        case .netease:
+            guard account.isLoggedIn else { return }
+            if recordsUserID != account.profile?.userId {
+                records = []
+                recordsUserID = account.profile?.userId
             }
+            recordsError = nil
+            await account.refreshForOpen(force: force)
+            guard !Task.isCancelled, selectedChannel == channel, channelTaskID == taskID else { return }
             if account.isLoggedIn, let uid = account.profile?.userId {
                 do {
-                    records = try await NeteaseAPI.playRecords(uid: uid, week: true)
+                    let fetched = try await NeteaseAPI.playRecords(uid: uid, week: true)
+                    guard !Task.isCancelled, selectedChannel == channel, channelTaskID == taskID,
+                          refreshToken == token else { return }
+                    recordsUserID = uid
+                    records = fetched
                 } catch {
+                    guard !Task.isCancelled, selectedChannel == channel, channelTaskID == taskID,
+                          refreshToken == token else { return }
                     recordsError = "播放记录暂时无法获取，稍后可重试。"
                 }
             } else {
                 recordsError = "账号状态已失效，请重新登录后再试。"
             }
+        case .qq:
+            guard qqMusic.isLoggedIn else { return }
+            await qqPlaylists.refresh(force: force)
+            guard !Task.isCancelled, selectedChannel == channel, channelTaskID == taskID else { return }
+            await qqPlaylists.syncAfterLogin()
         }
-        if qqMusic.isLoggedIn { await qqPlaylists.refresh(force: forceQQ) }
     }
+
 }
 
 /// Shows the account's created and collected QQ playlists as read-only source
@@ -509,7 +612,7 @@ struct QQMusicPlaylistPickerView: View {
                         .font(.subheadline.weight(.medium))
                         .disabled(playlists.isRefreshing || playlists.isImporting)
                     }
-                    Text("选中歌单可导入或更新未编辑的本地副本。对本地副本执行覆盖前会再次确认；任何操作都不会回写 QQ 账号，并可通过 LX Sync 同步本地内容。")
+                    Text("选中歌单可导入或更新未编辑的本地副本。对本地副本执行覆盖前会再次确认；任何操作都不会回写 QQ 账号，账号副本与 LX Sync 歌单分别管理。")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }

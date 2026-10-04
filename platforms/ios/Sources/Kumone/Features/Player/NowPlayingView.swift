@@ -20,6 +20,7 @@ struct NowPlayingView: View {
     @State private var artworkImage: PlatformImage?
     @State private var artworkPalette = ArtworkPaletteTransition()
     @State private var activeIndex: Int?
+    @State private var lyricLineFrames: [Int: CGRect] = [:]
     @State private var isUserScrolling = false
     @State private var isLyricsDragActive = false
     @State private var resumeTask: Task<Void, Never>?
@@ -53,7 +54,6 @@ struct NowPlayingView: View {
             // Pin to the screen width so an intrinsically-wide child can never
             // stretch the ZStack and push content off-screen.
             .frame(width: geo.size.width)
-            .simultaneousGesture(playerPageSwipeGesture(height: geo.size.height))
         }
         #if os(macOS)
         // The window toolbar is hidden while this page is up, but SwiftUI keeps
@@ -112,6 +112,10 @@ struct NowPlayingView: View {
             close()
         }
         #endif
+        .onDisappear {
+            lyricsControlsTask?.cancel()
+            resumeTask?.cancel()
+        }
         .sheet(isPresented: $showQualityPicker) {
             QualityPickerSheet()
                 .environmentObject(player)
@@ -180,26 +184,6 @@ struct NowPlayingView: View {
 #else
         artworkBackdrop.ignoresSafeArea()
 #endif
-    }
-
-    /// The two Apple Music pages are a horizontal pager: a left swipe opens
-    /// lyrics and a right swipe returns to the artwork controls. Ignore
-    /// vertical drags so the lyric list scrolls normally, and ignore swipes
-    /// beginning in the lower control area so seeking cannot change pages.
-    private func playerPageSwipeGesture(height: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 36)
-            .onEnded { value in
-                let horizontal = value.translation.width
-                let vertical = value.translation.height
-                guard abs(horizontal) > 90,
-                      abs(horizontal) > abs(vertical) * 1.35,
-                      value.startLocation.y < height * 0.72 else { return }
-                let shouldShowLyrics = horizontal < 0
-                guard shouldShowLyrics != showLyricsOnMobile else { return }
-                withAnimation(AppAnimation.standard) {
-                    showLyricsOnMobile = shouldShowLyrics
-                }
-            }
     }
 
     private var artworkBackdrop: some View {
@@ -336,13 +320,9 @@ struct NowPlayingView: View {
         let artworkSize = max(120, min(340, size.width * 0.48, size.height - 300))
         return Group {
             if showLyricsOnMobile {
-                VStack(spacing: 18) {
-                    trackMetaView
-                        .padding(.top, 12)
-                    lyricsColumn
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .padding(.horizontal, 48)
+                appleMusicLyricsPage()
+                    .frame(maxWidth: 620)
+                    .frame(maxWidth: .infinity)
             } else {
                 leftColumn(artworkSize: artworkSize)
                     .frame(maxWidth: .infinity)
@@ -408,52 +388,68 @@ struct NowPlayingView: View {
     }
 
     private func appleMusicLyricsPage() -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                artworkView(size: 54)
-                    .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
-                trackMetaView
-            }
-            .padding(.bottom, 18)
-
-            lyricsColumn
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if lyricsControlsVisible {
-                VStack(spacing: 5) {
-                    NowPlayingScrubber(
-                        onShowQuality: { showQualityPicker = true },
-                        showsRemainingTime: true
-                    )
-                    primaryTransportControls
-                    CompactVolumeControl()
-                        .accessibilityElement(children: .contain)
-                        .accessibilityIdentifier("lyricsVolumeControl")
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    artworkView(size: 54)
+                        .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
+                    trackMetaView
                 }
-                .padding(.top, 8)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("lyricsTransportControls")
-            }
-        }
-        .padding(.horizontal, 24)
-        .padding(.top, 28)
-        .padding(.bottom, lyricsControlsVisible ? 12 : 20)
-        .contentShape(Rectangle())
-        .simultaneousGesture(TapGesture().onEnded { revealLyricsControls() })
-        .overlay(alignment: .bottom) {
-            if !lyricsControlsVisible {
-                Button(action: revealLyricsControls) {
-                    Color.clear
-                    .frame(height: 164)
-                    .contentShape(Rectangle())
+                .padding(.bottom, 18)
+
+                lyricsColumn
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if lyricsControlsVisible {
+                    VStack(spacing: 5) {
+                        NowPlayingScrubber(
+                            onShowQuality: { showQualityPicker = true },
+                            showsRemainingTime: true
+                        )
+                        primaryTransportControls
+                        CompactVolumeControl()
+                            .accessibilityElement(children: .contain)
+                            .accessibilityIdentifier("lyricsVolumeControl")
+                        songPageAccessoryControls
+                    }
+                    .padding(.top, 8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("lyricsTransportControls")
+                    .simultaneousGesture(TapGesture().onEnded { revealLyricsControls() })
+                    .simultaneousGesture(DragGesture(minimumDistance: 8)
+                        .onChanged { _ in lyricsControlsTask?.cancel() }
+                        .onEnded { _ in scheduleLyricsControlsAutoHide() })
                 }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("显示播放控制")
-                    .accessibilityHint("显示暂停、切歌和音量控制")
             }
+            .padding(.horizontal, 24)
+            .padding(.top, 28)
+            .padding(.bottom, lyricsControlsVisible ? 12 : 20)
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .contentShape(Rectangle())
+            .coordinateSpace(name: "lyricsPage")
+            .accessibilityElement(children: .contain)
+            .accessibilityAction(named: Text("显示播放控制")) { revealLyricsControls() }
+            .simultaneousGesture(SpatialTapGesture(coordinateSpace: .named("lyricsPage"))
+                .onEnded { value in
+                    // Revealing controls always wins over lyric seeking, even
+                    // when the tapped area contains a visible lyric row.
+                    if !lyricsControlsVisible, value.location.y >= geometry.size.height * 0.5 {
+                        isUserScrolling = false
+                        resumeTask?.cancel()
+                        revealLyricsControls()
+                        return
+                    }
+                    guard isUserScrolling,
+                          let id = lyricLineFrames.first(where: { $0.value.contains(value.location) })?.key,
+                          let line = player.lyrics?.lines.first(where: { $0.id == id }),
+                          line.time.isFinite else { return }
+                    resumeTask?.cancel()
+                    isUserScrolling = false
+                    player.seek(to: line.time)
+                    if lyricsControlsVisible { scheduleLyricsControlsAutoHide() }
+                })
         }
-        .animation(.easeInOut(duration: 0.22), value: showLyricsOnMobile)
         .animation(.easeInOut(duration: 0.28), value: lyricsControlsVisible)
     }
 
@@ -468,8 +464,10 @@ struct NowPlayingView: View {
     private func scheduleLyricsControlsAutoHide() {
         lyricsControlsTask?.cancel()
         lyricsControlsTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(5))
-            guard !Task.isCancelled, showLyricsOnMobile else { return }
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled, showLyricsOnMobile, !isLyricsDragActive else { return }
+            isUserScrolling = false
+            resumeTask?.cancel()
             withAnimation(.easeInOut(duration: 0.28)) {
                 lyricsControlsVisible = false
             }
@@ -480,17 +478,19 @@ struct NowPlayingView: View {
         HStack(spacing: 0) {
             Button {
                 withAnimation(AppAnimation.standard) {
-                    showLyricsOnMobile = true
+                    showLyricsOnMobile.toggle()
+                    isUserScrolling = false
+                    resumeTask?.cancel()
                 }
             } label: {
-                Image(systemName: "quote.bubble")
+                Image(systemName: showLyricsOnMobile ? "quote.bubble.fill" : "quote.bubble")
                     .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(.white.opacity(0.86))
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.pressable)
-            .accessibilityLabel("显示同步歌词")
+            .accessibilityLabel(showLyricsOnMobile ? "返回歌曲页" : "显示同步歌词")
             .accessibilityIdentifier("showSynchronizedLyrics")
 
             RoutePickerButton(diameter: 40, glyphSize: 18)
@@ -1191,6 +1191,7 @@ struct NowPlayingView: View {
                         }
                         .padding(.horizontal, 24)
                     }
+                    .coordinateSpace(name: "synchronizedLyrics")
                     .accessibilityIdentifier("synchronizedLyricsScrollView")
                     .mask(
                         LinearGradient(
@@ -1219,25 +1220,36 @@ struct NowPlayingView: View {
                     }
                     .onChange(of: player.currentTrack?.playbackKey) { _ in
                         activeIndex = nil
+                        lyricLineFrames = [:]
+                    }
+                    .onPreferenceChange(LyricsLinePositionPreferenceKey.self) { positions in
+                        lyricLineFrames = positions
                     }
                     .simultaneousGesture(
                         DragGesture()
-                            .onChanged { _ in
-                                guard !isLyricsDragActive else { return }
+                            .onChanged { value in
+                                guard abs(value.translation.height) > abs(value.translation.width),
+                                      !isLyricsDragActive else { return }
                                 isLyricsDragActive = true
-                                if showLyricsOnMobile, lyricsControlsVisible {
-                                    lyricsControlsTask?.cancel()
-                                }
+                                lyricsControlsTask?.cancel()
                                 isUserScrolling = true
                                 resumeTask?.cancel()
                             }
                             .onEnded { _ in
+                                guard isLyricsDragActive else { return }
                                 isLyricsDragActive = false
                                 resumeTask?.cancel()
-                                resumeTask = Task {
+                                resumeTask = Task { @MainActor in
+                                    // Scrolling only enters browse mode. A
+                                    // deliberate tap on a row chooses its time.
                                     try? await Task.sleep(for: .seconds(3))
                                     guard !Task.isCancelled else { return }
                                     isUserScrolling = false
+                                    if let index = lyricsCursor.activeIndex {
+                                        withAnimation(AppAnimation.standard) {
+                                            proxy.scrollTo(index, anchor: UnitPoint(x: 0.5, y: 0.18))
+                                        }
+                                    }
                                 }
                                 if showLyricsOnMobile, lyricsControlsVisible {
                                     scheduleLyricsControlsAutoHide()
@@ -1275,87 +1287,68 @@ struct NowPlayingView: View {
     }
 
     private func bigLyricLine(_ line: LyricLine, isActive: Bool) -> some View {
-        Button {
-            guard line.time.isFinite else { return }
-            player.seek(to: line.time)
-        } label: {
-            VStack(alignment: .leading, spacing: 5) {
-                if settings.lyricsAnnotation == .romaji, let romaji = line.romaji {
-                    Text(romaji)
-                        .font(.system(size: isActive ? 15 : 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.35))
-                }
-                LyricMainText(
-                    line: line, isActive: isActive,
-                    font: .system(
-                        isActive ? .largeTitle : .title3,
-                        design: .default,
-                        weight: isActive ? .bold : .semibold
-                    ),
-                    verbatim: settings.verbatimLyrics
-                )
-                if settings.showLyricsTranslation, let translation = line.translation {
-                    Text(translation)
-                        .font(.system(size: isActive ? 16 : 14, weight: .medium))
-                        .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.35))
-                }
+        VStack(alignment: .leading, spacing: 5) {
+            if settings.lyricsAnnotation == .romaji, let romaji = line.romaji {
+                Text(romaji)
+                    .font(.system(size: isActive ? 15 : 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.35))
             }
-            .multilineTextAlignment(.leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .blur(radius: isActive ? 0 : 0.6)
-            .scaleEffect(1, anchor: .leading)
+            LyricMainText(
+                line: line, isActive: isActive,
+                font: .system(
+                    isActive ? .largeTitle : .title3,
+                    design: .default,
+                    weight: isActive ? .bold : .semibold
+                )
+            )
+            if settings.showLyricsTranslation, let translation = line.translation {
+                Text(translation)
+                    .font(.system(size: isActive ? 16 : 14, weight: .medium))
+                    .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.35))
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(!line.time.isFinite)
+        .multilineTextAlignment(.leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(
+                    key: LyricsLinePositionPreferenceKey.self,
+                    value: [line.id: geometry.frame(in: .named("lyricsPage"))]
+                )
+            }
+        }
+        .blur(radius: isActive ? 0 : 0.6)
+        .scaleEffect(1, anchor: .leading)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isActive)
     }
 }
 
+private struct LyricsLinePositionPreferenceKey: PreferenceKey {
+    static var defaultValue: [Int: CGRect] = [:]
 
-/// The main lyric line. Renders karaoke-style per-character highlighting from
-/// verbatim (`yrc`) timings, driven live by the player, when the line is active
-/// and verbatim data exists; otherwise a plain line.
+    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, newest in newest })
+    }
+}
+
+
+/// Renders one complete timed lyric line. Word-level karaoke highlighting is
+/// intentionally disabled throughout the player.
 struct LyricMainText: View {
     let line: LyricLine
     let isActive: Bool
     let font: Font
-    let verbatim: Bool
     var inactiveOpacity: Double = 0.45
     var rubySize: CGFloat = 20
 
-    @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var settings: SettingsManager
-    @ObservedObject private var renderingBudget = RenderingBudget.shared
 
     var body: some View {
-        if settings.lyricsDisplayStyle == .amll {
-            AMLLyricText(
-                line: line,
-                isActive: isActive,
-                font: font,
-                verbatim: verbatim,
-                inactiveOpacity: inactiveOpacity
-            )
-        } else if settings.lyricsAnnotation == .furigana, let segments = line.furigana, !segments.isEmpty,
-           isActive, verbatim, let words = line.words, !words.isEmpty {
-            TimelineView(.animation(
-                minimumInterval: renderingBudget.minimumAnimationInterval,
-                paused: !RenderingBudget.permitsTimeDrivenLyricUpdates(
-                    isPlaying: player.isPlaying,
-                    isSceneActive: renderingBudget.isSceneActive
-                )
-            )) { _ in
-                RubyText(
-                    segments: segments,
-                    size: rubySize,
-                    weight: .bold,
-                    color: .white,
-                    alphas: karaokeAlphas(words, at: player.livePlaybackTime + settings.lyricsOffset)
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        } else if settings.lyricsAnnotation == .furigana, let segments = line.furigana, !segments.isEmpty {
+        Group {
+            if settings.lyricsAnnotation == .furigana,
+               let segments = line.furigana,
+               !segments.isEmpty {
             RubyText(
                 segments: segments,
                 size: rubySize,
@@ -1363,100 +1356,13 @@ struct LyricMainText: View {
                 color: .white.opacity(isActive ? 1 : inactiveOpacity)
             )
             .frame(maxWidth: .infinity, alignment: .leading)
-        } else if isActive, verbatim, let words = line.words, !words.isEmpty {
-            TimelineView(.animation(
-                minimumInterval: renderingBudget.minimumAnimationInterval,
-                paused: !RenderingBudget.permitsTimeDrivenLyricUpdates(
-                    isPlaying: player.isPlaying,
-                    isSceneActive: renderingBudget.isSceneActive
-                )
-            )) { _ in
-                karaoke(words, at: player.livePlaybackTime + settings.lyricsOffset).font(font)
-                    .minimumScaleFactor(0.72)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-        } else {
-            Text(line.text.isEmpty ? "♪" : line.text)
-                .font(font)
-                .foregroundStyle(.white.opacity(isActive ? 1 : inactiveOpacity))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .minimumScaleFactor(0.72)
-        }
-    }
-
-    /// One concatenated `Text` (so it wraps) with an estimated progressive
-    /// fill inside each source-timed run. Run boundaries still come from source.
-    private func karaoke(_ words: [LyricWord], at time: TimeInterval) -> Text {
-        let unsung = 0.28
-        var out = Text(verbatim: "")
-        for word in words {
-            let characters = Array(word.text)
-            for (index, character) in characters.enumerated() {
-                let fraction = word.characterProgress(
-                    at: time,
-                    characterIndex: index,
-                    characterCount: characters.count
-                )
-                let alpha = unsung + (1 - unsung) * fraction
-                out = out + Text(verbatim: String(character))
-                    .foregroundColor(.white.opacity(alpha))
-            }
-        }
-        return out
-    }
-
-    private func karaokeAlphas(_ words: [LyricWord], at time: TimeInterval) -> [Double] {
-        let unsung = 0.28
-        return words.flatMap { word in
-            let count = word.text.count
-            return (0..<count).map { index in
-                let fraction = word.characterProgress(
-                    at: time,
-                    characterIndex: index,
-                    characterCount: count
-                )
-                return unsung + (1 - unsung) * fraction
-            }
-        }
-    }
-}
-
-/// Apple Music-like lyric rendering without depending on a private or
-/// reverse-engineered implementation. It reuses the source-provided word
-/// timings, keeps the full line visible underneath, and fills the sung words
-/// over it in real time.
-private struct AMLLyricText: View {
-    let line: LyricLine
-    let isActive: Bool
-    let font: Font
-    let verbatim: Bool
-    let inactiveOpacity: Double
-
-    @EnvironmentObject private var player: PlayerService
-    @EnvironmentObject private var settings: SettingsManager
-    @ObservedObject private var renderingBudget = RenderingBudget.shared
-
-    var body: some View {
-        Group {
-            if isActive, verbatim, let words = line.words, !words.isEmpty {
-                TimelineView(.animation(
-                    minimumInterval: renderingBudget.minimumAnimationInterval,
-                    paused: !RenderingBudget.permitsTimeDrivenLyricUpdates(
-                        isPlaying: player.isPlaying,
-                        isSceneActive: renderingBudget.isSceneActive
-                    )
-                )) { _ in
-                    ZStack(alignment: .leading) {
-                        Text(line.text)
-                            .foregroundStyle(.white.opacity(0.28))
-                        timedText(words, at: player.livePlaybackTime + settings.lyricsOffset)
-                    }
-                }
             } else {
-                Text(line.text.isEmpty ? " " : line.text)
+                Text(line.text.isEmpty ? "♪" : line.text)
+                    .font(font)
                     .foregroundStyle(.white.opacity(isActive ? 1 : inactiveOpacity))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .minimumScaleFactor(0.72)
             }
         }
         .font(font.weight(isActive ? .bold : .semibold))
@@ -1465,26 +1371,6 @@ private struct AMLLyricText: View {
         .scaleEffect(isActive ? 1 : 0.94, anchor: .leading)
         .blur(radius: isActive ? 0 : 0.35)
         .animation(.spring(response: 0.36, dampingFraction: 0.86), value: isActive)
-    }
-
-    /// Per-grapheme highlight is a visual interpolation inside each source
-    /// run; exact boundaries remain those returned by the lyric provider.
-    private func timedText(_ words: [LyricWord], at time: TimeInterval) -> Text {
-        var output = Text(verbatim: "")
-        for word in words {
-            let characters = Array(word.text)
-            for (index, character) in characters.enumerated() {
-                let progress = word.characterProgress(
-                    at: time,
-                    characterIndex: index,
-                    characterCount: characters.count
-                )
-                let opacity = 0.34 + 0.66 * progress
-                output = output + Text(verbatim: String(character))
-                    .foregroundColor(.white.opacity(opacity))
-            }
-        }
-        return output
     }
 }
 
@@ -1512,7 +1398,7 @@ private struct QualityPickerSheet: View {
                         .font(.footnote)
                         .foregroundStyle(.orange)
                     } else if player.currentTrack != nil, !player.isResolvingSource {
-                        Label("当前音源未报告实际音质；选择项只表示请求档位。",
+                        Label("当前请求：\(player.requestedQuality.flatMap { AudioQuality(lxType: $0)?.sourceDisplayName } ?? player.currentQuality.sourceDisplayName)。音源未提供实际音质信息。",
                               systemImage: "info.circle")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -1549,7 +1435,7 @@ private struct QualityPickerSheet: View {
                     }
                 } else if !loading {
                     Section("选择音质") {
-                        Text("当前播放来源没有返回可用音质，请检查账号状态或音源是否支持该平台。")
+                        Text("当前音源没有返回可用音质，请检查音源是否支持该平台。")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -1559,7 +1445,7 @@ private struct QualityPickerSheet: View {
                 }
 
                 Section {
-                    Text("如果选定音质不可用，自动模式会先尝试账号能力，再回退到已启用的第三方音源。")
+                    Text("如果选定音质不可用，会按已启用的第三方音源和可用档位回退。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -1713,7 +1599,6 @@ private struct IOSImmersiveLyricsColumn: View {
                 LyricMainText(
                     line: line, isActive: isActive,
                     font: .system(size: 27, weight: isActive ? .bold : .semibold),
-                    verbatim: settings.verbatimLyrics
                 )
 
                 if settings.showLyricsTranslation, let translation = line.translation {
@@ -2527,7 +2412,6 @@ private struct IOSMinimalLyricsColumn: View {
                 LyricMainText(
                     line: line, isActive: isActive,
                     font: .system(size: 17, weight: .bold),
-                    verbatim: settings.verbatimLyrics
                 )
                     .fixedSize(horizontal: false, vertical: true)
                     .scaleEffect(isActive ? 1 : 16.0 / 17.0, anchor: .leading)
@@ -2559,9 +2443,9 @@ private struct IOSMinimalLyricsColumn: View {
 }
 
 private struct MinimalLyricCentersKey: PreferenceKey {
-    static var defaultValue: [Int: CGFloat] = [:]
+    static var defaultValue: [Int: CGRect] = [:]
 
-    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
     }
 }
@@ -3067,7 +2951,11 @@ struct NowPlayingScrubber: View {
             return AudioQuality(lxType: served)?.sourceDisplayName ?? served.uppercased()
         }
         if player.isResolvingSource { return "检测中" }
-        return player.currentTrack == nil ? "未播放" : "音质未知"
+        guard player.currentTrack != nil else { return "未播放" }
+        if let requested = player.requestedQuality {
+            return "请求 " + (AudioQuality(lxType: requested)?.sourceDisplayName ?? requested.uppercased())
+        }
+        return "待播放"
     }
 }
 
@@ -3128,7 +3016,6 @@ struct MiniLyricsView: View {
                     isActive: emphasized,
                     font: .system(size: emphasized ? 17 : 14,
                                    weight: emphasized ? .bold : .medium),
-                    verbatim: settings.verbatimLyrics,
                     inactiveOpacity: 0.45,
                     rubySize: 13
                 )

@@ -3,11 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsManager
 #if os(iOS)
-    @EnvironmentObject private var player: PlayerService
-    @EnvironmentObject private var account: AccountStore
     @StateObject private var lxStore = LXSourceStore.shared
-    @StateObject private var qqMusic = QQMusicSessionStore.shared
-    @StateObject private var kugou = KugouSessionStore.shared
     @StateObject private var updateLog = IOSUpdateLogStore.shared
 #endif
     @State private var cacheSize = "计算中…"
@@ -15,9 +11,6 @@ struct SettingsView: View {
     @ObservedObject private var equalizer = MoumusicEqualizer.shared
 #if os(iOS)
     @State private var showSourceManager = false
-    @State private var showNeteaseLogin = false
-    @State private var showQQMusicLogin = false
-    @State private var showKugouLogin = false
 #endif
     // Keep the main controls visible on first launch. Every section remains
     // collapsible, but opening the settings page with every group closed makes
@@ -31,34 +24,10 @@ struct SettingsView: View {
     var body: some View {
         Form {
             SettingsDisclosureSection("音源与音质", isExpanded: sectionBinding("audio")) {
-                Picker("播放来源", selection: $settings.playbackSourceMode) {
-                    ForEach(PlaybackSourceMode.allCases) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-#if os(iOS)
-                .pickerStyle(.segmented)
-#endif
-                Text(settings.playbackSourceMode.explanation)
+                Label("第三方音源", systemImage: "waveform")
+                Text("播放仅使用已导入并启用的第三方音源。网易云与 QQ 登录只用于账号资料和歌单同步。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-
-                Label("重要：自动模式先请求已登录账号能提供的完整音频；如果官方接口只返回试听片段或目标音质不可用，再回退到已启用的三方音源，避免歌曲播放 30 秒后停止。", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-
-#if os(iOS)
-                HStack(spacing: 8) {
-                    Image(systemName: account.isLoggedIn ? "checkmark.circle.fill" : "person.crop.circle.badge.xmark")
-                        .foregroundStyle(account.isLoggedIn ? .green : .secondary)
-                    Text(account.isLoggedIn
-                         ? "网易云账号已登录；对应歌曲可使用官方账号音源"
-                         : "未登录网易云账号，对应歌曲将使用 LX 音源")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-#endif
 
                 Picker("默认播放音质", selection: $settings.audioQuality) {
                     ForEach(AudioQuality.allCases) { quality in
@@ -66,7 +35,7 @@ struct SettingsView: View {
                             .tag(quality)
                     }
                 }
-                Text("自动模式优先尝试对应平台已登录账号的官方音源，失败后回退到已启用的 LX 音源。官方接口可报告实际返回音质；LX 音源只提供播放地址，可能无法确认实际码率。")
+                Text("音质显示为音源明确返回的实际档位；若第三方音源未提供音质信息，会显示当前请求档位。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -83,65 +52,7 @@ struct SettingsView: View {
                 } label: {
                     Label("账号同步", systemImage: "person.crop.circle.badge.checkmark")
                 }
-                Button { showNeteaseLogin = true } label: {
-                    HStack {
-                        Label("网易云音乐登录", systemImage: account.isLoggedIn
-                              ? "checkmark.circle.fill" : "person.crop.circle.badge.plus")
-                        Spacer()
-                        Text(account.isLoggedIn ? (account.profile?.nickname ?? "已登录") : "网页登录")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                .frame(minHeight: 44)
-                Text("网易云、QQ 音乐和酷狗登录后，可在对应平台歌曲上使用官方账号音源；自动模式优先尝试账号音源，失败后才按顺序回退到已启用的 LX 音源。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button { showQQMusicLogin = true } label: {
-                    HStack {
-                        Label("QQ 音乐账号播放与同步", systemImage: qqMusic.isLoggedIn
-                              ? "checkmark.circle.fill" : "person.crop.circle.badge.plus")
-                        Spacer()
-                        // QQ's profile CGI sometimes returns an opaque value
-                        // such as "3a44" in the nickname field. Keep the
-                        // connection state separate from untrusted display data.
-                        Text(qqMusic.settingsStatusText)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                .frame(minHeight: 44)
-
-                if qqMusic.isLoggedIn {
-                    Button(role: .destructive) { qqMusic.signOut() } label: {
-                        Label("退出 QQ 音乐登录", systemImage: "rectangle.portrait.and.arrow.right")
-                    }
-                    .frame(minHeight: 44)
-                }
-
-                Button { showKugouLogin = true } label: {
-                    HStack {
-                        Label("酷狗音乐账号播放与同步", systemImage: kugou.isLoggedIn
-                              ? "checkmark.circle.fill" : "person.crop.circle.badge.plus")
-                        Spacer()
-                        Text(kugou.isLoggedIn ? (kugou.profileName ?? "已登录") : "未登录")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                .frame(minHeight: 44)
-
-                if kugou.isLoggedIn {
-                    Button(role: .destructive) { kugou.signOut() } label: {
-                        Label("退出酷狗音乐登录", systemImage: "rectangle.portrait.and.arrow.right")
-                    }
-                    .frame(minHeight: 44)
-                }
-
-                Text("网易云、QQ 音乐和酷狗支持对应平台歌曲的官方账号音源。汽水音乐已移除登录和播放，仅保留公开歌单导入；凭据仅保存在本机钥匙串。")
+                Text("管理网易云与 QQ 音乐的登录状态和歌单同步。平台账号音源不参与播放；凭据仅保存在本机钥匙串。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -168,10 +79,10 @@ struct SettingsView: View {
                     }
                 }
                 .frame(minHeight: 44)
-                Text("音频会按播放来源设置选择账号音源或已导入的 LX 音源；歌词、封面和评论仍按歌曲平台获取。")
+                Text("音频只使用已导入并启用的 LX 音源；歌词、封面和评论仍按歌曲平台获取。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text("音质在歌曲播放页调整；可用档位由账号接口或当前 LX 音源实际返回的数据共同决定。")
+                Text("音质在歌曲播放页调整；可用档位由当前 LX 音源支持的能力决定。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -210,29 +121,10 @@ struct SettingsView: View {
 
             SettingsDisclosureSection("歌词显示", isExpanded: sectionBinding("lyrics")) {
                 Toggle("显示歌词翻译", isOn: $settings.showLyricsTranslation)
-                Toggle("逐字歌词（卡拉 OK）", isOn: $settings.verbatimLyrics)
                 Picker("日文歌词注音", selection: $settings.lyricsAnnotation) {
                     ForEach(LyricsAnnotation.allCases) { annotation in
                         Text(annotation.displayName).tag(annotation)
                     }
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("歌词同步")
-                        Spacer()
-                        Text(String(format: "%+.2f 秒", settings.lyricsOffset))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    }
-                    Slider(value: $settings.lyricsOffset, in: -2...2, step: 0.05)
-#if os(iOS)
-                        .onChange(of: settings.lyricsOffset) { _ in
-                            player.refreshLyricsCursor()
-                        }
-#endif
-                    Text("正值让歌词提前，负值让歌词延后；不同音源版本可分别试听调整。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 #if os(macOS)
                 Toggle("桌面歌词", isOn: $settings.showDesktopLyrics)
@@ -294,24 +186,6 @@ struct SettingsView: View {
             NavigationStack {
                 LXSourceManagerView()
             }
-        }
-        .sheet(isPresented: $showQQMusicLogin) {
-            ProviderWebLoginSheet(provider: .qqMusic) { cookie in
-                try await qqMusic.signIn(cookie: cookie)
-            }
-            .presentationDetents([.large])
-        }
-        .sheet(isPresented: $showNeteaseLogin) {
-            ProviderWebLoginSheet(provider: .netease) { cookie in
-                try await account.signInFromWeb(cookieHeader: cookie)
-            }
-            .presentationDetents([.large])
-        }
-        .sheet(isPresented: $showKugouLogin) {
-            ProviderWebLoginSheet(provider: .kugou) { cookie in
-                try await kugou.signIn(cookie: cookie)
-            }
-            .presentationDetents([.large])
         }
 #endif
     }

@@ -118,6 +118,86 @@ final class QQMusicPlaylistTrackResponseTests: XCTestCase {
         XCTAssertTrue(QQMusicAPI.canAppendPlaylistTracks(currentCount: 9_999, incomingCount: 1))
     }
 
+    func testLikedSongsOnlyUseAuthenticatedDirectoryRoute() throws {
+        let routes = try QQMusicAPI.playlistTrackRoutes(
+            playlistID: 0, isLikedSongs: true, profileID: "12345", musicTicket: "fixture-ticket",
+            encryptedHostUin: "fixture-encrypted-uin", offset: 100, pageSize: 100,
+            expectedPlaylistCount: 215
+        )
+        XCTAssertEqual(routes.count, 1)
+        let route = try XCTUnwrap(routes.first)
+        XCTAssertTrue(route.authenticated)
+        XCTAssertEqual(route.responseKey, "music.srfDissInfo.DissInfo")
+        XCTAssertNil(route.payload["req_1"])
+        let block = try XCTUnwrap(route.payload[route.responseKey] as? [String: Any])
+        let param = try XCTUnwrap(block["param"] as? [String: Any])
+        XCTAssertEqual(block["method"] as? String, "CgiGetDiss")
+        XCTAssertEqual(param["disstid"] as? Int64, 0)
+        XCTAssertEqual(param["dirid"] as? Int, 201)
+        XCTAssertEqual(param["enc_host_uin"] as? String, "fixture-encrypted-uin")
+        XCTAssertEqual(param["song_begin"] as? Int, 100)
+        XCTAssertEqual(param["song_num"] as? Int, 100)
+    }
+
+    func testLikedSongsRejectMissingOrPlainAccountIdentifier() {
+        for value in [nil, "", "   ", "12345"] as [String?] {
+            XCTAssertThrowsError(try QQMusicAPI.playlistTrackRoutes(
+                playlistID: 0, isLikedSongs: true, profileID: "12345", musicTicket: "fixture-ticket",
+                encryptedHostUin: value, offset: 0, pageSize: 100, expectedPlaylistCount: 30
+            ))
+        }
+    }
+
+    func testEncryptedIdentifierComesFromSuccessfulProfileCreator() {
+        XCTAssertEqual(QQMusicAPI.encryptedHostUin(in: [
+            "code": 0, "data": ["creator": ["encrypt_uin": "fixture-encrypted-uin"]]
+        ], profileID: "12345"), "fixture-encrypted-uin")
+        XCTAssertNil(QQMusicAPI.encryptedHostUin(in: [
+            "code": -100008, "data": ["creator": ["encrypt_uin": "fixture-encrypted-uin"]]
+        ], profileID: "12345"))
+        XCTAssertNil(QQMusicAPI.encryptedHostUin(in: [
+            "code": 0, "data": ["creator": ["encrypt_uin": "12345"]]
+        ], profileID: "12345"))
+    }
+
+    func testPublicPlaylistsKeepAnonymousLXFallbackAndAccountAlternative() throws {
+        let routes = try QQMusicAPI.playlistTrackRoutes(
+            playlistID: 9_712_417_906, isLikedSongs: false, profileID: "12345",
+            musicTicket: "fixture-ticket", encryptedHostUin: nil,
+            offset: 0, pageSize: 100, expectedPlaylistCount: 35
+        )
+        XCTAssertEqual(routes.map(\.authenticated), [false, true])
+        XCTAssertEqual(routes.map(\.responseKey), ["req_1", "music.srfDissInfo.DissInfo"])
+        let comm = try XCTUnwrap(routes[0].payload["comm"] as? [String: Any])
+        XCTAssertNil(comm["authst"])
+        XCTAssertEqual(comm["uin"] as? Int, 0)
+    }
+
+    func testAccountDirectoryIsNotMisidentifiedAsPublicDissID() throws {
+        let directory = QQMusicAPI.mapPlaylist([
+            "dirid": 206, "dissid": 0, "dirname": "本地上传", "songnum": 8
+        ], kind: .created)
+        XCTAssertEqual(directory.id, "qq-directory:206")
+        XCTAssertEqual(QQMusicAPI.mapPlaylist(["dirid": 206, "id": 206], kind: .created).id,
+                       "qq-directory:206")
+        XCTAssertEqual(QQMusicAPI.mapPlaylist(["dirid": 0], kind: .created).id, "")
+        let routes = try QQMusicAPI.playlistTrackRoutes(
+            playlistID: 0, isLikedSongs: false, directoryID: 206,
+            profileID: "12345", musicTicket: "fixture-ticket", encryptedHostUin: "fixture-euin",
+            offset: 0, pageSize: 100, expectedPlaylistCount: 8
+        )
+        XCTAssertEqual(routes.count, 1)
+        XCTAssertTrue(routes[0].authenticated)
+        let block = try XCTUnwrap(routes[0].payload[routes[0].responseKey] as? [String: Any])
+        let param = try XCTUnwrap(block["param"] as? [String: Any])
+        XCTAssertEqual(param["dirid"] as? Int, 206)
+        XCTAssertEqual(param["disstid"] as? Int64, 0)
+        let published = QQMusicAPI.mapPlaylist([
+            "dirid": 206, "dissid": "987654321", "dirname": "正常歌单"
+        ], kind: .created)
+        XCTAssertEqual(published.id, "987654321")
+    }
+
     func testPlaylistScoped3a44DoesNotAbortRemainingPlaylistSync() {
         let error = QQMusicAPI.APIError.providerRejected("响应码 3a44")
 
