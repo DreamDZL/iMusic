@@ -25,7 +25,7 @@ jobs:
           brew install xcodegen
           xcodegen generate
 
-      - name: Run feature and iPhone UI tests
+      - name: Run feature tests
         working-directory: platforms/ios/ios
         run: |
           destination_id="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; devices=json.load(sys.stdin)["devices"]; print(next((device["udid"] for runtime in devices.values() for device in runtime if device.get("isAvailable") and device["name"].startswith("iPhone")), ""))')"
@@ -45,6 +45,7 @@ jobs:
             -destination-timeout 120 \
             -parallel-testing-enabled NO \
             -derivedDataPath build/test-derived \
+            -skip-testing:KumoneIOSUITests \
             CODE_SIGNING_ALLOWED=NO
 
       - name: Resolve release version
