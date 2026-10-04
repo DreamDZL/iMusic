@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.47 - 2026-10-04
+
+### Fixed / 修复
+
+**QQ Music**: reordered playlist detail requests to follow LX Music Mobile: try the account and public legacy detail routes first, then call `uniform_get_Dissinfo` before the account-bound paginated fallback. The mobile request asks for the known remaining song count, capped at iMusic's existing 10,000-track import limit; if the count is unknown it requests at most that limit. This lets QQ playlists that return `3a44` or omit `cdlist` on the legacy endpoint reach the mobile route without bypassing the import safety cap.
+
+**QQ 音乐**：歌单详情请求顺序对齐洛雪移动端：先尝试账号和公开旧版详情接口，再调用 `uniform_get_Dissinfo`，最后回退到账号分页接口。移动端请求按已知剩余曲目数取数，并限制在 iMusic 现有的 10,000 首导入上限内；曲目数未知时也最多请求该上限。旧接口返回 `3a44` 或缺少 `cdlist` 的歌单会进入移动端接口回退，同时不会绕过本地安全上限。
+
+**iOS UI tests / iOS 界面测试**: the lyrics-to-song swipe regression now starts from the album artwork, safely inside the supported horizontal-swipe area.
+
 ## 1.0.45 - 2026-10-04
 
 ### Fixed / 修复

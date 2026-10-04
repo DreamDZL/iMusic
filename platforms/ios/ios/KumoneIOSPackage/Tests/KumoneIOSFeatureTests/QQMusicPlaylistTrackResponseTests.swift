@@ -72,6 +72,52 @@ final class QQMusicPlaylistTrackResponseTests: XCTestCase {
         XCTAssertEqual(QQMusicAPI.playlistTrackTotalCount(in: ["songnum": "128"]), 128)
     }
 
+    func testMobileFallbackMatchesLXMobileFullPlaylistRequest() throws {
+        let payload = QQMusicAPI.mobilePlaylistDetailPayload(
+            playlistID: 9_712_417_906,
+            offset: 0,
+            expectedPlaylistCount: 35,
+            pageSize: 100
+        )
+        let comm = try XCTUnwrap(payload["comm"] as? [String: Any])
+        let request = try XCTUnwrap(payload["req_1"] as? [String: Any])
+        let parameters = try XCTUnwrap(request["param"] as? [String: Any])
+
+        XCTAssertEqual(comm["cv"] as? Int, 4_747_474)
+        XCTAssertEqual(comm["ct"] as? Int, 24)
+        XCTAssertEqual(comm["platform"] as? String, "yqq.json")
+        XCTAssertEqual(request["module"] as? String, "music.srfDissInfo.aiDissInfo")
+        XCTAssertEqual(request["method"] as? String, "uniform_get_Dissinfo")
+        XCTAssertEqual(parameters["disstid"] as? Int64, 9_712_417_906)
+        XCTAssertEqual(parameters["song_begin"] as? Int, 0)
+        XCTAssertEqual(parameters["song_num"] as? Int, 35)
+        XCTAssertEqual(parameters["enc_host_uin"] as? String, "")
+    }
+
+    func testMobileFallbackBoundsUnknownAndOversizedPlaylistRequests() throws {
+        let unknownCountPayload = QQMusicAPI.mobilePlaylistDetailPayload(
+            playlistID: 7_217_720_898,
+            offset: 0,
+            expectedPlaylistCount: nil,
+            pageSize: 100
+        )
+        let unknownRequest = try XCTUnwrap(unknownCountPayload["req_1"] as? [String: Any])
+        let unknownParameters = try XCTUnwrap(unknownRequest["param"] as? [String: Any])
+        XCTAssertEqual(unknownParameters["song_num"] as? Int, 10_000)
+
+        let oversizedPayload = QQMusicAPI.mobilePlaylistDetailPayload(
+            playlistID: 7_217_720_898,
+            offset: 0,
+            expectedPlaylistCount: 100_001,
+            pageSize: 100
+        )
+        let oversizedRequest = try XCTUnwrap(oversizedPayload["req_1"] as? [String: Any])
+        let oversizedParameters = try XCTUnwrap(oversizedRequest["param"] as? [String: Any])
+        XCTAssertEqual(oversizedParameters["song_num"] as? Int, 10_000)
+        XCTAssertFalse(QQMusicAPI.canAppendPlaylistTracks(currentCount: 10_000, incomingCount: 1))
+        XCTAssertTrue(QQMusicAPI.canAppendPlaylistTracks(currentCount: 9_999, incomingCount: 1))
+    }
+
     func testPlaylistScoped3a44DoesNotAbortRemainingPlaylistSync() {
         let error = QQMusicAPI.APIError.providerRejected("响应码 3a44")
 

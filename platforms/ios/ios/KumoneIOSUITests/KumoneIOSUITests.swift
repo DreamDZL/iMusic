@@ -86,7 +86,8 @@ final class KumoneIOSUITests: XCTestCase {
 
         let songPage = app.descendants(matching: .any)["appleMusicSongPage"]
         XCTAssertTrue(songPage.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.descendants(matching: .any)["nowPlayingArtworkImage"].waitForExistence(timeout: 5))
+        let artwork = app.descendants(matching: .any)["nowPlayingArtworkImage"]
+        XCTAssertTrue(artwork.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["showSynchronizedLyrics"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["nowPlayingTransportControls"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["nowPlayingVolumeControl"].exists)
@@ -109,7 +110,10 @@ final class KumoneIOSUITests: XCTestCase {
 
         lyricsScroll.swipeRight()
         XCTAssertTrue(transportControls.waitForExistence(timeout: 5))
-        songPage.swipeLeft()
+        // Start the gesture on the album art (inside the page's swipe region),
+        // not the full-page accessibility container whose midpoint can fall
+        // over the intentionally gesture-protected transport controls.
+        artwork.swipeLeft()
         XCTAssertTrue(transportControls.waitForNonExistence(timeout: 5))
 
         lyricsScroll.swipeUp()

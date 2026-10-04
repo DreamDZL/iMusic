@@ -193,6 +193,8 @@ private final class QQNoRedirectDelegate: NSObject, URLSessionTaskDelegate {
 /// The account session is used for profile synchronisation and, when the
 /// provider returns a full authorized URL, for QQ Music account playback.
 actor QQMusicAPI {
+    static let maximumPlaylistTrackCount = 10_000
+
     static let shared = QQMusicAPI()
 
     struct QRCodePayload: Sendable {
@@ -842,6 +844,12 @@ actor QQMusicAPI {
                 completed = true
                 break
             }
+            guard Self.canAppendPlaylistTracks(
+                currentCount: tracks.count,
+                incomingCount: rows.count
+            ) else {
+                throw APIError.tooManyTracks
+            }
             let mapped = rows.compactMap { LXCatalogService.track(from: $0, source: .tx) }
                 .map { $0.normalizedForLXPlayback() }
             guard mapped.count == rows.count else { throw APIError.incompletePlaylist }
@@ -910,131 +918,24 @@ actor QQMusicAPI {
             ]
         ]
 
-        // Match LX Music Mobile's public, anonymous uniform_get_Dissinfo
-        // request shape. This is a fallback for public playlists; account
-        // credentials are attached only to the authenticated CgiGetDiss route.
-        let fallbackComm: [String: Any] = [
-            "ct": 24, "cv": 4_747_474, "platform": "yqq.json",
-            "uin": 0, "format": "json", "inCharset": "utf-8",
-            "outCharset": "utf-8", "needNewCode": 1
-        ]
-        let fallbackParam: [String: Any] = [
-            "disstid": playlistID,
-            "tag": 1,
-            "song_begin": offset,
-            "song_num": pageSize,
-            "userinfo": 1,
-            "orderlist": 1,
-            "onlysonglist": 0,
-            "enc_host_uin": ""
-        ]
-        let fallbackPayload: [String: Any] = [
-            "comm": fallbackComm,
-            "req_1": [
-                "module": "music.srfDissInfo.aiDissInfo",
-                "method": "uniform_get_Dissinfo",
-                "param": fallbackParam
-            ]
-        ]
+        // Match LX Music Mobile's mobile playlist endpoint and full-list
+        // request size. It deliberately stays anonymous; account credentials
+        // are sent only to the account-bound CgiGetDiss route below.
+        let fallbackPayload = Self.mobilePlaylistDetailPayload(
+            playlistID: playlistID,
+            offset: offset,
+            expectedPlaylistCount: expectedPlaylistCount,
+            pageSize: pageSize
+        )
 
         var sessionError: APIError?
         var routeErrors: [String] = []
         var bestIncompletePage: PlaylistTrackPage?
 
-        // Read the signed-in account first so private playlists are not
-        // needlessly requested through anonymous endpoints. Public routes
-        // remain fallbacks for provider responses that omit account tracks.
-        for (responseKey, payload) in [("playlist", primaryPayload), ("req_1", fallbackPayload)] {
-            do {
-                try Task.checkCancellation()
-                let body = try JSONSerialization.data(withJSONObject: payload)
-                var request = URLRequest(url: URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg")!)
-                request.httpMethod = "POST"
-                request.timeoutInterval = 20
-                request.httpBody = body
-                request.httpShouldHandleCookies = false
-                if responseKey == "playlist" {
-                    request.setValue(cookie, forHTTPHeaderField: "Cookie")
-                }
-                request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-                request.setValue("https://y.qq.com/n/yqq/playsquare/\(playlistID).html", forHTTPHeaderField: "Referer")
-                request.setValue("https://y.qq.com", forHTTPHeaderField: "Origin")
-                request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-
-                let (data, response) = try await session.data(for: request)
-                guard Self.isSuccess(response),
-                      let root = Self.jsonObject(from: data) else {
-                    throw Self.playlistTracksRejection(
-                        from: data,
-                        response: response,
-                        cookieValues: cookieValues
-                    )
-                }
-                if let rootCode = Self.text(root["code"]), rootCode != "0" {
-                    throw APIError.providerRejected(Self.responseDiagnostic(from: root))
-                }
-                if let diagnostic = Self.playlistTrackDataFailure(
-                    in: root,
-                    responseKey: responseKey
-                ) {
-                    // QQ may return HTTP 200 and a successful request-block
-                    // code while the nested data payload carries 3a44 (or
-                    // another business error). Treat that as a failed route
-                    // so the remaining compatibility routes can run.
-                    throw APIError.providerRejected(diagnostic)
-                }
-                guard let block = root[responseKey] as? [String: Any],
-                      Self.integer(in: block, keys: ["code", "result"]) == 0,
-                      let result = block["data"] as? [String: Any],
-                      let rows = result["songlist"] as? [[String: Any]] else {
-                    throw Self.playlistTracksRejection(
-                        from: data,
-                        response: response,
-                        cookieValues: cookieValues
-                    )
-                }
-                let hasMoreKeys = ["hasmore", "hasMore", "has_more"]
-                let page = PlaylistTrackPage(
-                    rows: rows,
-                    totalCount: Self.playlistTrackTotalCount(in: result),
-                    hasMore: Self.boolean(in: result, keys: hasMoreKeys)
-                        ?? Self.boolean(in: block, keys: hasMoreKeys)
-                )
-                let knownCount = max(expectedPlaylistCount ?? 0, page.totalCount ?? 0)
-                let requiredRows = knownCount > offset
-                    ? min(pageSize, knownCount - offset)
-                    : nil
-                let expectedEnd = offset + page.rows.count
-                let needsFallback = page.rows.isEmpty
-                    || (requiredRows.map { page.rows.count < $0 } ?? false)
-                    || (page.hasMore == true && page.rows.count < pageSize)
-                    || (page.hasMore == false && knownCount > expectedEnd)
-                guard needsFallback else { return page }
-                if bestIncompletePage == nil || page.rows.count > bestIncompletePage!.rows.count {
-                    bestIncompletePage = page
-                }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch let error as APIError {
-                let routeName = responseKey == "playlist" ? "CgiGetDiss" : "uniform_get_Dissinfo"
-                routeErrors.append("\(routeName)：\(Self.safeRouteFailure(error))")
-                if responseKey == "playlist",
-                   let apiError = error as? APIError,
-                   case let .sessionCredentialRejected(_, ticketMissing) = apiError {
-                    sessionError = sessionError ?? APIError.sessionCredentialRejected(
-                        "QQ 音乐会话凭据未通过验证",
-                        ticketMissing: ticketMissing
-                    )
-                }
-            } catch {
-                let routeName = responseKey == "playlist" ? "CgiGetDiss" : "uniform_get_Dissinfo"
-                routeErrors.append("\(routeName)：\(Self.safeRouteFailure(error))")
-            }
-        }
-
-        // Try the legacy GET with the signed-in account first, then anonymously
-        // for public playlists. It has no server-side pagination, so consume up
-        // to the app's 10k track safety limit in each request.
+        // Follow LX Music Mobile's route order: the legacy detail endpoint
+        // first, then uniform_get_Dissinfo when QQ returns a nonzero subcode
+        // or omits cdlist. Try the authenticated owner request before the
+        // anonymous public request so private playlists still have a chance.
         if !isLikedSongs, offset == 0 {
             let csrfKey = Self.csrfKey(in: cookieValues) ?? ""
             let legacyRequests: [(name: String, url: URL?, cookie: String?)] = [
@@ -1088,6 +989,99 @@ actor QQMusicAPI {
             }
         }
 
+        // The mobile-compatible endpoint is the first fallback after the
+        // legacy response; the account-bound paginated API remains a final
+        // alternative for private playlists and multi-page responses.
+        for (responseKey, payload) in [("req_1", fallbackPayload), ("playlist", primaryPayload)] {
+            do {
+                try Task.checkCancellation()
+                let body = try JSONSerialization.data(withJSONObject: payload)
+                var request = URLRequest(url: URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg")!)
+                request.httpMethod = "POST"
+                request.timeoutInterval = 20
+                request.httpBody = body
+                request.httpShouldHandleCookies = false
+                if responseKey == "playlist" {
+                    request.setValue(cookie, forHTTPHeaderField: "Cookie")
+                }
+                request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+                request.setValue("https://y.qq.com/n/yqq/playsquare/\(playlistID).html", forHTTPHeaderField: "Referer")
+                request.setValue("https://y.qq.com", forHTTPHeaderField: "Origin")
+                request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+
+                let (data, response) = try await session.data(for: request)
+                guard Self.isSuccess(response),
+                      let root = Self.jsonObject(from: data) else {
+                    throw Self.playlistTracksRejection(
+                        from: data,
+                        response: response,
+                        cookieValues: cookieValues
+                    )
+                }
+                if let rootCode = Self.text(root["code"]), rootCode != "0" {
+                    throw APIError.providerRejected(Self.responseDiagnostic(from: root))
+                }
+                if let diagnostic = Self.playlistTrackDataFailure(
+                    in: root,
+                    responseKey: responseKey
+                ) {
+                    // QQ may return HTTP 200 and a successful request-block
+                    // code while the nested data payload carries 3a44 (or
+                    // another business error). Treat that as a failed route
+                    // so the remaining compatibility routes can run.
+                    throw APIError.providerRejected(diagnostic)
+                }
+                guard let block = root[responseKey] as? [String: Any],
+                      Self.integer(in: block, keys: ["code", "result"]) == 0,
+                      let result = block["data"] as? [String: Any],
+                      let rows = result["songlist"] as? [[String: Any]] else {
+                    throw Self.playlistTracksRejection(
+                        from: data,
+                        response: response,
+                        cookieValues: cookieValues
+                    )
+                }
+                let hasMoreKeys = ["hasmore", "hasMore", "has_more"]
+                let totalCount = Self.playlistTrackTotalCount(in: result)
+                let page = PlaylistTrackPage(
+                    rows: rows,
+                    totalCount: totalCount,
+                    hasMore: Self.boolean(in: result, keys: hasMoreKeys)
+                        ?? Self.boolean(in: block, keys: hasMoreKeys)
+                        ?? totalCount.map { offset + rows.count < $0 }
+                )
+                let knownCount = max(expectedPlaylistCount ?? 0, page.totalCount ?? 0)
+                let requiredRows = knownCount > offset
+                    ? min(pageSize, knownCount - offset)
+                    : nil
+                let expectedEnd = offset + page.rows.count
+                let needsFallback = page.rows.isEmpty
+                    || (requiredRows.map { page.rows.count < $0 } ?? false)
+                    || (page.hasMore == true && page.rows.count < pageSize)
+                    || (page.hasMore == false && knownCount > expectedEnd)
+                guard needsFallback else { return page }
+                if bestIncompletePage == nil || page.rows.count > bestIncompletePage!.rows.count {
+                    bestIncompletePage = page
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as APIError {
+                let routeName = responseKey == "playlist" ? "CgiGetDiss" : "uniform_get_Dissinfo"
+                routeErrors.append("\(routeName)：\(Self.safeRouteFailure(error))")
+                if responseKey == "playlist",
+                   let apiError = error as? APIError,
+                   case let .sessionCredentialRejected(_, ticketMissing) = apiError {
+                    sessionError = sessionError ?? APIError.sessionCredentialRejected(
+                        "QQ 音乐会话凭据未通过验证",
+                        ticketMissing: ticketMissing
+                    )
+                }
+            } catch {
+                let routeName = responseKey == "playlist" ? "CgiGetDiss" : "uniform_get_Dissinfo"
+                routeErrors.append("\(routeName)：\(Self.safeRouteFailure(error))")
+            }
+        }
+
         if let sessionError { throw sessionError }
         if let bestIncompletePage, !bestIncompletePage.rows.isEmpty {
             let knownCount = max(expectedPlaylistCount ?? 0, bestIncompletePage.totalCount ?? 0)
@@ -1104,6 +1098,58 @@ actor QQMusicAPI {
         }
         if let bestIncompletePage { return bestIncompletePage }
         throw APIError.invalidResponse
+    }
+
+    static func mobilePlaylistDetailPayload(
+        playlistID: Int64,
+        offset: Int,
+        expectedPlaylistCount: Int?,
+        pageSize: Int
+    ) -> [String: Any] {
+        let remainingCount = expectedPlaylistCount.map { $0 - max(offset, 0) }
+        let requestedCount: Int
+        if let remainingCount, remainingCount > 0 {
+            requestedCount = min(remainingCount, maximumPlaylistTrackCount)
+        } else if expectedPlaylistCount == nil || expectedPlaylistCount == 0 {
+            // Match LX's full-list behavior for unknown counts while keeping
+            // the response within iMusic's existing 10k import limit.
+            requestedCount = maximumPlaylistTrackCount
+        } else {
+            requestedCount = min(max(pageSize, 1), maximumPlaylistTrackCount)
+        }
+        return [
+            "comm": [
+                "cv": 4_747_474,
+                "ct": 24,
+                "format": "json",
+                "inCharset": "utf-8",
+                "outCharset": "utf-8",
+                "platform": "yqq.json",
+                "needNewCode": 1,
+                "uin": 0,
+            ],
+            "req_1": [
+                "module": "music.srfDissInfo.aiDissInfo",
+                "method": "uniform_get_Dissinfo",
+                "param": [
+                    "disstid": playlistID,
+                    "userinfo": 1,
+                    "tag": 1,
+                    "orderlist": 1,
+                    "song_begin": max(offset, 0),
+                    "song_num": requestedCount,
+                    "onlysonglist": 0,
+                    "enc_host_uin": "",
+                ],
+            ],
+        ]
+    }
+
+    static func canAppendPlaylistTracks(currentCount: Int, incomingCount: Int) -> Bool {
+        currentCount >= 0
+            && incomingCount >= 0
+            && currentCount <= maximumPlaylistTrackCount
+            && incomingCount <= maximumPlaylistTrackCount - currentCount
     }
 
     private func fetchLegacyPlaylistTrackPage(
