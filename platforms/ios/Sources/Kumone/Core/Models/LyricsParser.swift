@@ -203,8 +203,8 @@ enum LyricsParser {
         var lines: [LyricLine] = []
         var idx = 0
         for raw in yrc.components(separatedBy: .newlines) {
-            // Keep lyric-edge spaces until trimTimedWords can shorten the
-            // corresponding timed run instead of silently dropping them.
+            // Keep lyric-edge spaces until trimTimedWords removes them from
+            // display text without changing the provider's run timestamps.
             let line = String(raw.drop(while: \.isWhitespace))
             guard let head = line.firstMatch(of: lineTag) else { continue }
             let lineStart = (Double(head.output.1) ?? 0) / 1000
@@ -243,8 +243,8 @@ enum LyricsParser {
         var idx = 0
 
         for raw in normalizePreservingWhitespace(body).components(separatedBy: .newlines) {
-            // Preserve trailing lyric whitespace so its run duration is
-            // adjusted in proportion to the visible graphemes below.
+            // Preserve trailing lyric whitespace until display cleanup. The
+            // provider duration belongs to the full run and is not rescaled.
             let line = String(raw.drop(while: \.isWhitespace))
             guard let head = line.firstMatch(of: lineTag) else { continue }
             let minutes = Double(head.output.1) ?? 0
@@ -313,48 +313,29 @@ enum LyricsParser {
         return lines
     }
 
-    /// Removes only line-edge whitespace from timed pieces, keeping the
-    /// concatenated timing text byte-for-byte aligned with `LyricLine.text`.
-    /// When a piece is trimmed, its duration is shortened proportionally so
-    /// its visible graphemes retain the same relative timing within that run.
+    /// Removes line-edge whitespace from timed pieces while preserving each
+    /// provider-supplied run's start and duration. QQ/LX/YRC time lyric runs,
+    /// not whitespace graphemes, so display cleanup must not invent new timing.
     private static func trimTimedWords(_ words: [LyricWord]) -> [LyricWord] {
         var result = words
 
         while let first = result.first {
-            let characters = Array(first.text)
-            let leadingWhitespace = characters.prefix(while: \.isWhitespace).count
-            guard leadingWhitespace > 0 else { break }
-            guard leadingWhitespace < characters.count else {
+            let text = String(first.text.drop(while: \.isWhitespace))
+            guard !text.isEmpty else {
                 result.removeFirst()
                 continue
             }
-            let remaining = characters.dropFirst(leadingWhitespace)
-            let removedFraction = Double(leadingWhitespace) / Double(characters.count)
-            let retainedFraction = 1 - removedFraction
-            let shiftedStart = first.start + max(first.duration, 0) * removedFraction
-            result[0] = LyricWord(
-                text: String(remaining),
-                start: shiftedStart,
-                duration: max(first.duration, 0) * retainedFraction
-            )
+            result[0] = LyricWord(text: text, start: first.start, duration: first.duration)
             break
         }
 
         while let last = result.last {
-            let characters = Array(last.text)
-            let trailingWhitespace = characters.reversed().prefix(while: \.isWhitespace).count
-            guard trailingWhitespace > 0 else { break }
-            guard trailingWhitespace < characters.count else {
+            let text = String(last.text.reversed().drop(while: \.isWhitespace).reversed())
+            guard !text.isEmpty else {
                 result.removeLast()
                 continue
             }
-            let retainedCount = characters.count - trailingWhitespace
-            let retainedFraction = Double(retainedCount) / Double(characters.count)
-            result[result.count - 1] = LyricWord(
-                text: String(characters.prefix(retainedCount)),
-                start: last.start,
-                duration: max(last.duration, 0) * retainedFraction
-            )
+            result[result.count - 1] = LyricWord(text: text, start: last.start, duration: last.duration)
             break
         }
 

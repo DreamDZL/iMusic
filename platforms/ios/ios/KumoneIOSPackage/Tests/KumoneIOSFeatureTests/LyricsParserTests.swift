@@ -43,7 +43,7 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(qrcLyrics.lines.first?.words?[1].start ?? .nan, 1.3, accuracy: 0.0001)
     }
 
-    func testLXTimedLyricTextAndRunsStayAlignedAfterTrimmingWhitespace() throws {
+    func testLXTimedLyricTextTrimsWhitespaceWithoutChangingProviderTiming() throws {
         let lyrics = LyricsParser.parseLX(
             lyric: "[00:01.000]你好 世界",
             lxlyric: "[00:01.000]<0,300> 你好 <300,300>世界 "
@@ -53,12 +53,12 @@ final class LyricsParserTests: XCTestCase {
 
         XCTAssertEqual(line.text, "你好 世界")
         XCTAssertEqual(words.map(\.text).joined(), line.text)
-        XCTAssertEqual(words[0].start, 1.075, accuracy: 0.0001)
-        XCTAssertEqual(words[0].duration, 0.225, accuracy: 0.0001)
-        XCTAssertEqual(words[1].duration, 0.2, accuracy: 0.0001)
+        XCTAssertEqual(words[0].start, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(words[0].duration, 0.3, accuracy: 0.0001)
+        XCTAssertEqual(words[1].duration, 0.3, accuracy: 0.0001)
     }
 
-    func testYRCAndQRCTrimTimedRunEdgesAlongWithDisplayedText() throws {
+    func testYRCAndQRCTrimDisplayWhitespaceWithoutChangingProviderTiming() throws {
         let yrcLine = try XCTUnwrap(
             LyricsParser.parseYRC("[1000,900](1000,300,0) 你好 (1300,600,0)世界 ").first
         )
@@ -68,10 +68,12 @@ final class LyricsParserTests: XCTestCase {
 
         XCTAssertEqual(yrcLine.text, yrcLine.words?.map(\.text).joined())
         XCTAssertEqual(qrcLine.text, qrcLine.words?.map(\.text).joined())
-        XCTAssertEqual(yrcLine.words?.first?.start ?? .nan, 1.075, accuracy: 0.0001)
-        XCTAssertEqual(qrcLine.words?.first?.start ?? .nan, 1.075, accuracy: 0.0001)
-        XCTAssertEqual(yrcLine.words?.last?.duration ?? .nan, 0.4, accuracy: 0.0001)
-        XCTAssertEqual(qrcLine.words?.last?.duration ?? .nan, 0.4, accuracy: 0.0001)
+        XCTAssertEqual(yrcLine.words?.first?.start ?? .nan, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(qrcLine.words?.first?.start ?? .nan, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(yrcLine.words?.first?.duration ?? .nan, 0.3, accuracy: 0.0001)
+        XCTAssertEqual(qrcLine.words?.first?.duration ?? .nan, 0.3, accuracy: 0.0001)
+        XCTAssertEqual(yrcLine.words?.last?.duration ?? .nan, 0.6, accuracy: 0.0001)
+        XCTAssertEqual(qrcLine.words?.last?.duration ?? .nan, 0.6, accuracy: 0.0001)
     }
 
     func testWordAndCharacterProgressFollowProviderRunTiming() {

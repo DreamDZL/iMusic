@@ -494,17 +494,17 @@ struct IOSMiniPlayerBar: View {
             .buttonStyle(.pressable)
             .accessibilityLabel(player.isPlaying ? "暂停" : "播放")
 
-            if !presentation.isInline {
-                Button(action: player.next) {
-                    Image(systemName: "forward.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.pressable)
-                .accessibilityLabel("下一首")
+            Button(action: player.next) {
+                Image(systemName: "forward.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.pressable)
+            .disabled(player.isFMMode)
+            .opacity(player.isFMMode ? 0.35 : 1)
+            .accessibilityLabel("下一首")
         }
         .padding(.leading, 12)
         .padding(.trailing, 6)

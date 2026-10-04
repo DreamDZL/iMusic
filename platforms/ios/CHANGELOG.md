@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.44 - 2026-10-04
+
+### Fixed / 修复
+
+**iOS**: QQ playlist-detail responses now check the nested business result code even when the outer request returns HTTP 200 and code 0. A nested 3a44 is reported as a failed route so the remaining compatibility endpoints can run; negative QQ business codes and reported song counts are also preserved safely.
+
+**iOS**：QQ 歌单详情现在会检查外层 HTTP 200 / code 0 下的内层业务码；内层 `3a44` 会作为当前接口失败处理并继续尝试兼容接口，同时保留负数错误码和歌单曲目数诊断。
+
+**iOS**: lyric display cleanup no longer estimates whitespace timing. Visible lyric runs keep the exact start and duration supplied by LX, YRC, and QRC providers.
+
+**iOS**：歌词清理显示空白时不再估算其占用时长；LX、YRC、QRC 音源提供的歌词段起始时间和时长会原样保留。
+
+**iOS**: the collapsed native mini-player keeps both play and next-track controls. Now Playing's two-color backdrop samples distinct hues from the album cover, with monochrome artwork staying tonal.
+
+**iOS**：导航栏缩小后的原生迷你播放器保留播放和下一首控制；正在播放页从专辑封面采样两种实际色相生成背景，单色封面使用同色系渐变。
+
 ## 1.0.41 - 2026-10-04
 
 ### Fixed / 修复

@@ -940,6 +940,16 @@ actor QQMusicAPI {
                 if let rootCode = Self.text(root["code"]), rootCode != "0" {
                     throw APIError.providerRejected(Self.responseDiagnostic(from: root))
                 }
+                if let diagnostic = Self.playlistTrackDataFailure(
+                    in: root,
+                    responseKey: responseKey
+                ) {
+                    // QQ may return HTTP 200 and a successful request-block
+                    // code while the nested data payload carries 3a44 (or
+                    // another business error). Treat that as a failed route
+                    // so the remaining compatibility routes can run.
+                    throw APIError.providerRejected(diagnostic)
+                }
                 guard let block = root[responseKey] as? [String: Any],
                       Self.integer(in: block, keys: ["code", "result"]) == 0,
                       let result = block["data"] as? [String: Any],
@@ -953,7 +963,7 @@ actor QQMusicAPI {
                 let hasMoreKeys = ["hasmore", "hasMore", "has_more"]
                 let page = PlaylistTrackPage(
                     rows: rows,
-                    totalCount: Self.integer(in: result, keys: ["total_song_num", "songlist_size", "totalNum"]),
+                    totalCount: Self.playlistTrackTotalCount(in: result),
                     hasMore: Self.boolean(in: result, keys: hasMoreKeys)
                         ?? Self.boolean(in: block, keys: hasMoreKeys)
                 )
@@ -1218,10 +1228,32 @@ actor QQMusicAPI {
         return "接口没有返回歌单数据"
     }
 
+    /// QQ's `musicu.fcg` route envelope can succeed while its nested data
+    /// block reports a business failure. Checking only `req_1.code` made an
+    /// empty failed payload look like a valid empty playlist page.
+    static func playlistTrackDataFailure(
+        in root: [String: Any],
+        responseKey: String
+    ) -> String? {
+        guard let block = root[responseKey] as? [String: Any],
+              let data = block["data"] as? [String: Any] else { return nil }
+        let code = ["code", "subcode", "ret", "errCode"]
+            .compactMap { text(data[$0]) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty && $0 != "0" }
+        guard let code else { return nil }
+        let message = text(in: data, keys: ["message", "msg", "errMsg", "errmsg"])
+        return message.map { "响应码 \(code)：\($0)" } ?? "响应码 \(code)"
+    }
+
+    static func playlistTrackTotalCount(in result: [String: Any]) -> Int? {
+        integer(in: result, keys: ["total_song_num", "songnum", "songlist_size", "totalNum"])
+    }
+
     /// Provider error messages are untrusted and can echo request/session
     /// values. Keep user-visible route diagnostics to a local failure class
     /// and a small allowlisted response code; never surface raw server text.
-    private static func safeRouteFailure(_ error: Error) -> String {
+    static func safeRouteFailure(_ error: Error) -> String {
         if let apiError = error as? APIError {
             switch apiError {
             case .providerRejected(let detail), .sessionCredentialRejected(let detail, _):
@@ -1244,14 +1276,14 @@ actor QQMusicAPI {
     }
 
     private static func safeQQResponseCode(in detail: String) -> String? {
-        let lowered = detail.lowercased()
-        if lowered.range(of: #"(?<![a-z0-9])3a44(?![a-z0-9])"#, options: .regularExpression) != nil {
-            return "3a44"
-        }
-        guard let regex = try? NSRegularExpression(pattern: #"响应码\s*([0-9]{1,4})(?![0-9])"#),
+        guard let regex = try? NSRegularExpression(
+            pattern: #"^\s*响应码\s*(-?[0-9]{1,6}|(?:0x)?3a44)(?![a-z0-9])"#,
+            options: [.caseInsensitive]
+        ),
               let match = regex.firstMatch(in: detail, range: NSRange(detail.startIndex..., in: detail)),
               let range = Range(match.range(at: 1), in: detail) else { return nil }
-        return String(detail[range])
+        let code = String(detail[range]).lowercased()
+        return code == "0x3a44" ? "3a44" : code
     }
 
     private static func providerError(in root: [String: Any]) -> String? {

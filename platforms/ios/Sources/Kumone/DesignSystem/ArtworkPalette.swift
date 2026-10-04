@@ -97,6 +97,34 @@ private extension ArtworkColors {
 
 enum ArtworkPalette {
     private static var cache: [String: ArtworkColors] = [:]
+    private static let hueBucketCount = 36
+
+    private struct HueCluster {
+        var hueX: CGFloat = 0
+        var hueY: CGFloat = 0
+        var saturation: CGFloat = 0
+        var brightness: CGFloat = 0
+        var weight: CGFloat = 0
+
+        mutating func add(hue: CGFloat, saturation sampleSaturation: CGFloat,
+                          brightness sampleBrightness: CGFloat, weight sampleWeight: CGFloat) {
+            let angle = hue * 2 * .pi
+            hueX += cos(angle) * sampleWeight
+            hueY += sin(angle) * sampleWeight
+            saturation += sampleSaturation * sampleWeight
+            brightness += sampleBrightness * sampleWeight
+            weight += sampleWeight
+        }
+
+        var hue: CGFloat {
+            var value = atan2(hueY, hueX) / (2 * .pi)
+            if value < 0 { value += 1 }
+            return value
+        }
+
+        var meanSaturation: CGFloat { weight > 0 ? saturation / weight : 0 }
+        var meanBrightness: CGFloat { weight > 0 ? brightness / weight : 0 }
+    }
 
     @MainActor
     static func extract(from image: PlatformImage, cacheKey: String) -> ArtworkColors {
@@ -169,27 +197,60 @@ enum ArtworkPalette {
         }
         guard !samples.isEmpty else { return .fallback }
 
-        // Dominant hue = weighted circular mean.
-        var sinSum: CGFloat = 0, cosSum: CGFloat = 0, weightSum: CGFloat = 0
-        var satSum: CGFloat = 0, brightSum: CGFloat = 0
-        for sample in samples {
-            let angle = sample.h * 2 * .pi
-            sinSum += sin(angle) * sample.weight
-            cosSum += cos(angle) * sample.weight
-            satSum += sample.s * sample.weight
-            brightSum += sample.b * sample.weight
-            weightSum += sample.weight
+        // Keep two actual artwork hues when the cover has enough color
+        // variation. Averaging every hue into one color and inventing a fixed
+        // offset for the second color made unrelated covers converge on the
+        // same muddy gradient. A 36-bin hue histogram is inexpensive at this
+        // 10×10 sample size and behaves well on small iPhone screens.
+        let chromaticSamples = samples.filter { $0.s >= 0.08 }
+        let paletteSamples = chromaticSamples.isEmpty ? samples : chromaticSamples
+        var clusters = Array(repeating: HueCluster(), count: hueBucketCount)
+        for sample in paletteSamples {
+            let bucket = min(Int(sample.h * CGFloat(hueBucketCount)), hueBucketCount - 1)
+            clusters[bucket].add(
+                hue: sample.h,
+                saturation: sample.s,
+                brightness: sample.b,
+                weight: sample.weight
+            )
         }
-        var hue = atan2(sinSum, cosSum) / (2 * .pi)
-        if hue < 0 { hue += 1 }
-        let saturation = min(satSum / weightSum * 1.15, 0.72)
-        let brightness = brightSum / weightSum
 
-        let primary = Color(hue: hue, saturation: saturation,
-                            brightness: min(max(brightness, 0.32), 0.5))
-        let secondary = Color(hue: (hue + 0.06).truncatingRemainder(dividingBy: 1),
-                              saturation: min(saturation * 1.1, 0.8),
-                              brightness: min(max(brightness * 0.5, 0.12), 0.26))
+        guard let primaryIndex = clusters.indices.max(by: {
+            clusters[$0].weight < clusters[$1].weight
+        }), clusters[primaryIndex].weight > 0 else { return .fallback }
+        let primaryCluster = clusters[primaryIndex]
+        let secondaryCluster = clusters.indices
+            .filter { index in
+                guard clusters[index].weight > 0 else { return false }
+                let distance = abs(index - primaryIndex)
+                return min(distance, hueBucketCount - distance) >= 2
+            }
+            .max { clusters[$0].weight < clusters[$1].weight }
+            .map { clusters[$0] }
+
+        let primarySaturation = min(primaryCluster.meanSaturation * 1.12, 0.78)
+        let primaryBrightness = min(max(primaryCluster.meanBrightness, 0.32), 0.52)
+        let primary = Color(
+            hue: primaryCluster.hue,
+            saturation: primarySaturation,
+            brightness: primaryBrightness
+        )
+        let secondary: Color
+        if let secondaryCluster {
+            secondary = Color(
+                hue: secondaryCluster.hue,
+                saturation: min(secondaryCluster.meanSaturation * 1.08, 0.8),
+                brightness: min(max(secondaryCluster.meanBrightness * 0.68, 0.14), 0.32)
+            )
+        } else {
+            // Monochrome and single-hue artwork stays tonal instead of
+            // injecting an unrelated color into the bottom of the page.
+            secondary = Color(
+                hue: primaryCluster.hue,
+                saturation: min(primarySaturation * 0.92, 0.72),
+                brightness: min(max(primaryBrightness * 0.55, 0.14), 0.29)
+            )
+        }
         return ArtworkColors(primary: primary, secondary: secondary)
     }
 }
