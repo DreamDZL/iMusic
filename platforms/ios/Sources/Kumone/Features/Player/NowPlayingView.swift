@@ -338,42 +338,43 @@ struct NowPlayingView: View {
     /// one compact title/artist row, a timeline, three transport controls,
     /// volume, and a row for lyrics, output, and queue. Lyrics are the only
     /// alternate page.
+    @ViewBuilder
     private func appleMusicCompactLayout(size: CGSize) -> some View {
         let isShortScreen = size.height < 680
 
         if showLyricsOnMobile {
-            return AnyView(appleMusicLyricsPage()
+            appleMusicLyricsPage()
                 .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("appleMusicLyricsPage"))
+                .accessibilityIdentifier("appleMusicLyricsPage")
+        } else {
+            VStack(spacing: 0) {
+                Spacer(minLength: isShortScreen ? 22 : 46)
+
+                trackMetaView
+                    .padding(.bottom, isShortScreen ? 10 : 18)
+
+                NowPlayingScrubber(showsRemainingTime: true)
+                    .padding(.bottom, isShortScreen ? 4 : 10)
+
+                primaryTransportControls
+                    .padding(.bottom, isShortScreen ? 5 : 12)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("nowPlayingTransportControls")
+
+                CompactVolumeControl()
+                    .padding(.bottom, isShortScreen ? 2 : 10)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("nowPlayingVolumeControl")
+
+                songPageAccessoryControls
+            }
+            .padding(.horizontal, 26)
+            .padding(.top, isShortScreen ? 32 : 42)
+            .padding(.bottom, isShortScreen ? 12 : 18)
+            .animation(.easeInOut(duration: 0.22), value: showLyricsOnMobile)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("appleMusicSongPage")
         }
-
-        return AnyView(VStack(spacing: 0) {
-            Spacer(minLength: isShortScreen ? 22 : 46)
-
-            trackMetaView
-                .padding(.bottom, isShortScreen ? 10 : 18)
-
-            NowPlayingScrubber(showsRemainingTime: true)
-                .padding(.bottom, isShortScreen ? 4 : 10)
-
-            primaryTransportControls
-                .padding(.bottom, isShortScreen ? 5 : 12)
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("nowPlayingTransportControls")
-
-            CompactVolumeControl()
-                .padding(.bottom, isShortScreen ? 2 : 10)
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("nowPlayingVolumeControl")
-
-            songPageAccessoryControls
-        }
-        .padding(.horizontal, 26)
-        .padding(.top, isShortScreen ? 32 : 42)
-        .padding(.bottom, isShortScreen ? 12 : 18)
-        .animation(.easeInOut(duration: 0.22), value: showLyricsOnMobile))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("appleMusicSongPage")
     }
 
     private func appleMusicLyricsPage() -> some View {
