@@ -283,6 +283,7 @@ final class LXSyncService: ObservableObject {
     private var hadNetworkPath: Bool?
     private var userRequestedDisconnect = false
     private var didFinishListSync = false
+    private var listSyncDataDecodeError: String?
     private let defaults: UserDefaults
     private let localStore: LocalPlaylistStore
     private let transport: LXSyncTransport
@@ -422,6 +423,7 @@ final class LXSyncService: ObservableObject {
     private func performConnection(generation: Int) async throws {
         guard isCurrentConnection(generation) else { throw LXSyncError.disconnected }
         didFinishListSync = false
+        listSyncDataDecodeError = nil
         let address: LXSyncAddress
         do {
             address = try LXSyncAddress(endpoint)
@@ -716,10 +718,21 @@ final class LXSyncService: ObservableObject {
                     try await sendCallResponse(name: name, data: result ?? NSNull())
                 }
                 if path.last == "list_sync_finished" {
-                    didFinishListSync = true
-                    markSynced()
+                    if let listSyncDataDecodeError {
+                        didFinishListSync = false
+                        statusMessage = "同步失败"
+                        lastError = "LX Sync Server 歌单数据无法解析：\(listSyncDataDecodeError)"
+                    } else {
+                        didFinishListSync = true
+                        markSynced()
+                    }
                 }
             } catch {
+                if path.last == "list_sync_set_list_data" {
+                    listSyncDataDecodeError = error.localizedDescription
+                    statusMessage = "同步失败"
+                    lastError = "LX Sync Server 歌单数据无法解析：\(error.localizedDescription)"
+                }
                 try? await sendCallError(name: name, message: error.localizedDescription)
             }
             return
@@ -744,6 +757,8 @@ final class LXSyncService: ObservableObject {
             if didFinishListSync {
                 statusMessage = "已同步"
                 lastError = nil
+            } else if lastError != nil {
+                statusMessage = "已连接，同步失败"
             } else {
                 statusMessage = "已连接，歌单未同步"
                 lastError = "LX Sync Server 已接受连接，但没有完成歌单同步。请确认服务器已启用歌单同步。"

@@ -80,9 +80,19 @@ final class LXSyncClientIntegrationTests: XCTestCase {
                 LXSyncUserPlaylist(
                     id: "old-provider-list",
                     name: "旧版服务端 QQ 收藏歌单",
-                    source: "tx",
+                    source: "qq",
                     sourceListId: "qq-public-42",
-                    list: [LXSyncMusicInfo(track: sampleTrack(id: 15, name: "旧的远端 QQ 歌曲"))]
+                    list: [LXSyncMusicInfo(track: sampleTrack(id: 15, name: "旧的远端 QQ 歌曲"))],
+                    iMusicSourceName: "QQ 音乐"
+                ),
+                LXSyncUserPlaylist(
+                    id: "lx-imported-qq-list",
+                    name: "LX 导入的 QQ 歌单",
+                    source: "tx",
+                    sourceListId: "lx-import-42",
+                    list: [LXSyncMusicInfo(track: sampleTrack(id: 16, name: "LX 远端导入歌曲"))],
+                    iMusicSourceName: "QQ 音乐",
+                    iMusicLocalCopy: true
                 ),
             ]
         )
@@ -91,18 +101,21 @@ final class LXSyncClientIntegrationTests: XCTestCase {
 
         XCTAssertTrue(service.isConnected)
         XCTAssertEqual(service.statusMessage, "已同步")
-        XCTAssertEqual(Set(fixture.store.playlists.map(\.name)), Set(["远端歌单", "已有本地歌单", "QQ 收藏的公开歌单"]))
+        XCTAssertEqual(Set(fixture.store.playlists.map(\.name)), Set([
+            "远端歌单", "已有本地歌单", "QQ 收藏的公开歌单", "LX 导入的 QQ 歌单",
+        ]))
         XCTAssertEqual(fixture.store.playlists.first(where: { $0.name == "远端歌单" })?.tracks.first?.name, "远端歌曲")
         XCTAssertEqual(fixture.store.playlists.first(where: { $0.name == "已有本地歌单" })?.tracks.first?.name, "本地保留歌曲")
         XCTAssertEqual(fixture.store.playlists.first(where: { $0.id == qqPlaylist.id })?.name, "QQ 收藏的公开歌单")
         XCTAssertEqual(fixture.store.playlists.first(where: { $0.id == qqPlaylist.id })?.tracks.first?.name, "QQ 本地歌曲")
+        XCTAssertEqual(fixture.store.playlists.first(where: { $0.lxSyncID == "lx-imported-qq-list" })?.tracks.first?.name, "LX 远端导入歌曲")
         XCTAssertFalse(fixture.store.playlists.contains(where: { $0.name == "旧版服务端 QQ 收藏歌单" }))
         XCTAssertEqual(fixture.store.favoriteTracks.map(\.name), ["本地收藏"])
 
         let providerCollision = LXSyncUserPlaylist(
             id: "remote-list",
             name: "QQ 公共歌单",
-            source: "tx",
+            source: "qq",
             sourceListId: "42",
             list: [LXSyncMusicInfo(track: sampleTrack(id: 32, name: "不应覆盖的 QQ 歌曲"))]
         )
@@ -120,7 +133,9 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         ))
         let initialSyncAt = service.lastSyncAt
         let createSnapshot = try await waitForSnapshot(socket)
-        XCTAssertEqual(createSnapshot.userList.map(\.name), ["本地歌单", "已有本地歌单", "远端歌单"])
+        XCTAssertEqual(createSnapshot.userList.map(\.name), [
+            "本地歌单", "已有本地歌单", "远端歌单", "LX 导入的 QQ 歌单",
+        ])
         XCTAssertFalse(createSnapshot.userList.contains(where: { $0.name.contains("QQ 收藏") }))
         XCTAssertEqual(createSnapshot.userList.first?.list.first?.name, "本地歌曲")
         try await waitUntil { service.lastSyncAt != initialSyncAt }
@@ -129,7 +144,9 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         let messageCountBeforeDelete = socket.sentMessages.count
         fixture.store.delete(id: localID)
         let deleteSnapshot = try await waitForSnapshot(socket, after: messageCountBeforeDelete)
-        XCTAssertEqual(deleteSnapshot.userList.map(\.name), ["已有本地歌单", "远端歌单"])
+        XCTAssertEqual(deleteSnapshot.userList.map(\.name), [
+            "已有本地歌单", "远端歌单", "LX 导入的 QQ 歌单",
+        ])
         try await waitUntil { service.lastSyncAt != afterCreateSyncAt }
 
         let addedRemotely = LXSyncUserPlaylist(
@@ -169,6 +186,41 @@ final class LXSyncClientIntegrationTests: XCTestCase {
             XCTAssertEqual(fixture.service.statusMessage, "连接失败")
             XCTAssertNil(fixture.transport.socket)
         }
+    }
+
+    func testMalformedServerPlaylistSnapshotDoesNotReportSuccessfulSync() async throws {
+        let fixture = makeFixture()
+        let service = fixture.service
+        defer {
+            service.disconnect()
+            fixture.defaults.removePersistentDomain(forName: fixture.suiteName)
+        }
+        let connectionTask = Task { try await service.connect() }
+        try await waitUntil { fixture.transport.socket != nil }
+        let socket = try XCTUnwrap(fixture.transport.socket)
+
+        try socket.sendServerCall(id: "features", method: "getEnabledFeatures")
+        try await waitForAcknowledgement("features", on: socket)
+        try socket.sendServerCall(id: "mode", method: "list_sync_get_sync_mode")
+        try await waitForAcknowledgement("mode", on: socket)
+        try socket.sendServerCall(id: "local-data", method: "list_sync_get_list_data")
+        _ = try await waitForSnapshotResponse("local-data", on: socket)
+
+        try socket.sendServerCall(
+            id: "malformed-data",
+            method: "list_sync_set_list_data",
+            arguments: [["defaultList": [], "loveList": [], "userList": "not-an-array"]]
+        )
+        try await waitForAcknowledgement("malformed-data", on: socket)
+        try socket.sendServerCall(id: "sync-finished", method: "list_sync_finished")
+        try await waitForAcknowledgement("sync-finished", on: socket)
+        try socket.sendServerCall(id: "finished", method: "finished")
+        try await waitForAcknowledgement("finished", on: socket)
+        try await connectionTask.value
+
+        XCTAssertEqual(service.statusMessage, "已连接，同步失败")
+        XCTAssertTrue(service.lastError?.contains("歌单数据无法解析") == true)
+        XCTAssertNil(service.lastSyncAt)
     }
 
     private func makeFixture(rejectAuthorization: Bool = false) -> Fixture {

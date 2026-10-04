@@ -48,31 +48,25 @@ struct LocalPlaylist: Codable, Hashable, Identifiable {
 enum LocalPlaylistSyncPolicy {
     /// LX Sync owns LX/local playlists. Account mirrors from QQ Music and
     /// NetEase stay on this device as provider imports and never enter the LX
-    /// server's `userList` collection.
+    /// server's `userList` collection. LX's `tx`/`wy` identifiers also describe
+    /// ordinary imported lists, so they must not be treated as account mirrors.
     static func shouldSyncToLX(_ playlist: LocalPlaylist) -> Bool {
-        shouldSyncToLX(
-            source: playlist.remoteSource,
-            sourceName: playlist.sourceName
-        )
+        shouldSyncToLX(source: playlist.remoteSource)
     }
 
     static func shouldSyncToLX(source: String?) -> Bool {
-        shouldSyncToLX(source: source, sourceName: nil)
+        let normalizedSource = source?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        let accountSources: Set<String> = [
+            "qq", "qqmusic", "qq-music",
+            "netease", "neteasecloudmusic", "netease-cloud-music", "cloudmusic", "163",
+        ]
+        return !accountSources.contains(normalizedSource)
     }
 
     static func shouldSyncToLX(_ playlist: LXSyncUserPlaylist) -> Bool {
-        shouldSyncToLX(source: playlist.source, sourceName: playlist.iMusicSourceName)
-    }
-
-    private static func shouldSyncToLX(source: String?, sourceName: String?) -> Bool {
-        let source = canonicalProviderSource(source ?? "")
-        guard source != "tx", source != "wy" else { return false }
-        guard let sourceName else { return true }
-        let normalizedName = sourceName.lowercased().filter { $0.isLetter || $0.isNumber }
-        let isAccountProvider = [
-            "qq", "qqmusic", "qq音乐", "网易云", "网易云音乐", "netease", "neteasecloudmusic"
-        ].contains(normalizedName)
-        return !isAccountProvider
+        shouldSyncToLX(source: playlist.source)
     }
 
     static func shouldApplyProviderSnapshot(to playlist: LocalPlaylist?) -> Bool {

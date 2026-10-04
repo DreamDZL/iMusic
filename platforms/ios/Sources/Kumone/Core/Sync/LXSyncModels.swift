@@ -19,9 +19,21 @@ struct LXSyncListData: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        defaultList = (try? container.decode([LXSyncMusicInfo].self, forKey: .defaultList)) ?? []
-        loveList = (try? container.decode([LXSyncMusicInfo].self, forKey: .loveList)) ?? []
-        userList = (try? container.decode([LXSyncUserPlaylist].self, forKey: .userList)) ?? []
+        if container.contains(.defaultList), !(try container.decodeNil(forKey: .defaultList)) {
+            defaultList = try container.decode([LXSyncMusicInfo].self, forKey: .defaultList)
+        } else {
+            defaultList = []
+        }
+        if container.contains(.loveList), !(try container.decodeNil(forKey: .loveList)) {
+            loveList = try container.decode([LXSyncMusicInfo].self, forKey: .loveList)
+        } else {
+            loveList = []
+        }
+        if container.contains(.userList), !(try container.decodeNil(forKey: .userList)) {
+            userList = try container.decode([LXSyncUserPlaylist].self, forKey: .userList)
+        } else {
+            userList = []
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -76,7 +88,11 @@ struct LXSyncUserPlaylist: Codable, Equatable, Identifiable {
         source = try? container.decode(String.self, forKey: .source)
         sourceListId = try? container.decode(String.self, forKey: .sourceListId)
         locationUpdateTime = try? container.decode(Int.self, forKey: .locationUpdateTime)
-        list = (try? container.decode([LXSyncMusicInfo].self, forKey: .list)) ?? []
+        if container.contains(.list), !(try container.decodeNil(forKey: .list)) {
+            list = try container.decode([LXSyncMusicInfo].self, forKey: .list)
+        } else {
+            list = []
+        }
         iMusicSourceName = try? container.decode(String.self, forKey: .iMusicSourceName)
         iMusicCoverURL = try? container.decode(String.self, forKey: .iMusicCoverURL)
         iMusicLocalCopy = try? container.decode(Bool.self, forKey: .iMusicLocalCopy)

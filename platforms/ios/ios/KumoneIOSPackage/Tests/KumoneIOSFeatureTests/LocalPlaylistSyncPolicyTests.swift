@@ -9,17 +9,38 @@ final class LocalPlaylistSyncPolicyTests: XCTestCase {
         XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(LocalPlaylist(
             name: "网易云歌单", remoteSource: "netease", remotePlaylistID: "84"
         )))
-        XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(source: "tx"))
-        XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(source: "wy"))
+        XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(source: "tx"))
+        XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(source: "wy"))
         XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(LXSyncUserPlaylist(
             id: "old-qq-copy",
             name: "旧 QQ 收藏歌单",
+            source: "qq",
             iMusicSourceName: "QQ 音乐"
         )))
         XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(LXSyncUserPlaylist(
             id: "old-netease-copy",
             name: "旧网易云歌单",
+            source: "netease",
             iMusicSourceName: "网易云音乐"
+        )))
+        XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(LXSyncUserPlaylist(
+            id: "imported-qq-list-without-extra-metadata",
+            name: "QQ 链接导入歌单",
+            source: "tx",
+            iMusicSourceName: "QQ 音乐"
+        )))
+        XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(LocalPlaylist(
+            name: "QQ 链接导入歌单",
+            sourceName: "QQ 音乐",
+            remoteSource: "tx",
+            isLocalCopy: true
+        )))
+        XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(LXSyncUserPlaylist(
+            id: "lx-imported-qq-list",
+            name: "QQ 链接导入歌单",
+            source: "tx",
+            iMusicSourceName: "QQ 音乐",
+            iMusicLocalCopy: true
         )))
         XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(LocalPlaylist(name: "iMusic 本地歌单")))
         XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(LXSyncUserPlaylist(

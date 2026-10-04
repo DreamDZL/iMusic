@@ -359,59 +359,118 @@ struct NowPlayingView: View {
     private func appleMusicCompactLayout(size: CGSize) -> some View {
         let isShortScreen = size.height < 680
         let artworkSize = min(size.width - 52, size.height * (isShortScreen ? 0.34 : 0.39), 360)
-        let accessoryClearance: CGFloat = isShortScreen ? 54 : 62
+        // Keep the full playback deck at one fixed screen position on both
+        // pages. Its transparent footprint remains tappable while hidden so
+        // lyrics can never steal the gesture intended to reveal controls.
+        let controlsHeight: CGFloat = 228
 
         ZStack(alignment: .bottom) {
-            Group {
-                if showLyricsOnMobile {
-                    appleMusicLyricsPage()
-                        .padding(.bottom, accessoryClearance)
+            VStack(spacing: 0) {
+                Group {
+                    if showLyricsOnMobile {
+                        appleMusicLyricsPage()
+                            .accessibilityElement(children: .contain)
+                            .accessibilityIdentifier("appleMusicLyricsPage")
+                    } else {
+                        VStack(spacing: 0) {
+                            Spacer(minLength: isShortScreen ? 12 : 20)
+
+                            artworkView(size: artworkSize)
+                                .padding(.bottom, isShortScreen ? 18 : 26)
+
+                            trackMetaView
+
+                            Spacer(minLength: isShortScreen ? 8 : 16)
+                        }
+                        .padding(.horizontal, 26)
+                        .padding(.top, isShortScreen ? 24 : 34)
                         .accessibilityElement(children: .contain)
-                        .accessibilityIdentifier("appleMusicLyricsPage")
-                } else {
-                    VStack(spacing: 0) {
-                        Spacer(minLength: isShortScreen ? 16 : 24)
-
-                        artworkView(size: artworkSize)
-                            .padding(.bottom, isShortScreen ? 20 : 28)
-
-                        trackMetaView
-                            .padding(.bottom, isShortScreen ? 8 : 14)
-
-                        NowPlayingScrubber(
-                            onShowQuality: { showQualityPicker = true },
-                            showsRemainingTime: true
-                        )
-                        .padding(.bottom, isShortScreen ? 3 : 8)
-
-                        primaryTransportControls
-                            .padding(.bottom, isShortScreen ? 5 : 12)
-                            .accessibilityElement(children: .contain)
-                            .accessibilityIdentifier("nowPlayingTransportControls")
-
-                        CompactVolumeControl()
-                            .padding(.bottom, isShortScreen ? 2 : 10)
-                            .accessibilityElement(children: .contain)
-                            .accessibilityIdentifier("nowPlayingVolumeControl")
+                        .accessibilityIdentifier("appleMusicSongPage")
                     }
-                    .padding(.horizontal, 26)
-                    .padding(.top, isShortScreen ? 32 : 42)
-                    .padding(.bottom, accessoryClearance)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("appleMusicSongPage")
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // Reserve the same geometry even when lyrics controls fade.
+                Color.clear
+                    .frame(height: controlsHeight)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            songPageAccessoryControls
-                .frame(maxWidth: 360)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 26)
-                .padding(.bottom, isShortScreen ? 8 : 18)
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("nowPlayingAccessoryControls")
+            appleMusicPlaybackControls(height: controlsHeight)
         }
         .animation(.easeInOut(duration: 0.22), value: showLyricsOnMobile)
+    }
+
+    private func appleMusicPlaybackControls(height: CGFloat) -> some View {
+        let isVisible = !showLyricsOnMobile || lyricsControlsVisible
+
+        return ZStack {
+            if !isVisible {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { revealLyricsControls() }
+                    .accessibilityHidden(true)
+            }
+
+            VStack(spacing: 4) {
+                NowPlayingScrubber(
+                    onShowQuality: { showQualityPicker = true },
+                    showsRemainingTime: true,
+                    onSeek: {
+                        guard showLyricsOnMobile else { return }
+                        isUserScrolling = false
+                        resumeTask?.cancel()
+                        resumeTask = nil
+                    }
+                )
+                .frame(height: 64)
+
+                primaryTransportControls
+                    .frame(height: 64)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("nowPlayingTransportControls")
+
+                CompactVolumeControl()
+                    .frame(height: 28)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("nowPlayingVolumeControl")
+
+                songPageAccessoryControls
+                    .frame(height: 44)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("nowPlayingAccessoryControls")
+            }
+            .padding(.top, 8)
+            .padding(.bottom, 8)
+            .frame(maxWidth: 460)
+            .padding(.horizontal, 26)
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .opacity(isVisible ? 1 : 0)
+            .allowsHitTesting(isVisible)
+            .accessibilityHidden(!isVisible)
+            .simultaneousGesture(TapGesture().onEnded {
+                if showLyricsOnMobile { scheduleLyricsControlsAutoHide() }
+            })
+            .simultaneousGesture(DragGesture(minimumDistance: 8)
+                .onChanged { _ in
+                    guard showLyricsOnMobile else { return }
+                    lyricsControlsTask?.cancel()
+                    // Scrubbing must leave lyric-browse mode so the cursor can
+                    // immediately scroll to the line at the new playback time.
+                    if isUserScrolling {
+                        isUserScrolling = false
+                        resumeTask?.cancel()
+                    }
+                }
+                .onEnded { _ in
+                    if showLyricsOnMobile { scheduleLyricsControlsAutoHide() }
+                })
+        }
+        .frame(height: height)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("nowPlayingBottomControls")
     }
 
     private func appleMusicLyricsPage() -> some View {
@@ -426,31 +485,9 @@ struct NowPlayingView: View {
 
                 lyricsColumn
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if lyricsControlsVisible {
-                    VStack(spacing: 5) {
-                        NowPlayingScrubber(
-                            onShowQuality: { showQualityPicker = true },
-                            showsRemainingTime: true
-                        )
-                        primaryTransportControls
-                        CompactVolumeControl()
-                            .accessibilityElement(children: .contain)
-                            .accessibilityIdentifier("lyricsVolumeControl")
-                    }
-                    .padding(.top, 8)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("lyricsTransportControls")
-                    .simultaneousGesture(TapGesture().onEnded { revealLyricsControls() })
-                    .simultaneousGesture(DragGesture(minimumDistance: 8)
-                        .onChanged { _ in lyricsControlsTask?.cancel() }
-                        .onEnded { _ in scheduleLyricsControlsAutoHide() })
-                }
             }
             .padding(.horizontal, 24)
             .padding(.top, 28)
-            .padding(.bottom, lyricsControlsVisible ? 12 : 20)
             .frame(width: geometry.size.width, height: geometry.size.height)
             .contentShape(Rectangle())
             .coordinateSpace(name: "lyricsPage")
@@ -458,14 +495,6 @@ struct NowPlayingView: View {
             .accessibilityAction(named: Text("显示播放控制")) { revealLyricsControls() }
             .simultaneousGesture(SpatialTapGesture(coordinateSpace: .named("lyricsPage"))
                 .onEnded { value in
-                    // Revealing controls always wins over lyric seeking, even
-                    // when the tapped area contains a visible lyric row.
-                    if !lyricsControlsVisible, value.location.y >= geometry.size.height * 0.5 {
-                        isUserScrolling = false
-                        resumeTask?.cancel()
-                        revealLyricsControls()
-                        return
-                    }
                     guard isUserScrolling,
                           let id = lyricLineFrames.first(where: { $0.value.contains(value.location) })?.key,
                           let line = player.lyrics?.lines.first(where: { $0.id == id }),
@@ -2871,14 +2900,20 @@ struct NowPlayingScrubber: View {
     @ObservedObject private var renderingBudget = RenderingBudget.shared
     let onShowQuality: (() -> Void)?
     let showsRemainingTime: Bool
+    let onSeek: (() -> Void)?
 
     @State private var isHovering = false
     @State private var isDragging = false
     @State private var dragProgress: Double = 0
 
-    init(onShowQuality: (() -> Void)? = nil, showsRemainingTime: Bool = false) {
+    init(
+        onShowQuality: (() -> Void)? = nil,
+        showsRemainingTime: Bool = false,
+        onSeek: (() -> Void)? = nil
+    ) {
         self.onShowQuality = onShowQuality
         self.showsRemainingTime = showsRemainingTime
+        self.onSeek = onSeek
     }
 
     private func fraction(at playbackPosition: TimeInterval) -> Double {
@@ -2934,7 +2969,10 @@ struct NowPlayingScrubber: View {
                             dragProgress = min(max(value.location.x / width, 0), 1) * player.duration
                         }
                         .onEnded { _ in
-                            player.seek(to: dragProgress)
+                            onSeek?()
+                            player.seek(to: dragProgress) {
+                                player.refreshLyricsCursor()
+                            }
                             isDragging = false
                         }
                 )
