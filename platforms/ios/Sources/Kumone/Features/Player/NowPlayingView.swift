@@ -21,8 +21,11 @@ struct NowPlayingView: View {
     @State private var artworkPalette = ArtworkPaletteTransition()
     @State private var activeIndex: Int?
     @State private var isUserScrolling = false
+    @State private var isLyricsDragActive = false
     @State private var resumeTask: Task<Void, Never>?
     @State private var showLyricsOnMobile = false
+    @State private var lyricsControlsVisible = true
+    @State private var lyricsControlsTask: Task<Void, Never>?
     @State private var showQualityPicker = false
     @State private var showComments = false
     @State private var showAddToPlaylist = false
@@ -71,10 +74,24 @@ struct NowPlayingView: View {
             artworkPalette.finishTransition(revision: revision)
         }
         #if os(iOS)
-        .onChange(of: player.currentTrack?.id) { _ in
+        .onChange(of: player.currentTrack?.playbackKey) { _ in
             showLyricsOnMobile = false
+            lyricsControlsTask?.cancel()
+            lyricsControlsVisible = true
+            isLyricsDragActive = false
+            isUserScrolling = false
+            resumeTask?.cancel()
+            resumeTask = nil
         }
         #endif
+        .onChange(of: showLyricsOnMobile) { _, isShowing in
+            if isShowing {
+                revealLyricsControls()
+            } else {
+                lyricsControlsTask?.cancel()
+                lyricsControlsVisible = true
+            }
+        }
         .onChange(of: reduceMotion) { _, isEnabled in
             if isEnabled {
                 artworkPalette.stopForReducedMotionOrPowerBudget()
@@ -150,32 +167,16 @@ struct NowPlayingView: View {
 
     private var backdrop: some View {
 #if os(iOS)
-        GeometryReader { geometry in
-            ZStack {
-                if let artworkImage {
-                    Image(platformImage: artworkImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .clipped()
-                        .accessibilityLabel("专辑封面背景")
-                        .accessibilityIdentifier("nowPlayingArtworkImage")
-                        .blur(radius: showLyricsOnMobile ? 24 : 0)
-                        .overlay(artworkPalette.colors.primary.opacity(showLyricsOnMobile ? 0.28 : 0.10))
-                } else {
-                    artworkBackdrop
-                }
-
+        artworkBackdrop
+            .overlay {
                 LinearGradient(
-                    colors: [.black.opacity(0.12), .clear, .black.opacity(0.84)],
+                    colors: [.black.opacity(0.12), .clear, .black.opacity(0.58)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
             }
-            .animation(.easeInOut(duration: 0.28), value: showLyricsOnMobile)
-        }
-        .background(.black)
-        .ignoresSafeArea()
+            .background(.black)
+            .ignoresSafeArea()
 #else
         artworkBackdrop.ignoresSafeArea()
 #endif
@@ -206,7 +207,29 @@ struct NowPlayingView: View {
             minimumInterval: renderingBudget.minimumAnimationInterval,
             paused: !artworkPalette.isTransitioning
         )) { _ in
-            artworkGradient(for: artworkPalette.displayedColors(at: ProcessInfo.processInfo.systemUptime))
+            let palette = artworkPalette.displayedColors(at: ProcessInfo.processInfo.systemUptime)
+            GeometryReader { geometry in
+                ZStack {
+                    artworkGradient(for: palette)
+                    Circle()
+                        .fill(palette.primary.opacity(0.46))
+                        .frame(width: geometry.size.width * 1.15)
+                        .blur(radius: 78)
+                        .offset(x: -geometry.size.width * 0.24, y: -geometry.size.height * 0.22)
+                    Circle()
+                        .fill(palette.secondary.opacity(0.44))
+                        .frame(width: geometry.size.width * 0.98)
+                        .blur(radius: 92)
+                        .offset(x: geometry.size.width * 0.26, y: geometry.size.height * 0.08)
+                    LinearGradient(
+                        colors: [.black.opacity(0.08), .clear, .black.opacity(0.58)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped()
+            }
         }
     }
 
@@ -341,6 +364,7 @@ struct NowPlayingView: View {
     @ViewBuilder
     private func appleMusicCompactLayout(size: CGSize) -> some View {
         let isShortScreen = size.height < 680
+        let artworkSize = min(size.width - 52, size.height * (isShortScreen ? 0.34 : 0.39), 360)
 
         if showLyricsOnMobile {
             appleMusicLyricsPage()
@@ -348,13 +372,19 @@ struct NowPlayingView: View {
                 .accessibilityIdentifier("appleMusicLyricsPage")
         } else {
             VStack(spacing: 0) {
-                Spacer(minLength: isShortScreen ? 22 : 46)
+                Spacer(minLength: isShortScreen ? 16 : 24)
+
+                artworkView(size: artworkSize)
+                    .padding(.bottom, isShortScreen ? 20 : 28)
 
                 trackMetaView
-                    .padding(.bottom, isShortScreen ? 10 : 18)
+                    .padding(.bottom, isShortScreen ? 8 : 14)
 
-                NowPlayingScrubber(showsRemainingTime: true)
-                    .padding(.bottom, isShortScreen ? 4 : 10)
+                NowPlayingScrubber(
+                    onShowQuality: { showQualityPicker = true },
+                    showsRemainingTime: true
+                )
+                .padding(.bottom, isShortScreen ? 3 : 8)
 
                 primaryTransportControls
                     .padding(.bottom, isShortScreen ? 5 : 12)
@@ -388,11 +418,62 @@ struct NowPlayingView: View {
 
             lyricsColumn
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if lyricsControlsVisible {
+                VStack(spacing: 5) {
+                    NowPlayingScrubber(
+                        onShowQuality: { showQualityPicker = true },
+                        showsRemainingTime: true
+                    )
+                    primaryTransportControls
+                    CompactVolumeControl()
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("lyricsVolumeControl")
+                }
+                .padding(.top, 8)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("lyricsTransportControls")
+            }
         }
         .padding(.horizontal, 24)
-        .padding(.top, 34)
-        .padding(.bottom, 24)
+        .padding(.top, 28)
+        .padding(.bottom, lyricsControlsVisible ? 12 : 20)
+        .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture().onEnded { revealLyricsControls() })
+        .overlay(alignment: .bottom) {
+            if !lyricsControlsVisible {
+                Button(action: revealLyricsControls) {
+                    Color.clear
+                    .frame(height: 164)
+                    .contentShape(Rectangle())
+                }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("显示播放控制")
+                    .accessibilityHint("显示暂停、切歌和音量控制")
+            }
+        }
         .animation(.easeInOut(duration: 0.22), value: showLyricsOnMobile)
+        .animation(.easeInOut(duration: 0.28), value: lyricsControlsVisible)
+    }
+
+    private func revealLyricsControls() {
+        guard showLyricsOnMobile else { return }
+        withAnimation(.easeInOut(duration: 0.24)) {
+            lyricsControlsVisible = true
+        }
+        scheduleLyricsControlsAutoHide()
+    }
+
+    private func scheduleLyricsControlsAutoHide() {
+        lyricsControlsTask?.cancel()
+        lyricsControlsTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled, showLyricsOnMobile else { return }
+            withAnimation(.easeInOut(duration: 0.28)) {
+                lyricsControlsVisible = false
+            }
+        }
     }
 
     private var songPageAccessoryControls: some View {
@@ -844,6 +925,8 @@ struct NowPlayingView: View {
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .shadow(color: .black.opacity(0.3), radius: 18, y: 9)
+        .accessibilityLabel("专辑封面")
+        .accessibilityIdentifier("nowPlayingArtworkImage")
     }
 
 #if os(iOS)
@@ -1134,19 +1217,32 @@ struct NowPlayingView: View {
                         // it in a mostly empty viewport.
                         adoptCursor(proxy: proxy)
                     }
-                    .onChange(of: player.currentTrack?.id) { _ in
+                    .onChange(of: player.currentTrack?.playbackKey) { _ in
                         activeIndex = nil
                     }
                     .simultaneousGesture(
-                        DragGesture().onChanged { _ in
-                            isUserScrolling = true
-                            resumeTask?.cancel()
-                            resumeTask = Task {
-                                try? await Task.sleep(for: .seconds(3))
-                                guard !Task.isCancelled else { return }
-                                isUserScrolling = false
+                        DragGesture()
+                            .onChanged { _ in
+                                guard !isLyricsDragActive else { return }
+                                isLyricsDragActive = true
+                                if showLyricsOnMobile, lyricsControlsVisible {
+                                    lyricsControlsTask?.cancel()
+                                }
+                                isUserScrolling = true
+                                resumeTask?.cancel()
                             }
-                        }
+                            .onEnded { _ in
+                                isLyricsDragActive = false
+                                resumeTask?.cancel()
+                                resumeTask = Task {
+                                    try? await Task.sleep(for: .seconds(3))
+                                    guard !Task.isCancelled else { return }
+                                    isUserScrolling = false
+                                }
+                                if showLyricsOnMobile, lyricsControlsVisible {
+                                    scheduleLyricsControlsAutoHide()
+                                }
+                            }
                     )
                 }
             }
@@ -1523,7 +1619,7 @@ private struct IOSImmersiveLyricsColumn: View {
                     .onAppear {
                         adoptCursor(proxy: proxy)
                     }
-                    .onChange(of: player.currentTrack?.id) { _ in
+                    .onChange(of: player.currentTrack?.playbackKey) { _ in
                         activeIndex = nil
                     }
                     .simultaneousGesture(
@@ -2236,7 +2332,7 @@ private struct IOSMinimalLyricsColumn: View {
                                 proxy.scrollTo(index, anchor: .center)
                             }
                         }
-                        .onChange(of: player.currentTrack?.id) { _ in
+                        .onChange(of: player.currentTrack?.playbackKey) { _ in
                             activeIndex = nil
                             selectedIndex = nil
                             nearestIndex = nil

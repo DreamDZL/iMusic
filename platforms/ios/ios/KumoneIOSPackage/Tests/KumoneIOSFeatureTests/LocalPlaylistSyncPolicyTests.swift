@@ -2,6 +2,51 @@ import XCTest
 @testable import KumoneCore
 
 final class LocalPlaylistSyncPolicyTests: XCTestCase {
+    func testLXSyncExcludesQQAndNeteaseAccountPlaylistCopies() {
+        XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(LocalPlaylist(
+            name: "QQ 收藏歌单", remoteSource: "qq", remotePlaylistID: "42"
+        )))
+        XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(LocalPlaylist(
+            name: "网易云歌单", remoteSource: "netease", remotePlaylistID: "84"
+        )))
+        XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(source: "tx"))
+        XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(source: "wy"))
+        XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(LXSyncUserPlaylist(
+            id: "old-qq-copy",
+            name: "旧 QQ 收藏歌单",
+            iMusicSourceName: "QQ 音乐"
+        )))
+        XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(LXSyncUserPlaylist(
+            id: "old-netease-copy",
+            name: "旧网易云歌单",
+            iMusicSourceName: "网易云音乐"
+        )))
+        XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(LocalPlaylist(name: "iMusic 本地歌单")))
+        XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(LXSyncUserPlaylist(
+            id: "lx-catalog-copy",
+            name: "LX 兼容音源歌单",
+            source: "kw",
+            iMusicSourceName: "酷我"
+        )))
+    }
+
+    @MainActor
+    func testFavoriteBatchRemovalPersistsOnlyUnselectedSongs() {
+        let suiteName = "LocalPlaylistSyncPolicyTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = LocalPlaylistStore(defaults: defaults)
+        let selected = track(id: 95, name: "批量删除歌曲")
+        let retained = track(id: 96, name: "保留歌曲")
+        store.toggleFavorite(selected)
+        store.toggleFavorite(retained)
+
+        let removed = store.removeFavorites(playbackKeys: [selected.playbackKey])
+
+        XCTAssertEqual(removed, 1)
+        XCTAssertEqual(store.favoriteTracks.map(\.name), ["保留歌曲"])
+    }
+
     func testEditedProviderPlaylistStopsRefreshingFromProvider() {
         let localCopy = LocalPlaylist(
             name: "Edited copy",

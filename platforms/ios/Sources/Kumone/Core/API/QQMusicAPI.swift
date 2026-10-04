@@ -8,6 +8,7 @@ enum QQMusicLegacyPlaylistResponse {
         let rows: [[String: Any]]
         let totalCount: Int
         let hasMore: Bool
+        let playlistName: String?
     }
 
     enum ResponseError: Swift.Error, LocalizedError {
@@ -84,7 +85,12 @@ enum QQMusicLegacyPlaylistResponse {
         let totalCount = max(reportedCount ?? allRows.count, allRows.count)
         let hasMore = requestedOffset + rows.count < totalCount
             || (reportedCount == nil && rows.count == requestedSize && endIndex == allRows.count)
-        return Page(rows: rows, totalCount: totalCount, hasMore: hasMore)
+        return Page(
+            rows: rows,
+            totalCount: totalCount,
+            hasMore: hasMore,
+            playlistName: QQMusicAPI.playlistName(in: playlist)
+        )
     }
 
     private static func integer(_ value: Any?) -> Int? {
@@ -242,12 +248,14 @@ actor QQMusicAPI {
     struct PlaylistTracksResult: Sendable {
         let tracks: [Track]
         let refreshedCookie: String?
+        let playlistName: String?
     }
 
     private struct PlaylistTrackPage {
         let rows: [[String: Any]]
         let totalCount: Int?
         let hasMore: Bool?
+        let playlistName: String?
     }
 
     struct ResolvedAudio: Sendable {
@@ -813,6 +821,7 @@ actor QQMusicAPI {
             throw APIError.loginCookieUnavailable
         }
         var tracks: [Track] = []
+        var playlistName: String?
         var offset = 0
         var expectedCount = max(expectedTrackCount, 0)
         var completed = false
@@ -836,6 +845,7 @@ actor QQMusicAPI {
                 expectedCount = max(expectedCount, totalCount)
             }
             let rows = trackPage.rows
+            if playlistName == nil { playlistName = trackPage.playlistName }
             let reportedHasMore = trackPage.hasMore
             if rows.isEmpty {
                 guard reportedHasMore != true, expectedCount <= offset else {
@@ -873,7 +883,11 @@ actor QQMusicAPI {
         guard completed, expectedCount == 0 || offset >= expectedCount else {
             throw APIError.incompletePlaylist
         }
-        return PlaylistTracksResult(tracks: tracks, refreshedCookie: profile.refreshedCookie)
+        return PlaylistTracksResult(
+            tracks: tracks,
+            refreshedCookie: profile.refreshedCookie,
+            playlistName: playlistName
+        )
     }
 
     /// Reads a QQ account playlist, preferring the authenticated paginated
@@ -1048,7 +1062,9 @@ actor QQMusicAPI {
                     totalCount: totalCount,
                     hasMore: Self.boolean(in: result, keys: hasMoreKeys)
                         ?? Self.boolean(in: block, keys: hasMoreKeys)
-                        ?? totalCount.map { offset + rows.count < $0 }
+                        ?? totalCount.map { offset + rows.count < $0 },
+                    playlistName: Self.playlistName(in: result)
+                        ?? Self.playlistName(in: block)
                 )
                 let knownCount = max(expectedPlaylistCount ?? 0, page.totalCount ?? 0)
                 let requiredRows = knownCount > offset
@@ -1178,7 +1194,8 @@ actor QQMusicAPI {
             return PlaylistTrackPage(
                 rows: page.rows,
                 totalCount: page.totalCount,
-                hasMore: page.hasMore
+                hasMore: page.hasMore,
+                playlistName: page.playlistName
             )
         } catch let error as QQMusicLegacyPlaylistResponse.ResponseError {
             switch error {
@@ -1431,12 +1448,84 @@ actor QQMusicAPI {
         }()
         return Playlist(
             id: id,
-            name: isLiked ? "我喜欢的音乐" : (text(raw["diss_name"]) ?? text(raw["name"]) ?? text(raw["title"]) ?? "QQ 音乐歌单"),
+            name: isLiked ? "我喜欢的音乐" : (playlistName(in: raw) ?? "QQ 音乐歌单"),
             coverURL: coverURL,
             trackCount: integer(in: raw, keys: ["song_cnt", "songnum", "total_song_num", "song_count"]) ?? 0,
             creatorName: text(raw["hostname"]) ?? text(raw["nick"]) ?? text(raw["creator"]) ?? "QQ 音乐",
             kind: kind
         )
+    }
+
+    /// QQ's created and collected-playlist responses can place the title at
+    /// different levels (`diss_name`, `dissname`, or nested `dirinfo.title`).
+    /// Prefer QQ's canonical diss title anywhere in the response, then inspect
+    /// common wrapper objects before using generic labels.
+    static func playlistName(in raw: [String: Any]) -> String? {
+        let nameKeys = [
+            "dissname", "disstitle", "dirname", "playlistname", "listname",
+            "title", "name", "nameshow"
+        ]
+        func normalized(_ key: String) -> String {
+            key.lowercased().filter { $0.isLetter || $0.isNumber }
+        }
+        func nonEmptyText(_ value: Any?) -> String? {
+            guard let value = value as? String else { return nil }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            return trimmed.removingPercentEncoding ?? trimmed
+        }
+        let wrapperKeys: Set<String> = [
+            "data", "cdlist", "playlist", "dirinfo", "dissinfo", "diss",
+            "info", "basic", "result", "req1", "req0"
+        ]
+        func metadataObjects(in value: Any) -> [[String: Any]] {
+            if let object = value as? [String: Any] {
+                var result = [object]
+                for key in object.keys.sorted() where wrapperKeys.contains(normalized(key)) {
+                    if let nested = object[key] {
+                        result.append(contentsOf: metadataObjects(in: nested))
+                    }
+                }
+                return result
+            }
+            if let values = value as? [Any] {
+                return values.flatMap { metadataObjects(in: $0) }
+            }
+            return []
+        }
+        let objects = metadataObjects(in: raw)
+        for nameKey in nameKeys {
+            for object in objects {
+                for key in object.keys.sorted() where normalized(key) == nameKey {
+                    if let value = nonEmptyText(object[key]), !isGenericPlaylistName(value) {
+                        return value
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// QQ's collected-playlist endpoint may return only a generic display
+    /// label in a wrapper while the collection row itself has the real title.
+    /// Treat those labels as missing so a generic detail response cannot
+    /// replace a concrete title from the user's collected-playlist list.
+    static func resolvedPlaylistName(detailName: String?, listName: String?) -> String {
+        if let detailName = usablePlaylistName(detailName) { return detailName }
+        if let listName = usablePlaylistName(listName) { return listName }
+        return "QQ 音乐歌单"
+    }
+
+    private static func usablePlaylistName(_ name: String?) -> String? {
+        guard let name else { return nil }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isGenericPlaylistName(trimmed) else { return nil }
+        return trimmed
+    }
+
+    private static func isGenericPlaylistName(_ name: String) -> Bool {
+        let normalized = name.lowercased().filter { $0.isLetter || $0.isNumber }
+        return ["qq音乐歌单", "qq歌单", "qqmusicplaylist", "qqplaylist"].contains(normalized)
     }
 
     private static func jsonObject(from data: Data) -> [String: Any]? {

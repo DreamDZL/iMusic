@@ -5,6 +5,22 @@ import XCTest
 
 @MainActor
 final class LXSyncClientIntegrationTests: XCTestCase {
+    func testLXSyncConnectionTicketUsesAES128ECBWithoutPadding() throws {
+        let key = Data((0...15).map(UInt8.init))
+        let plaintext = Data([
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+        ])
+
+        XCTAssertEqual(
+            try LXSyncService.aesEncryptNoPadding(plaintext, key: key),
+            Data([
+                0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30,
+                0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4, 0xc5, 0x5a,
+            ])
+        )
+    }
+
     func testConnectAndSynchronizePlaylistChangesInBothDirections() async throws {
         let fixture = makeFixture()
         let service = fixture.service
@@ -14,6 +30,15 @@ final class LXSyncClientIntegrationTests: XCTestCase {
             name: "已有本地歌单",
             tracks: [preservedTrack]
         ))
+        let qqPlaylist = fixture.store.upsertRemotePlaylist(
+            source: "qq",
+            remoteID: "qq-public-42",
+            name: "QQ 收藏的公开歌单",
+            coverURL: nil,
+            sourceName: "QQ 音乐",
+            revision: 2,
+            tracks: [sampleTrack(id: 14, name: "QQ 本地歌曲")]
+        )
         fixture.store.toggleFavorite(favoriteTrack)
         defer {
             service.disconnect()
@@ -22,6 +47,11 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         let connectionTask = Task { try await service.connect() }
         try await waitUntil { fixture.transport.socket != nil }
         let socket = try XCTUnwrap(fixture.transport.socket)
+        let socketURL = try XCTUnwrap(fixture.transport.socketURL)
+        let query = try XCTUnwrap(URLComponents(url: socketURL, resolvingAgainstBaseURL: false)?.queryItems)
+        let ticketBase64 = try XCTUnwrap(query.first(where: { $0.name == "t" })?.value)
+        let ticket = try XCTUnwrap(Data(base64Encoded: ticketBase64))
+        XCTAssertEqual(ticket.count, 16, "LX Sync's ticket is one unpadded AES block")
 
         let remotePlaylist = LXSyncUserPlaylist(
             id: "remote-list",
@@ -37,6 +67,13 @@ final class LXSyncClientIntegrationTests: XCTestCase {
                     list: [LXSyncMusicInfo(track: preservedTrack)]
                 ),
                 remotePlaylist,
+                LXSyncUserPlaylist(
+                    id: "old-provider-list",
+                    name: "旧版服务端 QQ 收藏歌单",
+                    source: "tx",
+                    sourceListId: "qq-public-42",
+                    list: [LXSyncMusicInfo(track: sampleTrack(id: 15, name: "旧的远端 QQ 歌曲"))]
+                ),
             ]
         )
         try await finishHandshake(socket, initialData: initialMergedData)
@@ -44,10 +81,28 @@ final class LXSyncClientIntegrationTests: XCTestCase {
 
         XCTAssertTrue(service.isConnected)
         XCTAssertEqual(service.statusMessage, "已同步")
-        XCTAssertEqual(Set(fixture.store.playlists.map(\.name)), Set(["远端歌单", "已有本地歌单"]))
+        XCTAssertEqual(Set(fixture.store.playlists.map(\.name)), Set(["远端歌单", "已有本地歌单", "QQ 收藏的公开歌单"]))
         XCTAssertEqual(fixture.store.playlists.first(where: { $0.name == "远端歌单" })?.tracks.first?.name, "远端歌曲")
         XCTAssertEqual(fixture.store.playlists.first(where: { $0.name == "已有本地歌单" })?.tracks.first?.name, "本地保留歌曲")
+        XCTAssertEqual(fixture.store.playlists.first(where: { $0.id == qqPlaylist.id })?.name, "QQ 收藏的公开歌单")
+        XCTAssertEqual(fixture.store.playlists.first(where: { $0.id == qqPlaylist.id })?.tracks.first?.name, "QQ 本地歌曲")
+        XCTAssertFalse(fixture.store.playlists.contains(where: { $0.name == "旧版服务端 QQ 收藏歌单" }))
         XCTAssertEqual(fixture.store.favoriteTracks.map(\.name), ["本地收藏"])
+
+        let providerCollision = LXSyncUserPlaylist(
+            id: "remote-list",
+            name: "QQ 公共歌单",
+            source: "tx",
+            sourceListId: "42",
+            list: [LXSyncMusicInfo(track: sampleTrack(id: 32, name: "不应覆盖的 QQ 歌曲"))]
+        )
+        try socket.sendServerCall(
+            id: "provider-collision-update",
+            method: "onListSyncAction",
+            arguments: [["action": "list_update", "data": try jsonObject([providerCollision])]]
+        )
+        try await waitForAcknowledgement("provider-collision-update", on: socket)
+        XCTAssertEqual(fixture.store.playlists.first(where: { $0.lxSyncID == "remote-list" })?.tracks.first?.name, "远端歌曲")
 
         let localID = try XCTUnwrap(fixture.store.create(
             name: "本地歌单",
@@ -56,6 +111,7 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         let initialSyncAt = service.lastSyncAt
         let createSnapshot = try await waitForSnapshot(socket)
         XCTAssertEqual(createSnapshot.userList.map(\.name), ["本地歌单", "已有本地歌单", "远端歌单"])
+        XCTAssertFalse(createSnapshot.userList.contains(where: { $0.name.contains("QQ 收藏") }))
         XCTAssertEqual(createSnapshot.userList.first?.list.first?.name, "本地歌曲")
         try await waitUntil { service.lastSyncAt != initialSyncAt }
 
@@ -146,6 +202,7 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         try socket.sendServerCall(id: "local-data", method: "list_sync_get_list_data")
         let localSnapshot = try await waitForSnapshotResponse("local-data", on: socket)
         XCTAssertTrue(localSnapshot.userList.contains(where: { $0.name == "已有本地歌单" }))
+        XCTAssertFalse(localSnapshot.userList.contains(where: { $0.source == "qq" || $0.source == "tx" }))
         XCTAssertTrue(localSnapshot.loveList.contains(where: { $0.name == "本地收藏" }))
 
         try socket.sendServerCall(
@@ -261,6 +318,7 @@ private final class FakeTransport: LXSyncTransport {
     private let key: Data
     private let rejectAuthorization: Bool
     private(set) var socket: FakeSocket?
+    private(set) var socketURL: URL?
 
     init(key: Data, rejectAuthorization: Bool) {
         self.key = key
@@ -290,6 +348,7 @@ private final class FakeTransport: LXSyncTransport {
     }
 
     func webSocketTask(with url: URL) -> LXSyncSocket {
+        socketURL = url
         let value = FakeSocket()
         socket = value
         return value

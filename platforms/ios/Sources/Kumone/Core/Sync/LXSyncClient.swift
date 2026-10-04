@@ -475,7 +475,10 @@ final class LXSyncService: ObservableObject {
             }
 
             var authKey = try Self.decodeKey(key.key)
-            let ticket = try Self.aesEncrypt(Data("lx-music connect".utf8), key: authKey)
+            // LX Sync's ticket is exactly one AES block and the mobile client
+            // encrypts it as AES-128-ECB without padding. PKCS#7 would append
+            // a second block, causing the server to reject the WebSocket.
+            let ticket = try Self.aesEncryptNoPadding(Data("lx-music connect".utf8), key: authKey)
             authKey.resetBytes(in: 0..<authKey.count)
             let requestURL = try address.socketURL(clientID: key.clientId, encryptedTicket: ticket.base64EncodedString())
             let task = transport.webSocketTask(with: requestURL)
@@ -582,12 +585,14 @@ final class LXSyncService: ObservableObject {
     }
 
     private func apply(_ newData: LXSyncListData) {
-        listData = newData
+        var scopedData = newData
+        scopedData.userList = newData.userList.filter(LocalPlaylistSyncPolicy.shouldSyncToLX)
+        listData = scopedData
         persistListData()
         applyingRemoteData = true
         localStore.replaceFromLXSync(
-            playlists: newData.userList,
-            favorites: newData.loveList.map(\.track)
+            playlists: scopedData.userList,
+            favorites: scopedData.loveList.map(\.track)
         )
         applyingRemoteData = false
     }
@@ -794,7 +799,9 @@ final class LXSyncService: ObservableObject {
             }
             let position = payload["position"] as? Int ?? listData.userList.count
             let existingIDs = Set(listData.userList.map(\.id))
-            let additions = lists.filter { !existingIDs.contains($0.id) }
+            let additions = lists.filter {
+                LocalPlaylistSyncPolicy.shouldSyncToLX($0) && !existingIDs.contains($0.id)
+            }
             listData.userList.insert(
                 contentsOf: additions,
                 at: min(max(position, 0), listData.userList.count)
@@ -807,6 +814,7 @@ final class LXSyncService: ObservableObject {
                 throw LXSyncError.invalidServerResponse
             }
             for incoming in lists {
+                guard LocalPlaylistSyncPolicy.shouldSyncToLX(incoming) else { continue }
                 if let index = listData.userList.firstIndex(where: { $0.id == incoming.id }) {
                     var copy = incoming
                     if copy.list.isEmpty { copy.list = listData.userList[index].list }
@@ -1233,6 +1241,39 @@ final class LXSyncService: ObservableObject {
 
     private static func aesEncrypt(_ data: Data, key: Data) throws -> Data {
         try aesCrypt(data, key: key, operation: CCOperation(kCCEncrypt))
+    }
+
+    static func aesEncryptNoPadding(_ data: Data, key: Data) throws -> Data {
+        guard key.count == kCCKeySizeAES128,
+              data.count.isMultiple(of: kCCBlockSizeAES128) else {
+            throw LXSyncError.invalidServerResponse
+        }
+        var output = Data(count: data.count)
+        let outputCapacity = output.count
+        var outputLength = 0
+        let status = output.withUnsafeMutableBytes { outputBytes in
+            data.withUnsafeBytes { inputBytes in
+                key.withUnsafeBytes { keyBytes in
+                    CCCrypt(
+                        CCOperation(kCCEncrypt),
+                        CCAlgorithm(kCCAlgorithmAES),
+                        CCOptions(kCCOptionECBMode),
+                        keyBytes.baseAddress,
+                        key.count,
+                        nil,
+                        inputBytes.baseAddress,
+                        data.count,
+                        outputBytes.baseAddress,
+                        outputCapacity,
+                        &outputLength
+                    )
+                }
+            }
+        }
+        guard status == kCCSuccess, outputLength == data.count else {
+            throw LXSyncError.authorizationFailed
+        }
+        return output
     }
 
     private static func aesDecrypt(_ data: Data, key: Data) throws -> Data {

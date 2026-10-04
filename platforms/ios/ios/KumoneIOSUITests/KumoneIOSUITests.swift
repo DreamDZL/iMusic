@@ -102,23 +102,30 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(lyricsPage.waitForExistence(timeout: 10))
         let lyricsScroll = app.scrollViews["synchronizedLyricsScrollView"]
         XCTAssertTrue(lyricsScroll.waitForExistence(timeout: 10))
-        let transportControls = app.descendants(matching: .any)["nowPlayingTransportControls"]
-        let volumeControl = app.descendants(matching: .any)["nowPlayingVolumeControl"]
-        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 5))
-        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["showSynchronizedLyrics"].waitForNonExistence(timeout: 5))
+        let transportControls = app.descendants(matching: .any)["lyricsTransportControls"]
+        let volumeControl = app.descendants(matching: .any)["lyricsVolumeControl"]
+        let songTransportControls = app.descendants(matching: .any)["nowPlayingTransportControls"]
+        XCTAssertTrue(transportControls.exists)
+        XCTAssertTrue(volumeControl.exists)
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7))
+        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 7))
+        XCTAssertTrue(app.buttons["showSynchronizedLyrics"].waitForNonExistence(timeout: 7))
 
         lyricsScroll.swipeRight()
-        XCTAssertTrue(transportControls.waitForExistence(timeout: 5))
+        XCTAssertTrue(songTransportControls.waitForExistence(timeout: 5))
         // Start the gesture on the album art (inside the page's swipe region),
         // not the full-page accessibility container whose midpoint can fall
         // over the intentionally gesture-protected transport controls.
         artwork.swipeLeft()
-        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7))
 
         lyricsScroll.swipeUp()
         XCTAssertTrue(lyricsPage.exists)
         XCTAssertFalse(transportControls.exists)
+
+        lyricsPage.coordinate(withNormalizedOffset: CGVector(dx: 0.82, dy: 0.94)).tap()
+        XCTAssertTrue(transportControls.waitForExistence(timeout: 2))
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7))
 
         let lyricsAttachment = XCTAttachment(screenshot: app.screenshot())
         lyricsAttachment.name = "iMusic-AppleMusic-歌词页"

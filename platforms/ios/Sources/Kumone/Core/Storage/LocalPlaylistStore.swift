@@ -42,6 +42,35 @@ struct LocalPlaylist: Codable, Hashable, Identifiable {
 }
 
 enum LocalPlaylistSyncPolicy {
+    /// LX Sync owns LX/local playlists. Account mirrors from QQ Music and
+    /// NetEase stay on this device as provider imports and never enter the LX
+    /// server's `userList` collection.
+    static func shouldSyncToLX(_ playlist: LocalPlaylist) -> Bool {
+        shouldSyncToLX(
+            source: playlist.remoteSource,
+            sourceName: playlist.sourceName
+        )
+    }
+
+    static func shouldSyncToLX(source: String?) -> Bool {
+        shouldSyncToLX(source: source, sourceName: nil)
+    }
+
+    static func shouldSyncToLX(_ playlist: LXSyncUserPlaylist) -> Bool {
+        shouldSyncToLX(source: playlist.source, sourceName: playlist.iMusicSourceName)
+    }
+
+    private static func shouldSyncToLX(source: String?, sourceName: String?) -> Bool {
+        let source = canonicalProviderSource(source ?? "")
+        guard source != "tx", source != "wy" else { return false }
+        guard let sourceName else { return true }
+        let normalizedName = sourceName.lowercased().filter { $0.isLetter || $0.isNumber }
+        let isAccountProvider = [
+            "qq", "qqmusic", "qq音乐", "网易云", "网易云音乐", "netease", "neteasecloudmusic"
+        ].contains(normalizedName)
+        return !isAccountProvider
+    }
+
     static func shouldApplyProviderSnapshot(to playlist: LocalPlaylist?) -> Bool {
         playlist?.isLocalCopy != true
     }
@@ -328,20 +357,40 @@ final class LocalPlaylistStore: ObservableObject {
         return additions.count
     }
 
+    @discardableResult
+    func removeFavorites(playbackKeys: Set<String>) -> Int {
+        guard !playbackKeys.isEmpty else { return 0 }
+        let originalCount = favoriteTracks.count
+        favoriteTracks.removeAll { playbackKeys.contains($0.playbackKey) }
+        let removed = originalCount - favoriteTracks.count
+        if removed > 0 { persistFavorites() }
+        return removed
+    }
+
     /// Assign stable LX list identifiers once so local lists remain addressable
     /// after another device merges them through the sync server.
     func preparePlaylistsForLXSync() -> [LocalPlaylist] {
         var changed = false
-        for index in playlists.indices where playlists[index].lxSyncID == nil {
+        for index in playlists.indices
+        where LocalPlaylistSyncPolicy.shouldSyncToLX(playlists[index])
+            && playlists[index].lxSyncID == nil {
             playlists[index].lxSyncID = playlists[index].id.uuidString
             changed = true
         }
         if changed { persist() }
-        return playlists
+        return playlists.filter(LocalPlaylistSyncPolicy.shouldSyncToLX)
     }
 
     func replaceFromLXSync(playlists syncedPlaylists: [LXSyncUserPlaylist], favorites: [Track]) {
-        playlists = LocalPlaylistSyncPolicy.mergeAll(syncedPlaylists, currentPlaylists: playlists)
+        let lxLists = syncedPlaylists.filter {
+            LocalPlaylistSyncPolicy.shouldSyncToLX($0)
+        }
+        let localAccountCopies = playlists.filter { !LocalPlaylistSyncPolicy.shouldSyncToLX($0) }
+        let synchronizedLists = LocalPlaylistSyncPolicy.mergeAll(
+            lxLists,
+            currentPlaylists: playlists.filter(LocalPlaylistSyncPolicy.shouldSyncToLX)
+        )
+        playlists = synchronizedLists + localAccountCopies
         favoriteTracks = favorites.map { $0.normalizedForLXPlayback() }
         persist(notifySync: false)
         persistFavorites(notifySync: false)

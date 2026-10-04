@@ -8,6 +8,14 @@ import Combine
 final class QQMusicPlaylistSyncStore: ObservableObject {
     static let shared = QQMusicPlaylistSyncStore()
 
+    enum ImportError: LocalizedError {
+        case alreadyImporting
+
+        var errorDescription: String? {
+            "QQ 音乐导入正在进行，请稍后再试"
+        }
+    }
+
     struct ImportReport: Equatable {
         let inserted: Int
         let updated: Int
@@ -208,6 +216,35 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
         )
     }
 
+    /// Copies QQ's hearted tracks into iMusic's own favorites. This is a
+    /// read-only import and never changes QQ's collection.
+    func importLikedSongsToLocalLibrary() async throws -> (remoteCount: Int, addedCount: Int) {
+        guard !isImporting else { throw ImportError.alreadyImporting }
+        let session = QQMusicSessionStore.shared
+        guard session.isLoggedIn, let requestCookie = session.cookie else {
+            throw QQMusicSessionStore.SessionError.validationFailed
+        }
+        isImporting = true
+        defer { isImporting = false }
+        let revision = session.sessionRevision
+        let expectedCount = playlists.first(where: \.isLikedSongs)?.trackCount ?? 0
+        let result = try await QQMusicAPI.shared.playlistTracks(
+            id: "qq-liked:201",
+            cookie: requestCookie,
+            expectedTrackCount: expectedCount
+        )
+        guard session.isLoggedIn, session.sessionRevision == revision else {
+            throw QQMusicSessionStore.SessionError.validationFailed
+        }
+        session.acceptRefreshedCookie(
+            result.refreshedCookie,
+            expectedSessionRevision: revision,
+            expectedCookie: requestCookie
+        )
+        let addedCount = LocalPlaylistStore.shared.mergeFavorites(result.tracks)
+        return (remoteCount: result.tracks.count, addedCount: addedCount)
+    }
+
     func importSelected(
         _ ids: Set<String>,
         overwriteEdited: Set<String> = [],
@@ -279,6 +316,21 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                     failed.append("\(playlist.name)：歌单没有可导入的歌曲")
                     continue
                 }
+                let resolvedName = QQMusicAPI.resolvedPlaylistName(
+                    detailName: tracksResult.playlistName,
+                    listName: playlist.name
+                )
+                if let index = playlists.firstIndex(where: { $0.id == playlist.id }),
+                   playlists[index].name != resolvedName {
+                    playlists[index] = QQMusicAPI.Playlist(
+                        id: playlist.id,
+                        name: resolvedName,
+                        coverURL: playlist.coverURL,
+                        trackCount: playlist.trackCount,
+                        creatorName: playlist.creatorName,
+                        kind: playlist.kind
+                    )
+                }
                 if overwriteLocalCopy {
                     let currentLocalCopy = localStore.playlists.first(where: {
                         LocalPlaylistSyncPolicy.matchesProviderPlaylist($0, source: "qq", id: playlist.id)
@@ -293,7 +345,7 @@ final class QQMusicPlaylistSyncStore: ObservableObject {
                 let upsertResult = localStore.upsertRemotePlaylist(
                     source: "qq",
                     remoteID: playlist.id,
-                    name: playlist.name,
+                    name: resolvedName,
                     coverURL: playlist.coverURL,
                     sourceName: "QQ 音乐",
                     revision: playlist.trackCount,

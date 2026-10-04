@@ -238,11 +238,16 @@ struct LocalPlaylistsView: View {
 
 struct LikedSongsView: View {
     @StateObject private var store = LocalPlaylistStore.shared
+    @ObservedObject private var qqSession = QQMusicSessionStore.shared
+    @ObservedObject private var qqPlaylists = QQMusicPlaylistSyncStore.shared
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
     @Environment(\.openLogin) private var openLogin
     @State private var query = ""
     @State private var isImportingAccountFavorites = false
+    @State private var isImportingQQFavorites = false
+    @State private var isSelectingFavorites = false
+    @State private var selectedFavoriteKeys = Set<String>()
 
     private var visibleTracks: [Track] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -270,7 +275,18 @@ struct LikedSongsView: View {
                 .buttonStyle(.bordered)
                 .padding(.horizontal, Theme.Layout.contentInset)
                 .disabled(isImportingAccountFavorites)
-                Text("导入内容会成为 iMusic 本地副本，可随 LX Sync 同步；收藏和删除不会写回网易云账号。")
+                Button(action: importQQFavorites) {
+                    if isImportingQQFavorites {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Label("从 QQ 音乐导入收藏", systemImage: "arrow.down.circle")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .padding(.horizontal, Theme.Layout.contentInset)
+                .disabled(isImportingQQFavorites || qqPlaylists.isImporting)
+                Text("歌单与账号收藏会复制到 iMusic 资料库；在这里的收藏和删除不会写回网易云或 QQ 音乐。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -294,7 +310,8 @@ struct LikedSongsView: View {
                     } else {
                         TrackListView(
                             tracks: visibleTracks,
-                            source: .none
+                            source: .none,
+                            selectedTrackKeys: isSelectingFavorites ? $selectedFavoriteKeys : nil
                         )
                         .padding(.horizontal, Theme.Layout.contentInset - 10)
                     }
@@ -310,7 +327,25 @@ struct LikedSongsView: View {
         #endif
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                if !visibleTracks.isEmpty {
+                if !store.favoriteTracks.isEmpty {
+                    Button {
+                        isSelectingFavorites.toggle()
+                        if !isSelectingFavorites { selectedFavoriteKeys.removeAll() }
+                    } label: {
+                        Label(isSelectingFavorites ? "完成选择" : "选择歌曲",
+                              systemImage: isSelectingFavorites ? "checkmark" : "checklist")
+                    }
+                }
+                if isSelectingFavorites, !selectedFavoriteKeys.isEmpty {
+                    Button(role: .destructive) {
+                        store.removeFavorites(playbackKeys: selectedFavoriteKeys)
+                        selectedFavoriteKeys.removeAll()
+                        isSelectingFavorites = false
+                    } label: {
+                        Label("删除所选（\(selectedFavoriteKeys.count)）", systemImage: "trash")
+                    }
+                }
+                if !isSelectingFavorites, !visibleTracks.isEmpty {
                     Button {
                         player.play(tracks: visibleTracks, source: .none)
                     } label: {
@@ -334,6 +369,24 @@ struct LikedSongsView: View {
             do {
                 let report = try await account.importLikedSongsToLocalLibrary()
                 ToastCenter.shared.show("已检查网易云红心 \(report.remoteCount) 首，新增 \(report.addedCount) 首")
+            } catch {
+                ToastCenter.shared.show(error.localizedDescription)
+            }
+        }
+    }
+
+    private func importQQFavorites() {
+        guard !isImportingQQFavorites else { return }
+        guard qqSession.isLoggedIn else {
+            openLogin()
+            return
+        }
+        isImportingQQFavorites = true
+        Task {
+            defer { isImportingQQFavorites = false }
+            do {
+                let report = try await qqPlaylists.importLikedSongsToLocalLibrary()
+                ToastCenter.shared.show("已检查 QQ 收藏 \(report.remoteCount) 首，新增 \(report.addedCount) 首")
             } catch {
                 ToastCenter.shared.show(error.localizedDescription)
             }
