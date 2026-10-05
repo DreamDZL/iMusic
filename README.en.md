@@ -1,3 +1,5 @@
+<div align="right"><a href="README.md">简体中文</a> | English</div>
+
 <div align="center">
 
 <img src="platforms/ios/docs/iMusicIcon.png" width="140" alt="iMusic" />
@@ -18,6 +20,14 @@ SwiftUI · System Liquid Glass · LX User API · LX Sync Server
 iMusic continues the native iOS project from [Moumusic](https://github.com/jiajia2222/Moumusic). Its main destinations are Home, New Discovery, Radio and Library, with Search as a separate navigation entry. The interface uses native SwiftUI navigation and follows the system Liquid Glass appearance. Imported LX User API sources provide third-party playback and fallback; automatic mode may first use an eligible signed-in provider account.
 
 QQ Music and NetEase public playlists are imported as editable local copies. Edits to those copies stay in iMusic and are not written to the originating provider playlist. Local favorites and compatible playlists can sync across devices through a self-hosted [LX Sync Server](https://github.com/lyswhut/lx-music-sync-server). Source scripts are managed locally on each device.
+
+## Screenshots
+
+| Library | Home | Home with collapsed navigation |
+|:---:|:---:|:---:|
+| <img src="platforms/ios/docs/screenshots/library.png" width="200" alt="iMusic Library"> | <img src="platforms/ios/docs/screenshots/home.png" width="200" alt="iMusic Home"> | <img src="platforms/ios/docs/screenshots/home-collapsed-navigation.png" width="200" alt="iMusic Home with collapsed navigation"> |
+| Lyrics | Now Playing |  |
+| <img src="platforms/ios/docs/screenshots/lyrics.png" width="200" alt="iMusic lyrics screen"> | <img src="platforms/ios/docs/screenshots/now-playing.png" width="200" alt="iMusic Now Playing screen"> |  |
 
 ## Features
 

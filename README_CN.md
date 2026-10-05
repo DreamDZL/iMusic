@@ -1,3 +1,5 @@
+<div align="right">简体中文 | <a href="README.en.md">English</a></div>
+
 <div align="center">
 
 <img src="platforms/ios/docs/iMusicIcon.png" width="140" alt="iMusic" />
@@ -19,6 +21,14 @@ iMusic 基于 [Moumusic](https://github.com/jiajia2222/Moumusic) 的原生 iOS �
 QQ 音乐和网易云公开歌单会导入为可编辑的本地副本。对这些副本的编辑只作用于 iMusic 中的副本，不会写回来源平台歌单。本地收藏和兼容歌单可通过自托管的 [LX Sync Server](https://github.com/lyswhut/lx-music-sync-server) 在设备间同步。音源脚本由每台设备分别管理。
 
 登录网易云后，可在“我喜欢的音乐”中把账号红心复制到 iMusic 本地收藏。这是单向导入；之后的改动只保存在 iMusic 并可经 LX Sync 同步。
+
+## 界面预览
+
+| 资料库 | 主页 | 主页（导航栏收起） |
+|:---:|:---:|:---:|
+| <img src="platforms/ios/docs/screenshots/library.png" width="200" alt="iMusic 资料库"> | <img src="platforms/ios/docs/screenshots/home.png" width="200" alt="iMusic 主页"> | <img src="platforms/ios/docs/screenshots/home-collapsed-navigation.png" width="200" alt="iMusic 主页滚动时收起导航栏"> |
+| 歌词页面 | 播放页面 |  |
+| <img src="platforms/ios/docs/screenshots/lyrics.png" width="200" alt="iMusic 歌词页面"> | <img src="platforms/ios/docs/screenshots/now-playing.png" width="200" alt="iMusic 播放页面"> |  |
 
 ## 功能
 
