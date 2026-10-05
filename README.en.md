@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<img src="platforms/ios/docs/iMusicIcon.png" width="140" alt="iMusic" />
+<img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/iMusicIcon.png" width="140" alt="iMusic" />
 
 # iMusic
 
@@ -25,9 +25,9 @@ QQ Music and NetEase public playlists are imported as editable local copies. Edi
 
 | Library | Home | Home with collapsed navigation |
 |:---:|:---:|:---:|
-| <img src="platforms/ios/docs/screenshots/library.png" width="200" alt="iMusic Library"> | <img src="platforms/ios/docs/screenshots/home.png" width="200" alt="iMusic Home"> | <img src="platforms/ios/docs/screenshots/home-collapsed-navigation.png" width="200" alt="iMusic Home with collapsed navigation"> |
+| <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/library.png" width="200" alt="iMusic Library"> | <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/home.png" width="200" alt="iMusic Home"> | <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/home-collapsed-navigation.png" width="200" alt="iMusic Home with collapsed navigation"> |
 | Lyrics | Now Playing |  |
-| <img src="platforms/ios/docs/screenshots/lyrics.png" width="200" alt="iMusic lyrics screen"> | <img src="platforms/ios/docs/screenshots/now-playing.png" width="200" alt="iMusic Now Playing screen"> |  |
+| <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/lyrics.png" width="200" alt="iMusic lyrics screen"> | <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/now-playing.png" width="200" alt="iMusic Now Playing screen"> |  |
 
 ## Features
 

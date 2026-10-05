@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<img src="platforms/ios/docs/iMusicIcon.png" width="140" alt="iMusic" />
+<img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/iMusicIcon.png" width="140" alt="iMusic" />
 
 # iMusic
 
@@ -26,9 +26,9 @@ QQ 音乐和网易云公开歌单会导入为可编辑的本地副本。对这�
 
 | 资料库 | 主页 | 主页（导航栏收起） |
 |:---:|:---:|:---:|
-| <img src="platforms/ios/docs/screenshots/library.png" width="200" alt="iMusic 资料库"> | <img src="platforms/ios/docs/screenshots/home.png" width="200" alt="iMusic 主页"> | <img src="platforms/ios/docs/screenshots/home-collapsed-navigation.png" width="200" alt="iMusic 主页滚动时收起导航栏"> |
+| <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/library.png" width="200" alt="iMusic 资料库"> | <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/home.png" width="200" alt="iMusic 主页"> | <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/home-collapsed-navigation.png" width="200" alt="iMusic 主页滚动时收起导航栏"> |
 | 歌词页面 | 播放页面 |  |
-| <img src="platforms/ios/docs/screenshots/lyrics.png" width="200" alt="iMusic 歌词页面"> | <img src="platforms/ios/docs/screenshots/now-playing.png" width="200" alt="iMusic 播放页面"> |  |
+| <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/lyrics.png" width="200" alt="iMusic 歌词页面"> | <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/now-playing.png" width="200" alt="iMusic 播放页面"> |  |
 
 ## 功能
 
