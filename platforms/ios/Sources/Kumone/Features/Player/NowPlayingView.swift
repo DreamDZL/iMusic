@@ -2278,6 +2278,26 @@ private struct IOSMinimalLyricsColumn: View {
                                 proxy.scrollTo(index, anchor: .center)
                             }
                         }
+                        .onChange(of: player.seekRevision) { _ in
+                            // A manual lyric scroll temporarily owns the list
+                            // position. An explicit playback seek (including
+                            // scrubbing the progress bar) must take ownership
+                            // back and align the visible line to the new clock.
+                            scrollSettleTask?.cancel()
+                            scrollSettleTask = nil
+                            selectionTimeoutTask?.cancel()
+                            selectionTimeoutTask = nil
+                            pendingLyricSeekID = nil
+                            suppressesAutoScroll = false
+                            isDragging = false
+                            selectedIndex = nil
+                            nearestIndex = nil
+                            activeIndex = lyricsCursor.activeIndex
+                            guard let index = lyricsCursor.activeIndex else { return }
+                            withAnimation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.32)) {
+                                proxy.scrollTo(index, anchor: .center)
+                            }
+                        }
                         .onChange(of: player.currentTrack?.playbackKey) { _ in
                             activeIndex = nil
                             selectedIndex = nil

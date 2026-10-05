@@ -88,6 +88,19 @@ struct LocalPlaylistsView: View {
             PlayerClearanceSpacer()
         }
         .navigationTitle("资料库")
+#if os(iOS)
+        .refreshable {
+            let sync = LXSyncService.shared
+            guard !sync.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            do {
+                try await sync.refreshFromServer()
+            } catch {
+                // LXSyncService publishes connection/sync errors for the sync
+                // screen; keep the pull gesture itself from surfacing a
+                // duplicate SwiftUI error presentation.
+            }
+        }
+#endif
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 if isSelectingPlaylists {

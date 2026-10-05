@@ -531,6 +531,17 @@ final class LXSyncService: ObservableObject {
         }
     }
 
+    /// Reopens the server session so its full list handshake runs again.
+    /// Sending a local snapshot on an already-connected socket only publishes
+    /// this device's current state; a fresh handshake also fetches remote lists.
+    func refreshFromServer() async throws {
+        cancelScheduledReconnect()
+        if isConnected || isConnecting {
+            disconnectSocket(message: "正在重新同步资料库…")
+        }
+        try await syncNow()
+    }
+
     func disconnect() {
         userRequestedDisconnect = true
         cancelScheduledReconnect()

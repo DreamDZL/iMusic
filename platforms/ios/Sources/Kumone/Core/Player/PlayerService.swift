@@ -255,6 +255,9 @@ final class PlayerService: ObservableObject {
     @Published private(set) var playNextList: [Track] = []
     @Published private(set) var currentIndex = -1
     @Published private(set) var currentTrack: Track?
+    /// Changes whenever playback position is explicitly sought. Lyrics use
+    /// this to leave a manually selected line and follow the playback clock.
+    @Published private(set) var seekRevision = 0
     private var queueItemIDs: [String] = []
     private var shuffledQueueItemIDs: [String] = []
     private var playNextItemIDs: [String] = []
@@ -962,6 +965,7 @@ final class PlayerService: ObservableObject {
 
     func seek(to seconds: TimeInterval, completion: (@MainActor () -> Void)? = nil) {
         let target = seconds.isFinite ? max(0, seconds) : 0
+        seekRevision &+= 1
         let itemAvailable = !isResolvingSource && engine.currentItem != nil
         let generation = seekCoordinator.beginSeek(to: target, itemAvailable: itemAvailable)
         isScrubbing = itemAvailable || isResolvingSource
@@ -1151,15 +1155,9 @@ final class PlayerService: ObservableObject {
 
     func startFM() {
         guard !isFMMode || !isPlaying else { return }
-#if os(iOS)
-        if SettingsManager.shared.homeRecommendationMode == .lx,
-           LXSourceStore.shared.selectedSource == nil {
-            ToastCenter.shared.show("请先在设置 → LX 音源中选择一个播放音源")
-            return
-        }
-#endif
         recordRecent(.fm)
         isFMMode = true
+        fmUpcoming.removeAll()
         shuffleEnabled = false
         repeatMode = .off
         queue = []
@@ -1181,34 +1179,12 @@ final class PlayerService: ObservableObject {
     func fmTrash() {
         guard isFMMode, let track = currentTrack else { return }
         Task {
-            await fmAdvance()
-#if os(iOS)
-            guard SettingsManager.shared.homeRecommendationMode != .lx else { return }
-#endif
             try? await NeteaseAPI.fmTrash(id: track.id)
+            await fmAdvance()
         }
     }
 
     private func fmAdvance() async {
-#if os(iOS)
-        if SettingsManager.shared.homeRecommendationMode == .lx {
-            guard LXSourceStore.shared.selectedSource != nil else {
-                ToastCenter.shared.show("请先在设置 → LX 音源中选择一个播放音源")
-                return
-            }
-            if fmUpcoming.isEmpty {
-                let platform = SettingsManager.shared.homeRecommendationPlatform
-                fmUpcoming = (try? await LXCatalogService.recommendedTracks(platform: platform, limit: 30)) ?? []
-            }
-            guard !fmUpcoming.isEmpty else {
-                ToastCenter.shared.show("LX 漫游暂时没有歌曲，请检查网络或更换推荐平台")
-                return
-            }
-            let track = fmUpcoming.removeFirst()
-            startPlaying(track, indexUnchanged: true)
-            return
-        }
-#endif
         if fmUpcoming.isEmpty {
             for attempt in 0..<3 {
                 if let tracks = try? await NeteaseAPI.personalFM(), !tracks.isEmpty {
