@@ -363,6 +363,7 @@ struct NowPlayingView: View {
         // pages. Its transparent footprint remains tappable while hidden so
         // lyrics can never steal the gesture intended to reveal controls.
         let controlsHeight: CGFloat = 228
+        let reservesControlsSpace = !showLyricsOnMobile || lyricsControlsVisible
 
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
@@ -390,9 +391,14 @@ struct NowPlayingView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                // Reserve the same geometry even when lyrics controls fade.
-                Color.clear
-                    .frame(height: controlsHeight)
+                // Let lyrics continue behind the transparent reveal area when
+                // controls are hidden. Keep the space reserved on the song
+                // page and while the lyric controls are visible, so the deck
+                // never shifts vertically between its two normal states.
+                if reservesControlsSpace {
+                    Color.clear
+                        .frame(height: controlsHeight)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
