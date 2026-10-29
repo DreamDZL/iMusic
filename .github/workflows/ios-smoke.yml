@@ -15,7 +15,9 @@ on:
 
 concurrency:
   group: ios-smoke-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Keep the active simulator run; newer commits replace a queued run instead
+  # of terminating XCTest mid-flight and leaving no result bundle.
+  cancel-in-progress: false
 
 jobs:
   launch:
