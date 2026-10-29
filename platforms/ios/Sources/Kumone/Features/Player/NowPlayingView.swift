@@ -434,12 +434,16 @@ struct NowPlayingView: View {
                 primaryTransportControls
                     .frame(height: 64)
                     .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("nowPlayingTransportControls")
+                    .accessibilityIdentifier(
+                        showLyricsOnMobile ? "lyricsTransportControls" : "nowPlayingTransportControls"
+                    )
 
                 CompactVolumeControl()
                     .frame(height: 28)
                     .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("nowPlayingVolumeControl")
+                    .accessibilityIdentifier(
+                        showLyricsOnMobile ? "lyricsVolumeControl" : "nowPlayingVolumeControl"
+                    )
 
                 songPageAccessoryControls
                     .frame(height: 44)
