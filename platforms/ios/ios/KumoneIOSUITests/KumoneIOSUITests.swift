@@ -134,6 +134,10 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(lyricsPage.waitForExistence(timeout: 10))
         let lyricsScroll = app.scrollViews["synchronizedLyricsScrollView"]
         XCTAssertTrue(lyricsScroll.waitForExistence(timeout: 10))
+        // The lyrics page intentionally auto-hides the playback deck after a
+        // short idle period. Reveal it after the navigation waits so this
+        // assertion verifies the user interaction, not a timing accident.
+        lyricsPage.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let transportControls = app.descendants(matching: .any)["lyricsTransportControls"]
         let volumeControl = app.descendants(matching: .any)["lyricsVolumeControl"]
         let songTransportControls = app.descendants(matching: .any)["nowPlayingTransportControls"]
