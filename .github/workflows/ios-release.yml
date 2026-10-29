@@ -7,10 +7,19 @@ on:
       - main
     tags:
       - "v*"
+    paths:
+      - 'platforms/ios/**'
+      - '.github/workflows/ios-release.yml'
+
+concurrency:
+  group: ios-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: xcode-27
+    # Use the public hosted image rather than the non-standard `xcode-27`
+    # label, so a clean repository can actually reach the macOS builder.
+    runs-on: macos-26
     permissions:
       contents: write
 
@@ -21,8 +30,9 @@ jobs:
       - name: Generate Xcode project
         working-directory: platforms/ios/ios
         run: |
+          set -euo pipefail
           brew untap aws/tap || true
-          brew install xcodegen
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
           xcodegen generate
 
       - name: Run feature tests
@@ -100,6 +110,11 @@ jobs:
             echo "Bundle version mismatch: expected $EXPECTED_VERSION, got $actual" >&2
             exit 1
           fi
+          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
+          if [[ "$bundle_id" != "com.jiajia2222.imusic.ios" ]]; then
+            echo "Bundle identifier mismatch: $bundle_id" >&2
+            exit 1
+          fi
 
       - name: Package unsigned IPA
         working-directory: platforms/ios/ios
@@ -111,6 +126,16 @@ jobs:
             exit 1
           fi
           ditto -c -k --sequesterRsrc --keepParent dist/Payload dist/iMusic-unsigned.ipa
+
+      - name: Inspect IPA contents
+        working-directory: platforms/ios/ios
+        run: |
+          set -euo pipefail
+          unzip -l dist/iMusic-unsigned.ipa | grep -F 'Payload/iMusic.app/' >/dev/null
+          if unzip -l dist/iMusic-unsigned.ipa | grep -E '\.appex/' >/dev/null; then
+            echo 'Unexpected app extension in IPA' >&2
+            exit 1
+          fi
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4

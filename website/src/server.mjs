@@ -14,12 +14,12 @@ const afdianApiBases = [
   'https://ifdian.net/api/open',
   'https://afdian.net/api/open',
 ]
-const githubReleasesUrl = 'https://api.github.com/repos/jiajia2222/Moumusic/releases?per_page=20'
-const githubReleasesPage = 'https://github.com/jiajia2222/Moumusic/releases'
-const githubReleaseDownloadBase = 'https://github.com/jiajia2222/Moumusic/releases/latest/download'
+const githubRepository = 'DreamDZL/iMusic'
+const githubReleasesUrl = `https://api.github.com/repos/${githubRepository}/releases?per_page=20`
+const githubReleasesPage = `https://github.com/${githubRepository}/releases`
+const githubReleaseDownloadBase = `https://github.com/${githubRepository}/releases/latest/download`
 const releaseAssetNames = {
-  ios: ['Moumusic-unsigned.ipa'],
-  android: ['Moumusic-android-unsigned.apk', 'moumusic-mobile-v1.0.2-universal.apk'],
+  ios: ['iMusic-unsigned.ipa'],
 }
 const defaultAfdianUrl = 'https://www.ifdian.net/a/moumou2026'
 const defaultAfdianPlanUrl = 'https://ifdian.net/a/moumou2026/plan'
@@ -108,7 +108,7 @@ async function getLatestTaggedAsset(platform) {
     if (!releasePage.ok || !tagMatch) return null
     const tag = decodeURIComponent(tagMatch[1])
     for (const name of releaseAssetNames[platform] || []) {
-      const url = `https://github.com/jiajia2222/Moumusic/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`
+      const url = `https://github.com/${githubRepository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`
       const response = await fetch(url, { redirect: 'manual' })
       if (response.ok || [301, 302, 303, 307, 308].includes(response.status)) return { url, version: tag }
     }
@@ -137,13 +137,13 @@ async function getLatestReleaseAsset(platform) {
       const release = Array.isArray(releases)
         ? releases.find(item => item?.draft !== true && item?.prerelease !== true && Array.isArray(item?.assets) && (
           platform === 'ios'
-            ? item.assets.some(asset => asset?.name === 'Moumusic-unsigned.ipa' || /\.ipa$/i.test(asset?.name || ''))
+            ? item.assets.some(asset => asset?.name === 'iMusic-unsigned.ipa' || /\.ipa$/i.test(asset?.name || ''))
             : item.assets.some(asset => /universal\.apk$/i.test(asset?.name || '') || /\.apk$/i.test(asset?.name || ''))
         ))
         : null
       const assets = Array.isArray(release?.assets) ? release.assets : []
       const asset = platform === 'ios'
-        ? assets.find(item => item?.name === 'Moumusic-unsigned.ipa') || assets.find(item => /\.ipa$/i.test(item?.name || ''))
+        ? assets.find(item => item?.name === 'iMusic-unsigned.ipa') || assets.find(item => /\.ipa$/i.test(item?.name || ''))
         : assets.find(item => /universal\.apk$/i.test(item?.name || '')) || assets.find(item => /\.apk$/i.test(item?.name || ''))
       const url = safeHttpUrl(asset?.browser_download_url)
       if (url) {

@@ -319,16 +319,36 @@ final class LocalPlaylistStore: ObservableObject {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         if let data = defaults.data(forKey: key) {
-            playlists = (try? decoder.decode([LocalPlaylist].self, from: data))
-                ?? (try? JSONDecoder().decode([LocalPlaylist].self, from: data))
-                ?? []
+            if let decoded = (try? decoder.decode([LocalPlaylist].self, from: data))
+                ?? (try? JSONDecoder().decode([LocalPlaylist].self, from: data)) {
+                playlists = decoded
+            } else {
+                // Preserve malformed user data for recovery instead of silently
+                // replacing the entire library with an empty collection.
+                defaults.set(data, forKey: Self.recoveryKey(for: key))
+                playlists = []
+            }
         } else { playlists = [] }
         if let data = defaults.data(forKey: favoritesKey) {
-            favoriteTracks = (try? JSONDecoder().decode([Track].self, from: data)) ?? []
+            if let decoded = try? JSONDecoder().decode([Track].self, from: data) {
+                favoriteTracks = decoded
+            } else {
+                defaults.set(data, forKey: Self.recoveryKey(for: favoritesKey))
+                favoriteTracks = []
+            }
         } else { favoriteTracks = [] }
         if let data = defaults.data(forKey: recentTracksKey) {
-            recentTracks = (try? JSONDecoder().decode([Track].self, from: data)) ?? []
+            if let decoded = try? JSONDecoder().decode([Track].self, from: data) {
+                recentTracks = decoded
+            } else {
+                defaults.set(data, forKey: Self.recoveryKey(for: recentTracksKey))
+                recentTracks = []
+            }
         } else { recentTracks = [] }
+    }
+
+    private static func recoveryKey(for key: String) -> String {
+        "\(key).recovery.\(UUID().uuidString)"
     }
 
     func recordRecent(_ track: Track) {

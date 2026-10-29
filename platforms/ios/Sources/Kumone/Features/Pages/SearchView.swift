@@ -388,6 +388,15 @@ struct SearchView: View {
     @State private var searchText: String = ""
     @State private var searchDebounceTask: Task<Void, Never>?
 
+    private let browseCategories: [(title: String, color: Color)] = [
+        ("华语", Color(red: 0.88, green: 0.22, blue: 0.31)),
+        ("流行", Color(red: 0.86, green: 0.39, blue: 0.20)),
+        ("摇滚", Color(red: 0.54, green: 0.26, blue: 0.55)),
+        ("电子", Color(red: 0.22, green: 0.38, blue: 0.72)),
+        ("古典", Color(red: 0.15, green: 0.48, blue: 0.53)),
+        ("影视原声", Color(red: 0.52, green: 0.37, blue: 0.24)),
+    ]
+
     init(query: String) {
         _model = StateObject(wrappedValue: SearchViewModel(query: query))
         _searchText = State(initialValue: query)
@@ -585,6 +594,41 @@ struct SearchView: View {
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity)
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("浏览类别")
+                    .font(.title3.weight(.bold))
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    ForEach(browseCategories, id: \.title) { category in
+                        Button {
+                            performSearch(category.title)
+                        } label: {
+                            HStack(alignment: .top) {
+                                Text(category.title)
+                                    .font(.headline.weight(.bold))
+                                    .multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                                Image(systemName: "music.note")
+                                    .font(.title3.weight(.semibold))
+                                    .opacity(0.85)
+                            }
+                            .foregroundStyle(.white)
+                            .padding(14)
+                            .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading)
+                            .background(
+                                LinearGradient(
+                                    colors: [category.color, category.color.opacity(0.72)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("searchBrowse-\(category.title)")
+                    }
+                }
+            }
 
             if !model.hotKeywords.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {

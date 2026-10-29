@@ -12,11 +12,14 @@ final class NowPlayingManager {
     private var baseAlbumTitle = ""
     private var baseArtist = ""
     private var currentLyric = ""
+    private var isAttached = false
 
     private init() {}
 
     func attach(to player: PlayerService) {
         self.player = player
+        guard !isAttached else { return }
+        isAttached = true
         let center = MPRemoteCommandCenter.shared()
 
         center.playCommand.addTarget { [weak player] _ in
@@ -69,13 +72,16 @@ final class NowPlayingManager {
             MPMediaItemPropertyAlbumTitle: track.album.name,
             MPMediaItemPropertyPlaybackDuration: duration,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0,
-            MPNowPlayingInfoPropertyPlaybackRate: 1.0,
+            MPNowPlayingInfoPropertyPlaybackRate: 0.0,
             // Declare the session as audio so system surfaces treat it as a
             // complete now-playing app (best-effort hardening for #36/#40).
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
         ]
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        MPNowPlayingInfoCenter.default().playbackState = .playing
+        // Metadata is published before the asynchronous source resolver has a
+        // playable AVPlayerItem. Do not advertise playback until the engine
+        // confirms that it actually started.
+        MPNowPlayingInfoCenter.default().playbackState = .paused
         refreshLikeState()
 
         artworkTask?.cancel()

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Public, redacted sponsor data exposed by Moumusic's server-side Afdian
+/// Public, redacted sponsor data exposed by iMusic's server-side Afdian
 /// adapter. The Afdian token never enters the app.
 actor AfdianSponsorService {
     static let shared = AfdianSponsorService()
@@ -42,7 +42,7 @@ actor AfdianSponsorService {
         }
     }
 
-    private let baseURL = URL(string: "https://music.nadev.xyz/api/aifadian")!
+    private let baseURL = URL(string: "https://music.nadev.xyz/api/aifadian")
     private let session: URLSession
     private let decoder = JSONDecoder()
 
@@ -54,8 +54,8 @@ actor AfdianSponsorService {
     }
 
     func load() async throws -> Snapshot {
-        async let sponsors: [Sponsor] = fetch(path: "sponsors", key: "supporters")
-        async let stats: Stats = fetch(path: "stats", key: "stats")
+        async let sponsors = fetchSponsors()
+        async let stats = fetchStats()
         do {
             return Snapshot(sponsors: try await sponsors, stats: try await stats)
         } catch is CancellationError {
@@ -65,12 +65,27 @@ actor AfdianSponsorService {
         }
     }
 
-    private func fetch<Value: Decodable>(path: String, key: String) async throws -> Value {
+    private func fetchSponsors() async throws -> [Sponsor] {
+        guard let sponsors = try await fetchEnvelope(path: "sponsors").supporters else {
+            throw ServiceError.invalidResponse
+        }
+        return sponsors
+    }
+
+    private func fetchStats() async throws -> Stats {
+        guard let stats = try await fetchEnvelope(path: "stats").stats else {
+            throw ServiceError.invalidResponse
+        }
+        return stats
+    }
+
+    private func fetchEnvelope(path: String) async throws -> Envelope {
+        guard let baseURL else { throw ServiceError.unavailable }
         let url = baseURL.appendingPathComponent(path)
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("Moumusic-iOS", forHTTPHeaderField: "User-Agent")
+        request.setValue("iMusic-iOS", forHTTPHeaderField: "User-Agent")
 
         let (data, response): (Data, URLResponse)
         do {
@@ -83,25 +98,15 @@ actor AfdianSponsorService {
         guard (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else {
             throw ServiceError.unavailable
         }
-        guard let envelope = try? decoder.decode(Envelope<Value>.self, from: data), envelope.success else {
+        guard let envelope = try? decoder.decode(Envelope.self, from: data), envelope.success else {
             throw ServiceError.invalidResponse
         }
-        return try envelope.value(for: key)
+        return envelope
     }
 
-    private struct Envelope<Value: Decodable>: Decodable {
+    private struct Envelope: Decodable {
         let success: Bool
         let supporters: [Sponsor]?
         let stats: Stats?
-
-        func value(for key: String) throws -> Value {
-            if key == "supporters", let supporters {
-                return supporters as! Value
-            }
-            if key == "stats", let stats {
-                return stats as! Value
-            }
-            throw ServiceError.invalidResponse
-        }
     }
 }

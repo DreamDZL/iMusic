@@ -3,12 +3,14 @@ import CommonCrypto
 import Combine
 import Foundation
 import JavaScriptCore
+import OSLog
 import Security
 
 /// iOS counterpart of LX Mobile's QuickJS bridge.  The provider script stays
 /// user supplied; this class only implements the LX 2.0 host protocol.
 @MainActor
 final class LXUserAPIService: ObservableObject {
+    private let logger = Logger(subsystem: "com.jiajia2222.imusic.ios", category: "LXSource")
     struct ResolvedURL {
         let url: URL
         let quality: String
@@ -124,7 +126,7 @@ final class LXUserAPIService: ObservableObject {
 
         let js = JSContext()
         js?.exceptionHandler = { _, exception in
-            if let exception { print("[LX] JavaScript error: \(exception)") }
+            if let exception { Logger(subsystem: "com.jiajia2222.imusic.ios", category: "LXSource.Script").error("JavaScript exception: \(exception.toString(), privacy: .private)") }
         }
         context = js
         key = UUID().uuidString
@@ -150,7 +152,7 @@ final class LXUserAPIService: ObservableObject {
             context = nil
             pendingInitializationID = nil
             statusMessage = "LX 音源脚本错误：\(exception.toString())"
-            print("[LX] failed to load source \(source.name): \(exception)")
+            logger.error("Failed to load LX source \(source.name, privacy: .private): \(exception.toString(), privacy: .private)")
         }
         if context != nil {
             scheduleInitializationFallback(for: source.id)
@@ -589,7 +591,7 @@ final class LXUserAPIService: ObservableObject {
 
     private func installHostFunctions(in js: JSContext) {
         let consoleLog: @convention(block) (String) -> Void = { message in
-            print("[LX] \(message)")
+            Logger(subsystem: "com.jiajia2222.imusic.ios", category: "LXSource.Script").debug("\(message, privacy: .private)")
         }
         let console = JSValue(newObjectIn: js)
         console?.setObject(consoleLog, forKeyedSubscript: "log" as NSString)

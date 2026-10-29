@@ -27,9 +27,14 @@ platforms/ios/ios/.swiftpm/
 platforms/ios/.build/
 
 # generated release artifacts
+/artifacts/
 dist/
 *.ipa
 *.apk
+*.mobileprovision
+*.p12
+*.xcresult/
+platforms/ios/ios/CarPlay.local.xcconfig
 
 # Sponsor website secrets and local dependencies
 website/.env

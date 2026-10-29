@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OSLog
 
 enum RepeatMode: String, CaseIterable {
     case off, all, one
@@ -247,6 +248,7 @@ final class LyricsCursor: ObservableObject {
 @MainActor
 final class PlayerService: ObservableObject {
     static let shared = PlayerService()
+    private let logger = Logger(subsystem: "com.jiajia2222.imusic.ios", category: "Playback")
 
     // MARK: - Observable state
 
@@ -715,8 +717,9 @@ final class PlayerService: ObservableObject {
         case .ended:
             let optionsValue = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
             let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-            guard wasPlayingBeforeInterruption, options.contains(.shouldResume) else { return }
+            let shouldResume = wasPlayingBeforeInterruption && options.contains(.shouldResume)
             wasPlayingBeforeInterruption = false
+            guard shouldResume else { return }
             guard activateAudioSession() else {
                 isPlaying = false
                 NowPlayingManager.shared.updateElapsed(progress, rate: 0)
@@ -740,7 +743,7 @@ final class PlayerService: ObservableObject {
             audioSessionActive = true
             return true
         } catch {
-            print("Failed to activate audio session: \(error)")
+            logger.error("Failed to activate audio session: \(String(describing: error), privacy: .private)")
             return false
         }
     }
@@ -754,7 +757,7 @@ final class PlayerService: ObservableObject {
             )
             audioSessionActive = false
         } catch {
-            print("Failed to deactivate audio session: \(error)")
+            logger.error("Failed to deactivate audio session: \(String(describing: error), privacy: .private)")
         }
     }
     #endif
