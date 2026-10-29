@@ -298,7 +298,7 @@ struct NowPlayingView: View {
                     appleMusicLyricsPage()
                         .padding(.bottom, 54)
                 } else {
-                    let artworkSize = min(size.height - 124, 240)
+                    let artworkSize = max(0, min(size.height - 124, 240))
                     HStack(spacing: 28) {
                         artworkView(size: artworkSize)
 
@@ -358,7 +358,11 @@ struct NowPlayingView: View {
     @ViewBuilder
     private func appleMusicCompactLayout(size: CGSize) -> some View {
         let isShortScreen = size.height < 680
-        let artworkSize = min(size.width - 52, size.height * (isShortScreen ? 0.34 : 0.39), 360)
+        let artworkSize = max(0, min(
+            size.width - 52,
+            size.height * (isShortScreen ? 0.34 : 0.39),
+            360
+        ))
         // Keep the full playback deck at one fixed screen position on both
         // pages. Its transparent footprint remains tappable while hidden so
         // lyrics can never steal the gesture intended to reveal controls.
@@ -604,7 +608,7 @@ struct NowPlayingView: View {
 
 
     private func classicCompactLayout(size: CGSize) -> some View {
-        let artworkDim = min(size.width - 64, size.height * 0.38, 300)
+        let artworkDim = max(0, min(size.width - 64, size.height * 0.38, 300))
         return VStack(spacing: 20) {
             Spacer().frame(height: 44)
             if showLyricsOnMobile {
@@ -653,7 +657,7 @@ struct NowPlayingView: View {
     }
 
     private func vinylCompactLayout(size: CGSize) -> some View {
-        let artworkDim = min(size.width - 72, size.height * 0.43, 310)
+        let artworkDim = max(0, min(size.width - 72, size.height * 0.43, 310))
         return VStack(spacing: 16) {
             Spacer().frame(height: 34)
             VinylTurntableView(
@@ -685,7 +689,7 @@ struct NowPlayingView: View {
 
     #if os(iOS)
     private func immersiveCompactLayout(size: CGSize) -> some View {
-        let artworkDimension = min(size.width - 112, size.height * 0.3, 250)
+        let artworkDimension = max(0, min(size.width - 112, size.height * 0.3, 250))
         let showsExpandedArtwork = !showLyricsOnMobile && !showQueueOnMobile
 
         return VStack(spacing: 0) {
