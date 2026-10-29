@@ -3,7 +3,7 @@ import XCTest
 @testable import KumoneCore
 
 final class PlaybackStateFileStoreTests: XCTestCase {
-    func testWriteCreatesDirectoryAndAtomicallyReplacesPriorState() throws {
+    func testWriteReplacesTheCompletePriorPayload() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("PlaybackStateFileStoreTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -17,20 +17,30 @@ final class PlaybackStateFileStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), newState)
     }
 
-    func testWriteFailureKeepsExistingStateAndReportsErrorToCaller() throws {
+    func testWriteFailureKeepsExistingState() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("PlaybackStateFileStoreTests-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o700))],
+                ofItemAtPath: root.path
+            )
+            try? FileManager.default.removeItem(at: root)
+        }
 
-        let blockingFile = root.appendingPathComponent("not-a-directory")
+        let file = root.appendingPathComponent("player-state.json")
         let oldState = Data("recoverable old queue".utf8)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try oldState.write(to: blockingFile)
+        try oldState.write(to: file)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o500))],
+            ofItemAtPath: root.path
+        )
 
         XCTAssertThrowsError(try PlaybackStateFileStore.write(
             Data("replacement queue".utf8),
-            to: blockingFile.appendingPathComponent("player-state.json")
+            to: file
         ))
-        XCTAssertEqual(try Data(contentsOf: blockingFile), oldState)
+        XCTAssertEqual(try Data(contentsOf: file), oldState)
     }
 }

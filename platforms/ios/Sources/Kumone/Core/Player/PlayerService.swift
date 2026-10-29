@@ -1991,7 +1991,13 @@ final class PlayerService: ObservableObject {
             recentContexts: recentContexts,
             playNextQueue: Array(playNextList.prefix(200))
         )
-        guard let data = try? JSONEncoder().encode(state) else { return }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(state)
+        } catch {
+            logger.error("Unable to encode playback state: \(String(describing: error), privacy: .private)")
+            return
+        }
         let url = Self.stateFileURL
         let logger = self.logger
         Self.stateWriteQueue.async {
