@@ -137,8 +137,11 @@ final class KumoneIOSUITests: XCTestCase {
         let transportControls = app.descendants(matching: .any)["lyricsTransportControls"]
         let volumeControl = app.descendants(matching: .any)["lyricsVolumeControl"]
         let songTransportControls = app.descendants(matching: .any)["nowPlayingTransportControls"]
-        XCTAssertTrue(transportControls.exists)
-        XCTAssertTrue(volumeControl.exists)
+        // The lyrics page animates its control reveal after the navigation
+        // transition. Assert eventual visibility rather than sampling the
+        // first frame after the tap, which is flaky on slower CI simulators.
+        XCTAssertTrue(transportControls.waitForExistence(timeout: 5))
+        XCTAssertTrue(volumeControl.waitForExistence(timeout: 5))
         XCTAssertTrue(accessoryControls.exists, "The accessory row must stay visible on both player pages")
         XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
                        "The accessory row must not jump when switching to lyrics")
