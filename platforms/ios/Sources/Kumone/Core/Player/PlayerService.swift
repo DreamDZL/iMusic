@@ -1993,8 +1993,13 @@ final class PlayerService: ObservableObject {
         )
         guard let data = try? JSONEncoder().encode(state) else { return }
         let url = Self.stateFileURL
+        let logger = self.logger
         Self.stateWriteQueue.async {
-            try? data.write(to: url, options: .atomic)
+            do {
+                try PlaybackStateFileStore.write(data, to: url)
+            } catch {
+                logger.error("Unable to persist playback state: \(String(describing: error), privacy: .private)")
+            }
         }
     }
 
@@ -2062,10 +2067,13 @@ final class PlayerService: ObservableObject {
     }
 
     private static var stateFileURL: URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("Kumone", isDirectory: true)
-        try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        return support.appendingPathComponent("player-state.json")
+        let directory = support.lastPathComponent == "Kumone"
+            ? support
+            : support.appendingPathComponent("Kumone", isDirectory: true)
+        return directory.appendingPathComponent("player-state.json")
     }
 
     private static func validItemIDs(_ values: [String]?, count: Int) -> [String] {
