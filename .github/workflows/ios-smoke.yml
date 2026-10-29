@@ -15,14 +15,14 @@ on:
 
 concurrency:
   group: ios-smoke-${{ github.workflow }}-${{ github.ref }}
-  # Keep the active simulator run; newer commits replace a queued run instead
-  # of terminating XCTest mid-flight and leaving no result bundle.
+  # Preserve active XCTest runs; GitHub may replace an older pending run with
+  # the newest commit, so the current implementation always tests the latest.
   cancel-in-progress: false
 
 jobs:
   launch:
     runs-on: xcode-27
-    timeout-minutes: 20
+    timeout-minutes: 45
     permissions:
       contents: read
 

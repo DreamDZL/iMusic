@@ -13,11 +13,12 @@ on:
 
 concurrency:
   group: ios-release-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: xcode-27
+    timeout-minutes: 60
     permissions:
       contents: write
 
