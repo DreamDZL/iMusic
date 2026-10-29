@@ -19,9 +19,7 @@ concurrency:
 
 jobs:
   launch:
-    # `xcode-27` is not a standard GitHub-hosted runner label. macos-26 is
-    # the hosted image that provides the Xcode 27 toolchain for this target.
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 20
     permissions:
       contents: read

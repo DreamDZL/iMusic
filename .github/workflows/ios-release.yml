@@ -17,9 +17,7 @@ concurrency:
 
 jobs:
   build:
-    # Use the public hosted image rather than the non-standard `xcode-27`
-    # label, so a clean repository can actually reach the macOS builder.
-    runs-on: macos-26
+    runs-on: xcode-27
     permissions:
       contents: write
 
