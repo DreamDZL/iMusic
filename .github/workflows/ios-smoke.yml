@@ -71,7 +71,7 @@ jobs:
 
       - name: Upload simulator test results and screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ios-simulator-test-results
           path: platforms/ios/ios/smoke-tests.xcresult

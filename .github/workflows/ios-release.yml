@@ -57,6 +57,41 @@ jobs:
             -skip-testing:KumoneIOSUITests \
             CODE_SIGNING_ALLOWED=NO
 
+      - name: Run iOS 27 UI regression tests before tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: platforms/ios/ios
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          destination_id="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; devices=json.load(sys.stdin)["devices"]; print(next((device["udid"] for runtime, entries in devices.items() if runtime.startswith("com.apple.CoreSimulator.SimRuntime.iOS-27") for device in entries if device.get("isAvailable") and device["name"].startswith("iPhone")), ""))')"
+          if [[ -z "$destination_id" ]]; then
+            echo "No available iPhone simulator with the iOS 27 runtime was found" >&2
+            xcrun simctl list devices available
+            exit 1
+          fi
+          xcrun simctl shutdown "$destination_id" || true
+          xcrun simctl boot "$destination_id"
+          xcrun simctl bootstatus "$destination_id" -b
+          xcodebuild test \
+            -project KumoneIOS.xcodeproj \
+            -scheme KumoneIOS \
+            -destination "platform=iOS Simulator,id=$destination_id" \
+            -destination-timeout 120 \
+            -parallel-testing-enabled NO \
+            -derivedDataPath build/tag-ui-derived \
+            -resultBundlePath build/tag-ui-tests.xcresult \
+            -only-testing:KumoneIOSUITests \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Upload tagged UI regression results
+        if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: ios-tag-ui-test-results
+          path: platforms/ios/ios/build/tag-ui-tests.xcresult
+          if-no-files-found: warn
+
       - name: Resolve release version
         id: version
         shell: bash
@@ -137,7 +172,7 @@ jobs:
           fi
 
       - name: Upload IPA
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: iMusic-ios-unsigned
           path: platforms/ios/ios/dist/iMusic-unsigned.ipa

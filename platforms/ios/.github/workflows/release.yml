@@ -14,6 +14,10 @@ env:
 
 jobs:
   release:
+    # This legacy workflow publishes a macOS app and an IPA in one release.
+    # iMusic's supported product is now the iOS IPA; releases must go through
+    # the root iOS workflow, which performs the iOS 27 validation gate.
+    if: ${{ false }}
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
