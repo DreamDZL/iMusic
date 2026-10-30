@@ -17,7 +17,7 @@ struct LocalPlaylistsView: View {
             Section {
                 NavigationLink(value: Destination.likedSongs) {
                     HStack(spacing: 12) {
-                        Image(systemName: "heart.fill")
+                        Image(systemName: "star.fill")
                             .font(.title3.weight(.semibold))
                             .foregroundStyle(.white)
                             .frame(width: 48, height: 48)
@@ -275,7 +275,7 @@ struct LocalPlaylistsView: View {
 
     private var likedSongsRow: some View {
         HStack(spacing: 14) {
-            Image(systemName: "heart.fill")
+            Image(systemName: "star.fill")
                 .font(.system(size: 25, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 68, height: 68)
@@ -431,7 +431,7 @@ struct LikedSongsView: View {
 
                 if store.favoriteTracks.isEmpty {
                     EmptyStateView(
-                        icon: "heart",
+                        icon: "star",
                         title: "还没有收藏歌曲",
                         subtitle: "在播放器或歌曲菜单中点按心形，即可将歌曲加入资料库"
                     )
@@ -541,7 +541,7 @@ struct LikedSongsView: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            Image(systemName: "heart.fill")
+            Image(systemName: "star.fill")
                 .font(.system(size: 34, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 84, height: 84)

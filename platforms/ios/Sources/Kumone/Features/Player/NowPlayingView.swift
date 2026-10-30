@@ -1176,7 +1176,7 @@ struct NowPlayingView: View {
             if let track = player.currentTrack {
                 let liked = localLibrary.isFavorite(track)
                 circleButton(
-                    icon: liked ? "heart.fill" : "heart",
+                        icon: liked ? "star.fill" : "star",
                     size: 15, tint: liked ? Theme.accent : nil
                 ) {
                     localLibrary.toggleFavorite(track)
@@ -1792,7 +1792,7 @@ private struct CompactTrackHeader: View {
                     Button {
                         localLibrary.toggleFavorite(track)
                     } label: {
-                        Image(systemName: liked ? "heart.fill" : "heart")
+                        Image(systemName: liked ? "star.fill" : "star")
                             .font(.system(size: 21, weight: .medium))
                             .foregroundStyle(liked ? Theme.accent : .white.opacity(0.88))
                             .frame(width: 44, height: 44)
@@ -2628,7 +2628,7 @@ private struct MinimalTrackInfoRow: View {
         return Button {
             localLibrary.toggleFavorite(track)
         } label: {
-            Image(systemName: liked ? "heart.fill" : "heart")
+            Image(systemName: liked ? "star.fill" : "star")
                 .font(.system(size: 22, weight: .medium))
                 .foregroundStyle(liked ? Theme.accent : .white.opacity(0.88))
                 .frame(width: 44, height: 44)

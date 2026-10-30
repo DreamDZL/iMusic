@@ -580,23 +580,8 @@ struct SearchView: View {
 
     private var emptySearchPrompt: some View {
         VStack(alignment: .leading, spacing: 18) {
-            VStack(spacing: 12) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 48, weight: .light))
-                    .foregroundStyle(.tertiary)
-                    .padding(.top, 44)
-                Text("搜索歌曲、歌手、专辑或歌单")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                Text("使用底部搜索框开始，聚合搜索也可以切换到单个平台。")
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity)
-
             VStack(alignment: .leading, spacing: 12) {
-                Text("浏览类别")
+                Text("快速浏览")
                     .font(.title3.weight(.bold))
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                     ForEach(browseCategories, id: \.title) { category in

@@ -322,7 +322,7 @@ final class HomeViewModel: ObservableObject {
 }
 
 struct HomeView: View {
-    @ScaledMetric(relativeTo: .headline) private var scaledFeatureCardHeight: CGFloat = Theme.Layout.featureCardBaseHeight
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var settings: SettingsManager
@@ -593,8 +593,6 @@ struct HomeView: View {
 
     // MARK: - Feature cards
 
-    private var featureCardHeight: CGFloat { min(scaledFeatureCardHeight, 360) }
-
     private var featureCards: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("为你精选")
@@ -603,6 +601,7 @@ struct HomeView: View {
 
             GeometryReader { geometry in
                 let cardWidth = min(Theme.Layout.featureCardMaxWidth, geometry.size.width * 0.78)
+                let cardHeight = min(cardWidth * 4 / 3, dynamicTypeSize.isAccessibilitySize ? 420 : 380)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 14) {
                         // Daily recommendations are always visible; the page shows
@@ -614,7 +613,7 @@ struct HomeView: View {
                                 icon: "calendar",
                                 coverURL: model.dailyFirstCover?.resizedImageURL(512),
                                 showsDate: true,
-                                size: CGSize(width: cardWidth, height: featureCardHeight)
+                                size: CGSize(width: cardWidth, height: cardHeight)
                             )
                         }
                         .buttonStyle(.plain)
@@ -628,7 +627,7 @@ struct HomeView: View {
                                 icon: "wave.3.right.circle.fill",
                                 gradient: [Color(red: 0.16, green: 0.20, blue: 0.42),
                                            Color(red: 0.36, green: 0.24, blue: 0.62)],
-                                size: CGSize(width: cardWidth, height: featureCardHeight)
+                                size: CGSize(width: cardWidth, height: cardHeight)
                             )
                         }
                         .buttonStyle(.interactiveCard)
@@ -643,7 +642,7 @@ struct HomeView: View {
                                     icon: "heart.circle.fill",
                                     gradient: [Color(red: 0.85, green: 0.19, blue: 0.41),
                                                Color(red: 0.98, green: 0.42, blue: 0.34)],
-                                    size: CGSize(width: cardWidth, height: featureCardHeight)
+                                    size: CGSize(width: cardWidth, height: cardHeight)
                                 )
                             }
                             .buttonStyle(.interactiveCard)
@@ -652,9 +651,9 @@ struct HomeView: View {
                     .padding(.horizontal, Theme.Layout.contentInset)
                     .padding(.vertical, 2)
                 }
-                .frame(height: featureCardHeight + 4)
+                .frame(height: cardHeight + 4)
             }
-            .frame(height: featureCardHeight + 4)
+            .frame(height: dynamicTypeSize.isAccessibilitySize ? 424 : 384)
         }
         .compatScrollClipDisabled()
     }

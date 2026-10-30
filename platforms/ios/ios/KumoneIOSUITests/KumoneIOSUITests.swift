@@ -33,7 +33,7 @@ final class KumoneIOSUITests: XCTestCase {
         let destinations = [
             (tab: "主页", title: "主页"),
             (tab: "新发现", title: "新发现"),
-            (tab: "广播", title: "漫游"),
+            (tab: "电台", title: "电台"),
             (tab: "资料库", title: "资料库"),
             (tab: "搜索", title: "搜索"),
         ]
@@ -53,10 +53,7 @@ final class KumoneIOSUITests: XCTestCase {
                 "Tab \(destination.tab) did not show its root navigation title"
             )
             if destination.tab == "搜索" {
-                XCTAssertTrue(
-                    app.staticTexts["搜索歌曲、歌手、专辑或歌单"].waitForExistence(timeout: 5),
-                    "Search should show its offline empty-state prompt before the user enters a query"
-                )
+                XCTAssertTrue(app.staticTexts["快速浏览"].waitForExistence(timeout: 5))
             }
             if destination.tab == "资料库" {
                 XCTAssertTrue(

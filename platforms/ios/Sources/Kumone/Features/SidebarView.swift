@@ -15,12 +15,12 @@ struct SidebarView: View {
             Section {
                 row(.home, title: "推荐", icon: "house.fill")
                 row(.explore, title: "精选", icon: "square.grid.2x2.fill")
-                row(.fm, title: "漫游", icon: "wave.3.right.circle.fill")
+                row(.fm, title: "电台", icon: "dot.radiowaves.left.and.right")
             }
 
             if account.hasAuthCookie {
                 Section("我的") {
-                    row(.likedSongs, title: "我喜欢的音乐", icon: "heart.fill")
+                    row(.likedSongs, title: "我喜欢的音乐", icon: "star.fill")
                     row(.daily, title: "每日推荐", icon: "calendar")
                     row(.recents, title: "最近播放", icon: "clock.fill")
                     row(.collections, title: "我的收藏", icon: "star.fill")

@@ -16,7 +16,7 @@ struct FMView: View {
                 loginPrompt
             }
         }
-        .navigationTitle("漫游")
+        .navigationTitle("电台")
         .compatHiddenToolbarBackground()
     }
 

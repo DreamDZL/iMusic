@@ -251,7 +251,7 @@ public struct IOSMainWindow: View {
                 tabStack(.new) { ExploreView() }
             }
 
-            Tab("广播", systemImage: "dot.radiowaves.left.and.right", value: .radio) {
+            Tab("电台", systemImage: "dot.radiowaves.left.and.right", value: .radio) {
                 tabStack(.radio) { FMView() }
             }
 
@@ -359,7 +359,7 @@ extension IOSMainWindow {
     static let tabItems: [GlassTabBar.Item] = [
         .init(tab: .home, title: "主页", icon: "house"),
         .init(tab: .new, title: "新发现", icon: "square.grid.2x2"),
-        .init(tab: .radio, title: "广播", icon: "dot.radiowaves.left.and.right"),
+        .init(tab: .radio, title: "电台", icon: "dot.radiowaves.left.and.right"),
         .init(tab: .library, title: "资料库", icon: "square.stack"),
         .init(tab: .search, title: "搜索", icon: "magnifyingglass"),
     ]
@@ -473,20 +473,6 @@ struct IOSMiniPlayerBar: View {
             .accessibilityLabel(nowPlayingAccessibilityLabel)
             .accessibilityHint("打开正在播放")
             .accessibilityIdentifier("miniPlayerOpenNowPlaying")
-
-            if !presentation.isInline {
-                Button(action: player.previous) {
-                    Image(systemName: "backward.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.pressable)
-                .disabled(player.isFMMode)
-                .opacity(player.isFMMode ? 0.35 : 1)
-                .accessibilityLabel("上一首")
-            }
 
             Button(action: player.togglePlayPause) {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
@@ -703,7 +689,7 @@ struct IOSLibraryView: View {
                 Section("网易云音乐账号") {
                     if let liked = account.likedSongsPlaylist {
                         NavigationLink(value: Destination.playlist(liked.id)) {
-                            Label("我喜欢的音乐", systemImage: "heart.fill")
+                            Label("我喜欢的音乐", systemImage: "star.fill")
                                 .foregroundStyle(Theme.accent)
                         }
                     }

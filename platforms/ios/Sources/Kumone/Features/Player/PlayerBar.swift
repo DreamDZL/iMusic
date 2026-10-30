@@ -252,7 +252,7 @@ struct LikeButton: View {
     var body: some View {
         let liked = localLibrary.isFavorite(track)
         PlayerIconButton(
-            icon: liked ? "heart.fill" : "heart", size: size,
+            icon: liked ? "star.fill" : "star", size: size,
             isActive: liked
         ) {
             localLibrary.toggleFavorite(track)

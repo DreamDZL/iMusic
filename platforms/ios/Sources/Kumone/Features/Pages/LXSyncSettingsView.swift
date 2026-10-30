@@ -90,7 +90,7 @@ struct LXSyncSettingsView: View {
             }
 
             Section {
-                Label("我喜欢的音乐", systemImage: "heart.fill")
+                Label("我喜欢的音乐", systemImage: "star.fill")
                 Label("全部播放列表、收藏歌单及歌单内歌曲", systemImage: "music.note.list")
                 Label("歌单名称、曲目顺序与来源标记", systemImage: "arrow.up.arrow.down")
                 Text("QQ 音乐和网易云歌单导入后是本地副本；iMusic 的增删改只同步到 LX Sync，不会写回平台账号。LX Sync 不同步音源脚本，音源需要在每台设备分别导入。")
