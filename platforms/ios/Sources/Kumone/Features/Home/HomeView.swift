@@ -599,9 +599,13 @@ struct HomeView: View {
                 .font(.title2.weight(.bold))
                 .padding(.horizontal, Theme.Layout.contentInset)
 
-            GeometryReader { geometry in
-                let cardWidth = min(Theme.Layout.featureCardMaxWidth, geometry.size.width * 0.78)
-                let cardHeight = cardWidth * 4 / 3
+            GeometryReader { _ in
+                // Keep the portrait cards aligned with the real shelf row
+                // height. The previous outer frame was based on the maximum
+                // width even when the available width was smaller, leaving a
+                // large blank gap below the cards on iPhone.
+                let cardHeight = Theme.Layout.featureCardBaseHeight
+                let cardWidth = min(Theme.Layout.featureCardMaxWidth, cardHeight * 3 / 4)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 14) {
                         // Daily recommendations are always visible; the page shows
@@ -653,7 +657,7 @@ struct HomeView: View {
                 }
                 .frame(height: cardHeight + 4)
             }
-            .frame(height: Theme.Layout.featureCardMaxWidth * 4 / 3 + 4)
+            .frame(height: Theme.Layout.featureCardBaseHeight + 4)
         }
         .compatScrollClipDisabled()
     }

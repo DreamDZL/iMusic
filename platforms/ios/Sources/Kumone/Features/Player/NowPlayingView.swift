@@ -189,9 +189,13 @@ struct NowPlayingView: View {
     private var artworkBackdrop: some View {
         TimelineView(.animation(
             minimumInterval: renderingBudget.minimumAnimationInterval,
-            paused: !artworkPalette.isTransitioning
+            paused: reduceMotion
+                || !renderingBudget.isSceneActive
+                || !renderingBudget.allowsContinuousEffects
         )) { _ in
-            let palette = artworkPalette.displayedColors(at: ProcessInfo.processInfo.systemUptime)
+            let uptime = ProcessInfo.processInfo.systemUptime
+            let palette = artworkPalette.displayedColors(at: uptime)
+            let motion = reduceMotion || !renderingBudget.allowsContinuousEffects ? 0.0 : uptime
             GeometryReader { geometry in
                 ZStack {
                     artworkGradient(for: palette)
@@ -199,12 +203,18 @@ struct NowPlayingView: View {
                         .fill(palette.primary.opacity(0.46))
                         .frame(width: geometry.size.width * 1.15)
                         .blur(radius: 78)
-                        .offset(x: -geometry.size.width * 0.24, y: -geometry.size.height * 0.22)
+                        .offset(
+                            x: -geometry.size.width * 0.24 + CGFloat(sin(motion * 0.18)) * 10,
+                            y: -geometry.size.height * 0.22 + CGFloat(cos(motion * 0.14)) * 8
+                        )
                     Circle()
                         .fill(palette.secondary.opacity(0.44))
                         .frame(width: geometry.size.width * 0.98)
                         .blur(radius: 92)
-                        .offset(x: geometry.size.width * 0.26, y: geometry.size.height * 0.08)
+                        .offset(
+                            x: geometry.size.width * 0.26 + CGFloat(cos(motion * 0.16)) * 12,
+                            y: geometry.size.height * 0.08 + CGFloat(sin(motion * 0.12)) * 10
+                        )
                     LinearGradient(
                         colors: [.black.opacity(0.08), .clear, .black.opacity(0.58)],
                         startPoint: .top,
@@ -583,6 +593,21 @@ struct NowPlayingView: View {
             RoutePickerButton(diameter: 40, glyphSize: 18)
                 .frame(maxWidth: .infinity)
 
+            if hasLyricTranslation {
+                Button {
+                    settings.showLyricsTranslation.toggle()
+                } label: {
+                    Image(systemName: settings.showLyricsTranslation ? "character.bubble.fill" : "character.bubble")
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.86))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+                .accessibilityLabel(settings.showLyricsTranslation ? "隐藏歌词翻译" : "显示歌词翻译")
+                .accessibilityAddTraits(settings.showLyricsTranslation ? .isSelected : [])
+            }
+
             #if os(iOS)
             Button { showQueueSheet = true } label: {
                 Image(systemName: "list.bullet")
@@ -596,6 +621,13 @@ struct NowPlayingView: View {
             #endif
         }
         .frame(maxWidth: 360)
+    }
+
+    private var hasLyricTranslation: Bool {
+        player.lyrics?.lines.contains { line in
+            guard let translation = line.translation else { return false }
+            return !translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        } == true
     }
 
     private var primaryTransportControls: some View {

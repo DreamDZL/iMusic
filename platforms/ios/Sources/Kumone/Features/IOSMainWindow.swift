@@ -266,6 +266,9 @@ public struct IOSMainWindow: View {
             }
         }
         .toolbarBackground(.hidden, for: .tabBar)
+        .background(NativeTabReselectionObserver {
+            popToRoot(selectedTab)
+        })
         .background(Color.clear)
     }
 
@@ -442,11 +445,12 @@ struct IOSMiniPlayerBar: View {
     }
 
     @EnvironmentObject private var player: PlayerService
+    @State private var swipeTrackKey: String?
     let presentation: Presentation
 
     var body: some View {
         playerBarSurface
-            .simultaneousGesture(expandGesture)
+            .simultaneousGesture(playerGesture)
     }
 
     @ViewBuilder
@@ -567,9 +571,28 @@ struct IOSMiniPlayerBar: View {
         return "\(title)，\(artist)"
     }
 
-    private var expandGesture: some Gesture {
+    private var playerGesture: some Gesture {
         DragGesture(minimumDistance: 8)
+            .onChanged { _ in
+                if swipeTrackKey == nil { swipeTrackKey = player.currentTrack?.playbackKey }
+            }
             .onEnded { value in
+                // A single axis decision prevents diagonal track swipes from
+                // also opening the player. Never skip a newly selected song
+                // when an async queue change arrives during this gesture.
+                let gestureTrackKey = swipeTrackKey
+                swipeTrackKey = nil
+                guard gestureTrackKey == player.currentTrack?.playbackKey,
+                      player.hasCurrentTrack else { return }
+                if let direction = MiniPlayerSwipePolicy.trackDirection(
+                    translation: value.translation,
+                    predictedTranslation: value.predictedEndTranslation
+                ) {
+                    guard !player.isFMMode else { return }
+                    if direction < 0 { player.next() } else { player.previous() }
+                    return
+                }
+                guard abs(value.translation.height) > abs(value.translation.width) * 1.25 else { return }
                 guard NowPlayingPresentationMetrics.shouldExpandFromMiniPlayer(
                     translation: value.translation.height,
                     predictedTranslation: value.predictedEndTranslation.height
@@ -800,6 +823,92 @@ struct IOSLibraryView: View {
                 }
             }
             Button("取消", role: .cancel) { newPlaylistName = "" }
+        }
+    }
+}
+
+/// Observe the native controller without replacing SwiftUI's delegate or bar.
+/// Forward all existing delegate behavior, including SwiftUI's selection work.
+private struct NativeTabReselectionObserver: UIViewControllerRepresentable {
+    var onReselect: () -> Void
+
+    func makeUIViewController(context: Context) -> Observer {
+        Observer(onReselect: onReselect)
+    }
+
+    func updateUIViewController(_ controller: Observer, context: Context) {
+        controller.onReselect = onReselect
+        controller.installWhenReady()
+    }
+
+    static func dismantleUIViewController(_ controller: Observer, coordinator: ()) {
+        controller.uninstall()
+    }
+
+    final class Observer: UIViewController, UITabBarControllerDelegate {
+        var onReselect: () -> Void
+        private weak var observed: UITabBarController?
+        private weak var originalDelegate: (any UITabBarControllerDelegate)?
+
+        init(onReselect: @escaping () -> Void) {
+            self.onReselect = onReselect
+            super.init(nibName: nil, bundle: nil)
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            installWhenReady()
+        }
+
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            installWhenReady()
+        }
+
+        func installWhenReady() {
+            // SwiftUI may finish containment after the representable update.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.parent != nil else { return }
+                var root: UIViewController = self
+                while let parent = root.parent { root = parent }
+                guard let tabs = self.findTabs(in: root), tabs.delegate !== self else { return }
+                self.uninstall()
+                self.originalDelegate = tabs.delegate
+                self.observed = tabs
+                tabs.delegate = self
+            }
+        }
+
+        private func findTabs(in controller: UIViewController) -> UITabBarController? {
+            if let tabs = controller as? UITabBarController { return tabs }
+            return controller.children.lazy.compactMap { findTabs(in: $0) }.first
+        }
+
+        func uninstall() {
+            if let observed, observed.delegate === self {
+                observed.delegate = originalDelegate
+            }
+            observed = nil
+            originalDelegate = nil
+        }
+
+        func tabBarController(_ tabBarController: UITabBarController, shouldSelect viewController: UIViewController) -> Bool {
+            let allowed = originalDelegate?.tabBarController?(tabBarController, shouldSelect: viewController) ?? true
+            if allowed, tabBarController.selectedViewController === viewController {
+                onReselect()
+            }
+            return allowed
+        }
+
+        override func responds(to selector: Selector!) -> Bool {
+            super.responds(to: selector) || originalDelegate?.responds(to: selector) == true
+        }
+
+        override func forwardingTarget(for selector: Selector!) -> Any? {
+            if originalDelegate?.responds(to: selector) == true { return originalDelegate }
+            return super.forwardingTarget(for: selector)
         }
     }
 }

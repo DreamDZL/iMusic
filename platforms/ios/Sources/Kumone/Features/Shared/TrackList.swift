@@ -154,6 +154,23 @@ struct TrackRow: View {
             if isPlayable { onPlay() }
         }
         #endif
+        #if os(iOS)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button {
+                player.addToPlayNext(track)
+            } label: {
+                Label("下一首播放", systemImage: "text.line.first.and.arrowtriangle.forward")
+            }
+            .tint(Theme.accent)
+            Button {
+                localLibrary.toggleFavorite(track)
+            } label: {
+                Label(localLibrary.isFavorite(track) ? "取消收藏" : "收藏",
+                      systemImage: localLibrary.isFavorite(track) ? "star.slash" : "star.fill")
+            }
+            .tint(.orange)
+        }
+        #endif
         .contextMenu { contextMenuItems }
         .sheet(isPresented: $showAddToPlaylist) {
             AddToPlaylistSheet(track: track)

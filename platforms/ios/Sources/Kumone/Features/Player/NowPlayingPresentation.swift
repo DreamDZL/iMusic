@@ -1,6 +1,19 @@
 import SwiftUI
 
 #if os(iOS)
+enum MiniPlayerSwipePolicy {
+    /// Require real horizontal travel before accepting velocity prediction.
+    /// Tiny flicks and diagonal/vertical expansion gestures must not skip songs.
+    static func trackDirection(translation: CGSize, predictedTranslation: CGSize) -> Int? {
+        guard abs(translation.width) >= 20,
+              abs(translation.width) > abs(translation.height) * 1.5 else { return nil }
+        let distance = translation.width
+        let predicted = predictedTranslation.width
+        guard abs(distance) >= 52 || (abs(predicted) >= 100 && distance * predicted > 0) else { return nil }
+        return distance < 0 ? -1 : 1
+    }
+}
+
 /// Shared geometry and interaction constants for the iPhone Now Playing
 /// presentation. Keeping these values together makes the relationship between
 /// the drag indicator and the track header explicit and regression-testable.

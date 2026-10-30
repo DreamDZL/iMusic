@@ -22,7 +22,7 @@ struct CoverCard: View {
                         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
-                                .strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
+                                .strokeBorder(Theme.ColorToken.subtleBorder, lineWidth: 0.5)
                         )
                     if playCount > 0 {
                         PlayCountBadge(count: playCount)
@@ -37,15 +37,15 @@ struct CoverCard: View {
                 .frame(width: size, height: size)
 
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(Theme.Typography.cardTitle)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(Theme.ColorToken.primaryText)
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(.system(size: 11))
+                        .font(Theme.Typography.cardSubtitle)
                         .lineLimit(1)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.ColorToken.secondaryText)
                 }
             }
             .frame(width: size, alignment: .leading)
@@ -69,11 +69,11 @@ struct ArtistCard: View {
                 CachedAsyncImage(url: artist.picUrl?.resizedImageURL(256))
                     .frame(width: size, height: size)
                     .clipShape(Circle())
-                    .overlay(Circle().strokeBorder(.primary.opacity(0.08), lineWidth: 0.5))
+                    .overlay(Circle().strokeBorder(Theme.ColorToken.subtleBorder, lineWidth: 0.5))
                 Text(artist.name)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(Theme.Typography.cardTitle)
                     .lineLimit(1)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(Theme.ColorToken.primaryText)
             }
             .frame(width: size + 12)
             .contentShape(Rectangle())
@@ -187,12 +187,12 @@ struct ErrorStateView: View {
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "wifi.exclamationmark")
-                .font(.system(size: 40))
-                .foregroundStyle(.tertiary)
+                .font(.largeTitle)
+                .foregroundStyle(Theme.ColorToken.tertiaryText)
             Text("加载失败").font(.headline)
             Text(message)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.ColorToken.secondaryText)
                 .multilineTextAlignment(.center)
             Button("重试", action: retry)
                 .buttonStyle(.borderedProminent)
@@ -211,14 +211,14 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: icon)
-                .font(.system(size: 40))
-                .foregroundStyle(.tertiary)
+                .font(.largeTitle)
+                .foregroundStyle(Theme.ColorToken.tertiaryText)
             Text(title)
                 .font(.headline)
             if let subtitle {
                 Text(subtitle)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.ColorToken.secondaryText)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

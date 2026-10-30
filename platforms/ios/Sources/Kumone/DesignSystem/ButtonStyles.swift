@@ -33,7 +33,7 @@ struct InteractiveCardStyle: ButtonStyle {
 /// List rows with a hover background highlight.
 struct InteractiveRowStyle: ButtonStyle {
     var cornerRadius: CGFloat = Theme.Radius.standard
-    var hoverColor: Color = .primary.opacity(0.06)
+    var hoverColor: Color = Theme.ColorToken.controlFill
 
     #if os(macOS)
     @State private var isHovering = false
@@ -85,14 +85,16 @@ struct ChipButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         #if os(macOS)
         configuration.label
-            .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+            .font(Theme.Typography.chip.weight(isSelected ? .semibold : .medium))
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(
                 Capsule().fill(
                     isSelected
                         ? AnyShapeStyle(Theme.accent)
-                        : AnyShapeStyle(.primary.opacity(isHovering ? 0.1 : 0.06))
+                        : AnyShapeStyle(isHovering
+                            ? Theme.ColorToken.controlPressedFill
+                            : Theme.ColorToken.controlFill)
                 )
             )
             .foregroundStyle(isSelected ? .white : .primary)
@@ -102,14 +104,14 @@ struct ChipButtonStyle: ButtonStyle {
             .onHover { isHovering = $0 }
         #else
         configuration.label
-            .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+            .font(Theme.Typography.chip.weight(isSelected ? .semibold : .medium))
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(
                 Capsule().fill(
                     isSelected
                         ? AnyShapeStyle(Theme.accent)
-                        : AnyShapeStyle(.primary.opacity(0.06))
+                        : AnyShapeStyle(Theme.ColorToken.controlFill)
                 )
             )
             .foregroundStyle(isSelected ? .white : .primary)

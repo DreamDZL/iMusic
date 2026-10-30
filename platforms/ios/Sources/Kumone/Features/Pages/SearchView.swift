@@ -626,28 +626,34 @@ struct SearchView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 10)], spacing: 10) {
+                    LazyVStack(spacing: 0) {
                         ForEach(Array(model.hotKeywords.enumerated()), id: \.offset) { index, keyword in
                             Button {
                                 performSearch(keyword)
                             } label: {
-                                HStack(spacing: 8) {
+                                HStack(spacing: 12) {
                                     Text("\(index + 1)")
-                                        .font(.caption.monospacedDigit().weight(.bold))
-                                        .foregroundStyle(index < 3 ? Theme.accent : .secondary)
-                                        .frame(width: 20, alignment: .leading)
+                                        .font(.subheadline.monospacedDigit().weight(.bold))
+                                        .foregroundStyle(index < 3 ? Theme.accent : .tertiary)
+                                        .frame(width: 24, alignment: .leading)
                                     Text(keyword)
                                         .lineLimit(1)
                                         .frame(maxWidth: .infinity, alignment: .leading)
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.tertiary)
                                 }
-                                .padding(.horizontal, 12)
+                                .padding(.horizontal, 14)
                                 .frame(minHeight: 44)
-                                .background(.quaternary.opacity(0.45), in: Capsule())
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("第\(index + 1)名，\(keyword)")
+                            if index < model.hotKeywords.count - 1 {
+                                Divider().padding(.leading, 50)
+                            }
                         }
                     }
+                    .background(.quaternary.opacity(0.32), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
             }
 

@@ -6,6 +6,17 @@ enum Theme {
     static let accent = Color(red: 0.98, green: 0.145, blue: 0.27) // #FA2545
     static let accentDeep = Color(red: 0.80, green: 0.055, blue: 0.16) // #CC0E29
 
+    /// Semantic colors keep component styling tied to the current appearance.
+    /// Prefer these over introducing component-specific opaque colors.
+    enum ColorToken {
+        static let primaryText = Color.primary
+        static let secondaryText = Color.secondary
+        static let tertiaryText = Color.tertiary
+        static let subtleBorder = Color.primary.opacity(0.08)
+        static let controlFill = Color.primary.opacity(0.06)
+        static let controlPressedFill = Color.primary.opacity(0.10)
+    }
+
     static let accentGradient = LinearGradient(
         colors: [Color(red: 1.0, green: 0.31, blue: 0.39), accentDeep],
         startPoint: .topLeading, endPoint: .bottomTrailing
@@ -17,6 +28,16 @@ enum Theme {
         static let standard: CGFloat = 8
         static let large: CGFloat = 12
         static let panel: CGFloat = 20
+    }
+
+    /// Semantic text styles preserve Dynamic Type instead of pinning UI to
+    /// point sizes. Use explicit sizes only for platform-rendered text layers.
+    enum Typography {
+        static let cardTitle = Font.body.weight(.medium)
+        static let cardSubtitle = Font.footnote
+        static let chip = Font.footnote.weight(.medium)
+        static let badge = Font.caption2.weight(.semibold)
+        static let iconBadge = Font.caption2.weight(.bold)
     }
 
     enum Layout {

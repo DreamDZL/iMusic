@@ -28,6 +28,9 @@ struct LXSyncSettingsView: View {
                     Spacer()
                     if sync.isConnecting {
                         ProgressView()
+                    } else if sync.isConnected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
                     }
                 }
                 .padding(.vertical, 5)

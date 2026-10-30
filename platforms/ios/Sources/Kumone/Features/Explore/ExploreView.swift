@@ -178,7 +178,7 @@ struct ExploreView: View {
             LazyVStack(alignment: .leading, spacing: 20) {
                 if model.selectedCategory == "推荐",
                    let featured = model.playlists.first {
-                    featuredPlaylistCard(featured)
+                    featuredPlaylistShelf(featured)
                 }
 
                 if model.platform == .wy && !model.newSongs.isEmpty {
@@ -344,50 +344,38 @@ struct ExploreView: View {
         .buttonStyle(.plain)
     }
 
-    private func featuredPlaylistCard(_ playlist: LXPlaylistSummary) -> some View {
+    private func featuredPlaylistShelf(_ playlist: LXPlaylistSummary) -> some View {
         NavigationLink(value: Destination.lxPlaylist(source: playlist.source, id: playlist.id)) {
-            ZStack(alignment: .bottomLeading) {
+            HStack(spacing: 16) {
                 CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(900), animated: false)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: featuredCardHeight)
-                    .clipped()
+                    .frame(width: featuredCardHeight - 32, height: featuredCardHeight - 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.18), .black.opacity(0.82)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("为你发现")
-                            .font(.caption.weight(.bold))
-                            .tracking(1.2)
-                        Spacer()
-                        Image(systemName: "arrow.up.right")
-                            .font(.subheadline.weight(.semibold))
-                            .padding(10)
-                            .background(.ultraThinMaterial, in: Circle())
-                    }
-                    Spacer()
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("为你发现")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Theme.accent)
                     Text(playlist.name)
-                        .font(.largeTitle.weight(.bold))
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text([playlist.source.displayName, playlist.author].compactMap { $0 }.joined(separator: " · "))
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.82))
+                        .font(.headline.weight(.bold))
                         .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Text([playlist.source.displayName, playlist.author].compactMap { $0 }.joined(separator: " · "))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
+                    Label("打开歌单", systemImage: "arrow.up.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
                 }
-                .foregroundStyle(.white)
-                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: featuredCardHeight)
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
             }
         }
         .buttonStyle(.plain)

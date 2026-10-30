@@ -118,8 +118,8 @@ struct SectionHeader: View {
                             .font(.title2.weight(.semibold))
                             .foregroundStyle(.primary)
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.tertiary)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.ColorToken.tertiaryText)
                             .offset(x: isHovering ? 2 : 0)
                     }
                 }
@@ -149,9 +149,9 @@ struct PlayCountBadge: View {
     var body: some View {
         HStack(spacing: 3) {
             Image(systemName: "play.fill")
-                .font(.system(size: 8, weight: .bold))
+                .font(Theme.Typography.iconBadge)
             Text(Formatters.playCount(count))
-                .font(.system(size: 10, weight: .semibold))
+                .font(Theme.Typography.badge)
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 7)
@@ -164,12 +164,12 @@ struct PlayCountBadge: View {
 struct VIPBadge: View {
     var body: some View {
         Text("VIP")
-            .font(.system(size: 8.5, weight: .bold))
+            .font(Theme.Typography.iconBadge)
             .foregroundStyle(Theme.accent)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
             .overlay(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
                     .stroke(Theme.accent.opacity(0.8), lineWidth: 1)
             )
     }
@@ -180,12 +180,12 @@ struct QualityTag: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 9, weight: .semibold))
+            .font(Theme.Typography.badge)
             .foregroundStyle(Theme.accent)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
             .overlay(
-                RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
                     .stroke(Theme.accent.opacity(0.7), lineWidth: 1)
             )
     }

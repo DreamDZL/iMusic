@@ -6,6 +6,9 @@ struct FMView: View {
     @EnvironmentObject private var account: AccountStore
     @Environment(\.openLogin) private var openLogin
     @Environment(\.colorScheme) private var colorScheme
+    @State private var recommendations: [Track] = []
+    @State private var isLoadingRecommendations = false
+    @State private var recommendationError: String?
 
     var body: some View {
         ZStack {
@@ -18,6 +21,14 @@ struct FMView: View {
         }
         .navigationTitle("电台")
         .compatHiddenToolbarBackground()
+        .task(id: account.hasAuthCookie) {
+            guard account.hasAuthCookie else {
+                recommendations = []
+                recommendationError = nil
+                return
+            }
+            await loadRecommendations()
+        }
     }
 
     private var track: Track? {
@@ -87,6 +98,8 @@ struct FMView: View {
             }
             .frame(maxWidth: 420)
 
+            recommendationChoices
+
             if player.isFMMode {
                 controls
             } else {
@@ -108,6 +121,72 @@ struct FMView: View {
             Spacer()
         }
         .padding(.horizontal, 40)
+    }
+
+    @ViewBuilder
+    private var recommendationChoices: some View {
+        if isLoadingRecommendations {
+            ProgressView("正在获取电台推荐…")
+                .frame(maxWidth: 420, minHeight: 96)
+        } else if let recommendationError, recommendations.isEmpty {
+            VStack(spacing: 8) {
+                Label("电台推荐暂时不可用", systemImage: "wifi.exclamationmark")
+                    .font(.subheadline.weight(.semibold))
+                Text(recommendationError)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button("重试") { Task { await loadRecommendations() } }
+                    .buttonStyle(.bordered)
+            }
+            .frame(maxWidth: 420, minHeight: 96)
+        } else if recommendations.isEmpty {
+            Text("暂无可用的电台推荐")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 420, minHeight: 96)
+        } else {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 12) {
+                ForEach(Array(recommendations.prefix(6).enumerated()), id: \.offset) { _, item in
+                    Button {
+                        player.play(tracks: [item], source: .none)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            CachedAsyncImage(url: item.album.picUrl?.resizedImageURL(256), animated: false)
+                                .aspectRatio(1, contentMode: .fill)
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous))
+                            Text(item.name)
+                                .font(.caption.weight(.medium))
+                                .lineLimit(1)
+                            Text(item.artistNames)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("播放电台推荐：\(item.name)，\(item.artistNames)")
+                }
+            }
+            .frame(maxWidth: 420)
+        }
+    }
+
+    @MainActor
+    private func loadRecommendations() async {
+        guard account.hasAuthCookie else { return }
+        isLoadingRecommendations = true
+        recommendationError = nil
+        defer { isLoadingRecommendations = false }
+        do {
+            recommendations = Array(try await NeteaseAPI.personalFM().prefix(6))
+        } catch is CancellationError {
+            return
+        } catch {
+            recommendations = []
+            recommendationError = error.localizedDescription
+        }
     }
 
     private var controls: some View {

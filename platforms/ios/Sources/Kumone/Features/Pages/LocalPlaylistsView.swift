@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct LocalPlaylistsView: View {
     @StateObject private var store = LocalPlaylistStore.shared
+    @ObservedObject private var sync = LXSyncService.shared
     @State private var showImport = false
     @State private var showCreate = false
     @State private var showSourceManager = false
@@ -37,7 +38,14 @@ struct LocalPlaylistsView: View {
                 NavigationLink {
                     LXSyncSettingsView()
                 } label: {
-                    Label("同步资料库", systemImage: "arrow.triangle.2.circlepath")
+                    HStack(spacing: 12) {
+                        Label("同步资料库", systemImage: "arrow.triangle.2.circlepath")
+                        Spacer()
+                        Text(sync.statusMessage)
+                            .font(.caption)
+                            .foregroundStyle(sync.isConnected ? .green : .secondary)
+                            .lineLimit(1)
+                    }
                 }
                 .accessibilityIdentifier("librarySyncEntry")
             }
