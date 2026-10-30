@@ -413,6 +413,7 @@ struct NowPlayingView: View {
 
     private func appleMusicPlaybackControls(height: CGFloat) -> some View {
         let isVisible = !showLyricsOnMobile || lyricsControlsVisible
+        let playbackControlsHeight: CGFloat = 164
 
         return ZStack {
             if !isVisible {
@@ -423,31 +424,60 @@ struct NowPlayingView: View {
             }
 
             VStack(spacing: 4) {
-                NowPlayingScrubber(
-                    onShowQuality: { showQualityPicker = true },
-                    showsRemainingTime: true,
-                    onSeek: {
-                        guard showLyricsOnMobile else { return }
-                        isUserScrolling = false
-                        resumeTask?.cancel()
-                        resumeTask = nil
+                Group {
+                    if isVisible {
+                        VStack(spacing: 4) {
+                            NowPlayingScrubber(
+                                onShowQuality: { showQualityPicker = true },
+                                showsRemainingTime: true,
+                                onSeek: {
+                                    guard showLyricsOnMobile else { return }
+                                    isUserScrolling = false
+                                    resumeTask?.cancel()
+                                    resumeTask = nil
+                                }
+                            )
+                            .frame(height: 64)
+
+                            primaryTransportControls
+                                .frame(height: 64)
+                                .accessibilityElement(children: .contain)
+                                .accessibilityIdentifier(
+                                    showLyricsOnMobile ? "lyricsTransportControls" : "nowPlayingTransportControls"
+                                )
+
+                            CompactVolumeControl()
+                                .frame(height: 28)
+                                .accessibilityElement(children: .contain)
+                                .accessibilityIdentifier(
+                                    showLyricsOnMobile ? "lyricsVolumeControl" : "nowPlayingVolumeControl"
+                                )
+                        }
+                        .frame(height: playbackControlsHeight)
+                    } else {
+                        Color.clear
+                            .frame(height: playbackControlsHeight)
+                            .accessibilityHidden(true)
                     }
-                )
-                .frame(height: 64)
-
-                primaryTransportControls
-                    .frame(height: 64)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier(
-                        showLyricsOnMobile ? "lyricsTransportControls" : "nowPlayingTransportControls"
-                    )
-
-                CompactVolumeControl()
-                    .frame(height: 28)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier(
-                        showLyricsOnMobile ? "lyricsVolumeControl" : "nowPlayingVolumeControl"
-                    )
+                }
+                .allowsHitTesting(isVisible)
+                .simultaneousGesture(TapGesture().onEnded {
+                    if showLyricsOnMobile { scheduleLyricsControlsAutoHide() }
+                })
+                .simultaneousGesture(DragGesture(minimumDistance: 8)
+                    .onChanged { _ in
+                        guard showLyricsOnMobile else { return }
+                        lyricsControlsTask?.cancel()
+                        // Scrubbing must leave lyric-browse mode so the cursor can
+                        // immediately scroll to the line at the new playback time.
+                        if isUserScrolling {
+                            isUserScrolling = false
+                            resumeTask?.cancel()
+                        }
+                    }
+                    .onEnded { _ in
+                        if showLyricsOnMobile { scheduleLyricsControlsAutoHide() }
+                    })
 
                 songPageAccessoryControls
                     .frame(height: 44)
@@ -460,26 +490,6 @@ struct NowPlayingView: View {
             .padding(.horizontal, 26)
             .frame(maxWidth: .infinity)
             .frame(height: height)
-            .opacity(isVisible ? 1 : 0)
-            .allowsHitTesting(isVisible)
-            .accessibilityHidden(!isVisible)
-            .simultaneousGesture(TapGesture().onEnded {
-                if showLyricsOnMobile { scheduleLyricsControlsAutoHide() }
-            })
-            .simultaneousGesture(DragGesture(minimumDistance: 8)
-                .onChanged { _ in
-                    guard showLyricsOnMobile else { return }
-                    lyricsControlsTask?.cancel()
-                    // Scrubbing must leave lyric-browse mode so the cursor can
-                    // immediately scroll to the line at the new playback time.
-                    if isUserScrolling {
-                        isUserScrolling = false
-                        resumeTask?.cancel()
-                    }
-                }
-                .onEnded { _ in
-                    if showLyricsOnMobile { scheduleLyricsControlsAutoHide() }
-                })
         }
         .frame(height: height)
         .contentShape(Rectangle())

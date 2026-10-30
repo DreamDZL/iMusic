@@ -118,6 +118,8 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(songPage.waitForExistence(timeout: 10))
         let artwork = app.descendants(matching: .any)["nowPlayingArtworkImage"]
         XCTAssertTrue(artwork.waitForExistence(timeout: 5))
+        let bottomControls = app.descendants(matching: .any)["nowPlayingBottomControls"]
+        XCTAssertTrue(bottomControls.waitForExistence(timeout: 5), "The bottom playback deck must be available for reveal taps")
         let accessoryControls = app.buttons["showSynchronizedLyrics"]
         XCTAssertTrue(accessoryControls.exists)
         let songAccessoryMidY = accessoryControls.frame.midY
@@ -134,13 +136,19 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(lyricsPage.waitForExistence(timeout: 10))
         let lyricsScroll = app.scrollViews["synchronizedLyricsScrollView"]
         XCTAssertTrue(lyricsScroll.waitForExistence(timeout: 10))
-        // The lyrics page intentionally auto-hides the playback deck after a
-        // short idle period. Reveal it after the navigation waits so this
-        // assertion verifies the user interaction, not a timing accident.
-        lyricsPage.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let transportControls = app.descendants(matching: .any)["lyricsTransportControls"]
         let volumeControl = app.descendants(matching: .any)["lyricsVolumeControl"]
         let songTransportControls = app.descendants(matching: .any)["nowPlayingTransportControls"]
+        // Wait for the initial auto-hide before tapping the reveal footprint.
+        // Otherwise a fast simulator could tap the still-visible play button.
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7),
+                      "Lyrics transport controls must initially auto-hide")
+        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 7),
+                      "Lyrics volume control must initially auto-hide")
+        XCTAssertTrue(accessoryControls.exists, "Auto-hide must preserve the accessory row")
+        XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
+                       "The accessory row must remain fixed after initial auto-hide")
+        bottomControls.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
         // The lyrics page animates its control reveal after the navigation
         // transition. Assert eventual visibility rather than sampling the
         // first frame after the tap, which is flaky on slower CI simulators.
@@ -149,8 +157,10 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(accessoryControls.exists, "The accessory row must stay visible on both player pages")
         XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
                        "The accessory row must not jump when switching to lyrics")
-        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7))
-        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 7))
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7),
+                      "Lyrics transport controls must be removed from the accessibility tree when hidden")
+        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 7),
+                      "Lyrics volume control must be removed from the accessibility tree when hidden")
         XCTAssertTrue(accessoryControls.exists, "Hiding playback controls must not hide the accessory row")
         XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
                        "The accessory row must remain at the same height after controls hide")
@@ -158,13 +168,14 @@ final class KumoneIOSUITests: XCTestCase {
         lyricsScroll.swipeRight()
         XCTAssertTrue(lyricsPage.exists, "Horizontal swipes must stay on lyrics")
         XCTAssertFalse(songTransportControls.exists)
-        XCTAssertFalse(transportControls.exists)
+        XCTAssertFalse(transportControls.exists, "Transport controls must remain hidden during lyric browsing")
 
         lyricsScroll.swipeUp()
-        XCTAssertTrue(lyricsPage.exists)
-        XCTAssertFalse(transportControls.exists)
-        lyricsPage.coordinate(withNormalizedOffset: CGVector(dx: 0.82, dy: 0.94)).tap()
-        XCTAssertTrue(transportControls.waitForExistence(timeout: 2))
+        XCTAssertTrue(lyricsPage.exists, "Vertical lyric scrolling must not navigate away from lyrics")
+        XCTAssertFalse(transportControls.exists, "Transport controls must remain hidden until the playback deck is tapped")
+        bottomControls.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
+        XCTAssertTrue(transportControls.waitForExistence(timeout: 2),
+                      "Tapping the playback deck must reveal lyrics transport controls")
         XCTAssertTrue(app.buttons["showSynchronizedLyrics"].exists, "Lyrics need the same bottom toolbar")
         XCTAssertTrue(app.staticTexts["0:14"].exists, "Scrolling and revealing controls must not seek")
         XCTAssertTrue(app.buttons["选择播放音质，当前为请求 320 kbps"].exists)
@@ -174,7 +185,8 @@ final class KumoneIOSUITests: XCTestCase {
         artwork.swipeLeft()
         XCTAssertTrue(songPage.exists, "Switch pages only with the lyrics button")
         app.buttons["showSynchronizedLyrics"].tap()
-        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7))
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7),
+                      "Lyrics transport controls must auto-hide after returning from the song page")
 
         let lyricsAttachment = XCTAttachment(screenshot: app.screenshot())
         lyricsAttachment.name = "iMusic-AppleMusic-歌词页"
