@@ -11,7 +11,7 @@ enum Theme {
     enum ColorToken {
         static let primaryText = Color.primary
         static let secondaryText = Color.secondary
-        static let tertiaryText = Color.tertiary
+        static let tertiaryText = Color.secondary.opacity(0.62)
         static let subtleBorder = Color.primary.opacity(0.08)
         static let controlFill = Color.primary.opacity(0.06)
         static let controlPressedFill = Color.primary.opacity(0.10)
