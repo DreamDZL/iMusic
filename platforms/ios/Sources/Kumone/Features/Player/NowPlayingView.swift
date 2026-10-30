@@ -1330,7 +1330,11 @@ struct NowPlayingView: View {
                             .accessibilityHint("恢复歌词随播放进度滚动")
                             .accessibilityIdentifier("resumeCurrentLyrics")
                             .padding(.trailing, 24)
-                            .padding(.bottom, 96)
+                            // Hidden playback controls still own their reveal
+                            // footprint. Keep this action above it, otherwise
+                            // taps reveal controls instead of resuming lyrics.
+                            .padding(.bottom, showLyricsOnMobile && !lyricsControlsVisible
+                                     && geometry.size.width < geometry.size.height ? 236 : 16)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                     }

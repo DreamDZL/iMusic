@@ -112,6 +112,11 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         try await connectionTask.value
         let migratedSnapshot = try await waitForSnapshot(socket)
         XCTAssertTrue(migratedSnapshot.userList.contains(where: { $0.name == "QQ 收藏的公开歌单" }))
+        // A sent frame is not an acknowledged migration. Settle that publish
+        // before exercising notification-driven local create/delete updates.
+        try await waitUntil {
+            fixture.defaults.bool(forKey: "imusic.lxSync.legacyAccountPlaylistsMerged.v1")
+        }
 
         XCTAssertTrue(service.isConnected)
         XCTAssertEqual(service.statusMessage, "已同步")
@@ -150,7 +155,9 @@ final class LXSyncClientIntegrationTests: XCTestCase {
             tracks: [sampleTrack(id: 42, name: "本地歌曲")]
         ))
         let initialSyncAt = service.lastSyncAt
-        let createSnapshot = try await waitForSnapshot(socket, after: messageCountBeforeCreate)
+        let createSnapshot = try await waitForSnapshot(socket, after: messageCountBeforeCreate) {
+            $0.userList.contains(where: { $0.id == localID.uuidString })
+        }
         XCTAssertEqual(Set(createSnapshot.userList.map(\.name)), Set([
             "本地歌单", "已有本地歌单", "QQ 公共歌单", "网易云账号副本",
             "旧版服务端 QQ 收藏歌单", "LX 导入的 QQ 歌单", "QQ 收藏的公开歌单",
@@ -164,7 +171,9 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         let afterCreateSyncAt = service.lastSyncAt
         let messageCountBeforeDelete = socket.sentMessages.count
         fixture.store.delete(id: localID)
-        let deleteSnapshot = try await waitForSnapshot(socket, after: messageCountBeforeDelete)
+        let deleteSnapshot = try await waitForSnapshot(socket, after: messageCountBeforeDelete) {
+            !$0.userList.contains(where: { $0.id == localID.uuidString })
+        }
         XCTAssertEqual(Set(deleteSnapshot.userList.map(\.name)), Set([
             "已有本地歌单", "QQ 公共歌单", "网易云账号副本", "旧版服务端 QQ 收藏歌单",
             "LX 导入的 QQ 歌单", "QQ 收藏的公开歌单",
@@ -457,9 +466,15 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         return try XCTUnwrap(result)
     }
 
-    private func waitForSnapshot(_ socket: FakeSocket, after start: Int = 0) async throws -> LXSyncListData {
+    private func waitForSnapshot(
+        _ socket: FakeSocket,
+        after start: Int = 0,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        matching predicate: (LXSyncListData) -> Bool = { _ in true }
+    ) async throws -> LXSyncListData {
         var result: LXSyncListData?
-        try await waitUntil {
+        try await waitUntil(file: file, line: line) {
             for message in socket.sentMessages.dropFirst(start) {
                 guard let object = try? JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any],
                       (object["path"] as? [String])?.last == "onListSyncAction",
@@ -468,13 +483,14 @@ final class LXSyncClientIntegrationTests: XCTestCase {
                       action["action"] as? String == "list_data_overwrite",
                       let rawData = action["data"],
                       let data = try? JSONSerialization.data(withJSONObject: rawData),
-                      let decoded = try? JSONDecoder().decode(LXSyncListData.self, from: data) else { continue }
+                      let decoded = try? JSONDecoder().decode(LXSyncListData.self, from: data),
+                      predicate(decoded) else { continue }
                 result = decoded
                 return true
             }
             return false
         }
-        return try XCTUnwrap(result)
+        return try XCTUnwrap(result, file: file, line: line)
     }
 
     private func waitUntil(
@@ -482,10 +498,13 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         line: UInt = #line,
         condition: @MainActor () -> Bool
     ) async throws {
-        for _ in 0..<150 {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(10))
+        while clock.now < deadline {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(20))
         }
+        if condition() { return }
         XCTFail("Condition did not become true", file: file, line: line)
         throw NSError(domain: "LXSyncClientIntegrationTests", code: 1)
     }
