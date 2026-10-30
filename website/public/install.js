@@ -9,7 +9,6 @@ try {
 const i18n = window.MoumusicI18n || { language: () => 'zh', t: key => key }
 const links = {
   'ios-download': config.iosDownloadUrl,
-  'android-download': config.androidDownloadUrl,
   'install-support': config.afdianPlanUrl || config.afdianUrl || 'https://ifdian.net/a/moumou2026/plan',
   'install-support-hero': config.afdianPlanUrl || config.afdianUrl || 'https://ifdian.net/a/moumou2026/plan',
 }
@@ -29,10 +28,9 @@ function setReleaseVersion(id, version) {
 }
 
 function renderReleaseVersions(release) {
-  const version = release?.version && release.version !== 'latest' ? release.version : ''
+  const version = release?.ios?.version && release.ios.version !== 'latest' ? release.ios.version : ''
   setReleaseVersion('latest-release-version', version)
-  setReleaseVersion('ios-release-version', release?.ios?.version && release.ios.version !== 'latest' ? release.ios.version : version)
-  setReleaseVersion('android-release-version', release?.android?.version && release.android.version !== 'latest' ? release.android.version : version)
+  setReleaseVersion('ios-release-version', version)
 }
 
 async function loadLatestRelease() {

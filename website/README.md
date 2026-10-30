@@ -3,12 +3,12 @@
 这是 Moumusic 的轻量个人赞助主页，包含：
 
 - `/aifadian`：Liquid Glass 风格的爱发电赞助页
-- `/install`：iOS 与 Android 安装说明
+- `/install`：iOS IPA 安装说明
 - `/api/aifadian/sponsors`：脱敏后的赞助者名单
 - `/api/aifadian/orders`：脱敏后的最近订单
 - `/api/aifadian/stats`：支持者数量、最近支持时间和可选金额统计
 - `/api/releases/latest`：读取当前 GitHub Release 的版本信息
-- `/download/ios`、`/download/android`：始终跳转到 GitHub 的 `releases/latest/download` 下载入口
+- `/download/ios`：跳转到 GitHub 的 `releases/latest/download` iOS IPA 下载入口
 - `/health`：服务健康检查
 
 ## 本地运行
@@ -43,11 +43,11 @@ node --env-file=.env src/server.mjs
 | `SITE_TAGLINE` | Hero 感谢语 |
 | `SITE_THANKS` | 页面底部感谢语 |
 | `IOS_DOWNLOAD_URL` | 安装页的 iOS 下载地址 |
-| `ANDROID_DOWNLOAD_URL` | 安装页的 Android 下载地址 |
+| `ANDROID_DOWNLOAD_URL` | 保留的历史兼容配置；当前公开安装页不提供 Android 下载入口 |
 
 `AFDIAN_TOKEN` 永远不会进入 HTML、JavaScript、API 响应或日志。项目也不会托管 P12、mobileprovision、企业证书或密码。
 
-安装页会通过 `/api/releases/latest` 显示最新版本；下载按钮使用 `/download/ios` 和 `/download/android`，由 GitHub 的 `releases/latest/download` 在访问时解析最新文件，不再固定某个版本号。
+公开安装页仅提供 iOS IPA 下载，并通过 `/api/releases/latest` 获取版本信息；两个版本展示均只读取响应中的 iOS 版本，缺失或为 `latest` 时显示不可用。iOS 下载使用 `/download/ios`，由 GitHub 的 `releases/latest/download` 在访问时解析最新文件，不再固定某个版本号。后端 Android 路由及相关环境变量保留为历史兼容接口，服务端行为未在本批次调整；版本查询仍使用聚合 API。
 
 爱发电支持按钮会在本站打开方案页弹窗，付款仍由爱发电官方页面处理；如果浏览器禁止第三方内嵌页面，弹窗内提供官方直达链接。Chatway 使用官方脚本，并在桌面端组件未加载时提供同一组件的备用入口。
 
