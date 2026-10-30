@@ -67,8 +67,9 @@ class SignedReleaseWorkflowTests(unittest.TestCase):
             runner_temp = temp_dir / "runner-temp"
             runner_temp.mkdir()
             process_env = os.environ.copy()
+            # Fixtures must not inherit the real GitHub runner repository.
+            process_env["GITHUB_REPOSITORY"] = "example/imusic"
             process_env.update(env or {})
-            process_env.setdefault("GITHUB_REPOSITORY", "example/imusic")
             process_env["GITHUB_ENV"] = (temp_dir / "github-env").as_posix()
             process_env["RUNNER_TEMP"] = runner_temp.as_posix()
             return subprocess.run(

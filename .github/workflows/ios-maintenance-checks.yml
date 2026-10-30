@@ -1,0 +1,45 @@
+name: iOS release tooling and website checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ios-*.yml'
+      - 'scripts/test_signed_release_workflow.py'
+      - 'website/**'
+  pull_request:
+    paths:
+      - '.github/workflows/ios-*.yml'
+      - 'scripts/test_signed_release_workflow.py'
+      - 'website/**'
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    # Only portable release-tooling tests run here. Native builds and UI tests
+    # remain on xcode-27 in the iOS smoke/release workflows.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install workflow test dependency
+        run: python -m pip install PyYAML==6.0.3
+      - name: Test signed release guards without credentials or publishing
+        run: python -B -m unittest scripts.test_signed_release_workflow -v
+      - name: Test public iOS installation metadata
+        working-directory: website
+        run: |
+          set -euo pipefail
+          npm test
+          node --check public/install.js
+          node --check public/i18n.js
+          node --check public/app.js
