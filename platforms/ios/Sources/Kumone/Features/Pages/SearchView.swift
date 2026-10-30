@@ -634,7 +634,7 @@ struct SearchView: View {
                                 HStack(spacing: 12) {
                                     Text("\(index + 1)")
                                         .font(.subheadline.monospacedDigit().weight(.bold))
-                                        .foregroundStyle(index < 3 ? Theme.accent : .tertiary)
+                                        .foregroundStyle(index < 3 ? Theme.accent : Theme.ColorToken.tertiaryText)
                                         .frame(width: 24, alignment: .leading)
                                     Text(keyword)
                                         .lineLimit(1)

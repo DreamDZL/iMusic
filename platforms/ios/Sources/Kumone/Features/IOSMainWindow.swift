@@ -827,7 +827,9 @@ struct IOSLibraryView: View {
     }
 }
 
-/// Observe the native controller without replacing SwiftUI's delegate or bar.
+#endif
+
+/// Observe the native controller while forwarding SwiftUI's delegate behavior.
 /// Forward all existing delegate behavior, including SwiftUI's selection work.
 private struct NativeTabReselectionObserver: UIViewControllerRepresentable {
     var onReselect: () -> Void
@@ -912,5 +914,4 @@ private struct NativeTabReselectionObserver: UIViewControllerRepresentable {
         }
     }
 }
-#endif
 #endif
