@@ -322,7 +322,7 @@ final class HomeViewModel: ObservableObject {
 }
 
 struct HomeView: View {
-    @ScaledMetric(relativeTo: .headline) private var scaledFeatureCardHeight: CGFloat = 252
+    @ScaledMetric(relativeTo: .headline) private var scaledFeatureCardHeight: CGFloat = Theme.Layout.featureCardBaseHeight
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var settings: SettingsManager
@@ -602,7 +602,7 @@ struct HomeView: View {
                 .padding(.horizontal, Theme.Layout.contentInset)
 
             GeometryReader { geometry in
-                let cardWidth = min(310, geometry.size.width * 0.78)
+                let cardWidth = min(Theme.Layout.featureCardMaxWidth, geometry.size.width * 0.78)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 14) {
                         // Daily recommendations are always visible; the page shows

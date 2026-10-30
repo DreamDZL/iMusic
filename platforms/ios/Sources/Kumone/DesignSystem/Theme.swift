@@ -22,6 +22,10 @@ enum Theme {
     enum Layout {
         static let contentInset: CGFloat = 24
         static let cardSize: CGFloat = 160
+        /// Compact feature shelf: keep the next card discoverable on an iPhone
+        /// rather than letting one promotional card dominate the home screen.
+        static let featureCardMaxWidth: CGFloat = 284
+        static let featureCardBaseHeight: CGFloat = 220
         /// Row height for a shelf of cover cards: artwork, then up to two lines
         /// of title and one of subtitle.
         static let coverShelfHeight: CGFloat = 226
