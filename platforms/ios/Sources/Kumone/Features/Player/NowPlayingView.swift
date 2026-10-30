@@ -547,7 +547,11 @@ struct NowPlayingView: View {
     private func scheduleLyricsControlsAutoHide() {
         lyricsControlsTask?.cancel()
         lyricsControlsTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(3))
+            try? await Task.sleep(
+                for: NowPlayingPresentationMetrics.lyricsControlsAutoHideDelay(
+                    arguments: CommandLine.arguments
+                )
+            )
             guard !Task.isCancelled, showLyricsOnMobile, !isLyricsDragActive else { return }
             isUserScrolling = false
             resumeTask?.cancel()

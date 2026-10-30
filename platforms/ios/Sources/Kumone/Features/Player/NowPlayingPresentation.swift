@@ -18,6 +18,7 @@ enum NowPlayingPresentationMetrics {
     static let controlsRevealHitHeight: CGFloat = 132
     static let controlsTransitionOffset: CGFloat = 30
     static let controlsTransitionScale: CGFloat = 0.97
+    static let lyricsControlsAutoHideDelay = Duration.seconds(3)
 
     /// A strong ease-out lets the lyrics reclaim space immediately, then
     /// settles gently instead of moving at a constant speed.
@@ -87,6 +88,22 @@ enum NowPlayingPresentationMetrics {
         placementIsInline: Bool?
     ) -> Bool {
         placementIsInline ?? true
+    }
+
+    /// Give slow UI automation time to inspect transient controls without
+    /// changing the shipping delay or persisting a test-only preference.
+    static func lyricsControlsAutoHideDelay(arguments: [String]) -> Duration {
+        #if DEBUG
+        let requiredArguments: Set<String> = [
+            "-imusic-ui-testing",
+            "-imusic-ui-player-fixture",
+            "-imusic-ui-extended-lyrics-controls"
+        ]
+        if requiredArguments.isSubset(of: Set(arguments)) {
+            return .seconds(12)
+        }
+        #endif
+        return lyricsControlsAutoHideDelay
     }
 }
 

@@ -125,7 +125,11 @@ final class KumoneIOSUITests: XCTestCase {
     func testAppleMusicPlayerSongAndLyricsPages() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
-        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture"]
+        app.launchArguments = [
+            "-imusic-ui-testing",
+            "-imusic-ui-player-fixture",
+            "-imusic-ui-extended-lyrics-controls"
+        ]
         app.launch()
 
         let miniPlayer = app.buttons["miniPlayerOpenNowPlaying"]
@@ -162,9 +166,9 @@ final class KumoneIOSUITests: XCTestCase {
         let songTransportControls = app.descendants(matching: .any)["nowPlayingTransportControls"]
         // Wait for the initial auto-hide before tapping the reveal footprint.
         // Otherwise a fast simulator could tap the still-visible play button.
-        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7),
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 20),
                       "Lyrics transport controls must initially auto-hide")
-        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 7),
+        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 20),
                       "Lyrics volume control must initially auto-hide")
         XCTAssertTrue(accessoryControls.exists, "Auto-hide must preserve the accessory row")
         XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
@@ -182,9 +186,9 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(accessoryControls.exists, "The accessory row must stay visible on both player pages")
         XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
                        "The accessory row must not jump when switching to lyrics")
-        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7),
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 20),
                       "Lyrics transport controls must be removed from the accessibility tree when hidden")
-        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 7),
+        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 20),
                       "Lyrics volume control must be removed from the accessibility tree when hidden")
         XCTAssertTrue(accessoryControls.exists, "Hiding playback controls must not hide the accessory row")
         XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
@@ -215,14 +219,14 @@ final class KumoneIOSUITests: XCTestCase {
         )
         XCTAssertTrue(app.buttons["showSynchronizedLyrics"].exists, "Lyrics need the same bottom toolbar")
         // Time and quality were checked in the same snapshot above; querying
-        // them again serially could run past the real three-second auto-hide.
+        // them again serially could run past even the extended test window.
         app.buttons["showSynchronizedLyrics"].tap()
         XCTAssertTrue(songTransportControls.waitForExistence(timeout: 5))
         XCTAssertTrue(songPage.exists)
         artwork.swipeLeft()
         XCTAssertTrue(songPage.exists, "Switch pages only with the lyrics button")
         app.buttons["showSynchronizedLyrics"].tap()
-        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7),
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 20),
                       "Lyrics transport controls must auto-hide after returning from the song page")
 
         let lyricsAttachment = XCTAttachment(screenshot: app.screenshot())
@@ -255,5 +259,42 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertEqual(accessoryControls.frame.midY, landscapeAccessoryMidY, accuracy: 1.0,
                        "The accessory row must remain fixed on landscape lyrics")
         XCUIDevice.shared.orientation = .portrait
+    }
+
+    @MainActor
+    func testLyricsControlsAutoHideWithDefaultTiming() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture"]
+        app.launch()
+
+        let miniPlayer = app.buttons["miniPlayerOpenNowPlaying"]
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 15))
+        miniPlayer.tap()
+
+        let songPage = app.descendants(matching: .any)["appleMusicSongPage"]
+        XCTAssertTrue(songPage.waitForExistence(timeout: 10))
+        let accessoryControls = app.buttons["showSynchronizedLyrics"]
+        XCTAssertTrue(accessoryControls.waitForExistence(timeout: 5))
+        let songAccessoryMidY = accessoryControls.frame.midY
+
+        accessoryControls.tap()
+        let lyricsPage = app.descendants(matching: .any)["appleMusicLyricsPage"]
+        XCTAssertTrue(lyricsPage.waitForExistence(timeout: 10))
+        let lyricsScroll = app.scrollViews["synchronizedLyricsScrollView"]
+        XCTAssertTrue(lyricsScroll.waitForExistence(timeout: 10))
+
+        let transportControls = app.descendants(matching: .any)["lyricsTransportControls"]
+        let volumeControl = app.descendants(matching: .any)["lyricsVolumeControl"]
+        // The real three-second window can finish during XCTest navigation
+        // waits. The long interaction test separately verifies visible controls;
+        // this default-policy smoke verifies eventual hiding and a fixed toolbar.
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7),
+                      "Default lyrics transport controls must eventually auto-hide")
+        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 7),
+                      "Default lyrics volume control must eventually auto-hide")
+        XCTAssertTrue(accessoryControls.exists, "Auto-hide must preserve the accessory row")
+        XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
+                       "The accessory row must remain fixed after auto-hide")
     }
 }
