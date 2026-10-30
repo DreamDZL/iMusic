@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// Design tokens: color, radius, spacing, layout metrics.
 enum Theme {
@@ -41,15 +44,21 @@ enum Theme {
     }
 
     enum Layout {
-        static let contentInset: CGFloat = 24
+        /// Leading/trailing margin for page content. It matches the system
+        /// layout margin that positions large navigation titles and search
+        /// fields: 16pt on standard iPhones, 20pt on Plus/Max widths and iPad.
+        /// A fixed 24pt left every section header misaligned with its title.
+        static var contentInset: CGFloat {
+            #if os(iOS)
+            return DeviceMetrics.portraitWidth >= 414 ? 20 : 16
+            #else
+            return 24
+            #endif
+        }
         static let cardSize: CGFloat = 160
-        /// Compact feature shelf: keep the next card discoverable on an iPhone
-        /// rather than letting one promotional card dominate the home screen.
-        static let featureCardMaxWidth: CGFloat = 284
-        static let featureCardBaseHeight: CGFloat = 220
         /// Row height for a shelf of cover cards: artwork, then up to two lines
         /// of title and one of subtitle.
-        static let coverShelfHeight: CGFloat = 226
+        static let coverShelfHeight: CGFloat = 236
         /// Row height for a shelf of artist cards: circular artwork, one name.
         static let artistShelfHeight: CGFloat = 196
         static let sidebarWidth: CGFloat = 220
@@ -77,6 +86,30 @@ enum Theme {
         static let defaultWindowHeight: CGFloat = 780
     }
 }
+
+#if os(iOS)
+/// Physical portrait width of the device screen. It is stable across
+/// rotation, so margins do not jump in landscape. The value is cached only
+/// once a window scene exists; an early read never pins the fallback.
+enum DeviceMetrics {
+    /// Written and read only on the main thread (view bodies).
+    nonisolated(unsafe) private static var cachedPortraitWidth: CGFloat?
+
+    static var portraitWidth: CGFloat {
+        if let cachedPortraitWidth { return cachedPortraitWidth }
+        let width: CGFloat? = MainActor.assumeIsolated {
+            guard let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first else { return nil }
+            let bounds = scene.screen.bounds
+            return min(bounds.width, bounds.height)
+        }
+        guard let width else { return 390 }
+        cachedPortraitWidth = width
+        return width
+    }
+}
+#endif
 
 /// Motion tokens (mirrors kaset's `AppAnimation`).
 enum AppAnimation {

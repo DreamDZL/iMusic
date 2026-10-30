@@ -110,17 +110,16 @@ struct PlaylistDetailView: View {
                 if let detail = model.detail {
                     if isCompact {
                         compactHeader(detail)
-                            .padding(.horizontal, 16)
                             .padding(.top, 12)
                     } else {
                         regularHeader(detail)
                             .padding(.horizontal, Theme.Layout.contentInset)
                             .padding(.top, 16)
-                    }
 
-                    if !isLikedList {
-                        localCollectionAction(detail)
-                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+                        if !isLikedList {
+                            localCollectionAction(detail)
+                                .padding(.horizontal, Theme.Layout.contentInset)
+                        }
                     }
 
                     if model.tracks.isEmpty {
@@ -138,7 +137,7 @@ struct PlaylistDetailView: View {
                             removableFromPlaylistID: isOwnPlaylist ? playlistID : nil,
                             onRemoved: { model.remove($0) }
                         )
-                        .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+                        .padding(.horizontal, Theme.Layout.contentInset - 10)
                     }
 
                 } else if model.isLoading {
@@ -165,115 +164,48 @@ struct PlaylistDetailView: View {
     // MARK: - Compact (Mobile) Header
 
     private func compactHeader(_ detail: PlaylistDetail) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 14) {
-                CachedAsyncImage(url: detail.coverImgUrl?.resizedImageURL(384))
-                    .frame(width: 120, height: 120)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous))
-                    .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(isLikedList ? String(localized: "我喜欢的音乐") : detail.name)
-                        .font(.system(size: 16, weight: .bold))
-                        .lineLimit(3)
-
-                    if let creator = detail.creator, !isLikedList {
-                        HStack(spacing: 6) {
-                            CachedAsyncImage(url: creator.avatarUrl?.resizedImageURL(48), animated: false)
-                                .frame(width: 18, height: 18)
-                                .clipShape(Circle())
-                            Text(creator.nickname)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-
-                    Text("\(detail.trackCount) 首 · \(Formatters.playCount(detail.playCount)) 次播放")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
+        CollectionHeader(
+            title: isLikedList ? String(localized: "我喜欢的音乐") : detail.name,
+            curator: isLikedList ? nil : detail.creator?.nickname,
+            detail: "\(detail.trackCount) 首 · \(Formatters.playCount(detail.playCount)) 次播放",
+            description: detail.description?.replacingOccurrences(of: "\n", with: " "),
+            playDisabled: playable.isEmpty,
+            onPlay: {
+                player.play(tracks: playable, source: .playlist(playlistID),
+                            context: .playlist(id: playlistID, name: detail.name))
+            },
+            onShuffle: {
+                player.playShuffled(tracks: playable, source: .playlist(playlistID),
+                                    context: .playlist(id: playlistID, name: detail.name))
             }
-
-            if let description = detail.description, !description.isEmpty {
-                Button {
-                    showFullDescription = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(description.replacingOccurrences(of: "\n", with: " "))
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                .buttonStyle(.plain)
-                .sheet(isPresented: $showFullDescription) {
-                    NavigationStack {
-                        ScrollView {
-                            Text(description)
-                                .font(.system(size: 14))
-                                .padding(20)
-                        }
-                        .navigationTitle("歌单简介")
-                        #if os(iOS)
-                        .navigationBarTitleDisplayMode(.inline)
-                        #endif
-                        .toolbar {
-                            ToolbarItem(placement: .primaryAction) {
-                                Button("完成") { showFullDescription = false }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Compact Action Bar
+        ) {
+            CachedAsyncImage(url: detail.coverImgUrl?.resizedImageURL(600))
+        } actions: {
             HStack(spacing: 10) {
-                Button {
-                    player.play(tracks: playable, source: .playlist(playlistID),
-                                context: model.detail.map { .playlist(id: playlistID, name: $0.name) })
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "play.fill")
-                        Text("播放全部 (\(playable.count))")
-                    }
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 9)
-                    .background(Theme.accentGradient, in: Capsule())
-                    .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
-                }
-                .buttonStyle(.pressable)
-                .disabled(playable.isEmpty)
-
                 if isLikedList {
                     Button {
                         startHeartbeat()
                     } label: {
-                        Image(systemName: "heart.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundStyle(Theme.accent)
-                            .frame(width: 38, height: 38)
-                            .background(.primary.opacity(0.06), in: Circle())
+                        Label("心动模式", systemImage: "heart.circle")
+                            .frame(minHeight: 30)
                     }
-                    .buttonStyle(.pressable)
-                } else if !isOwnPlaylist, account.isLoggedIn {
-                    Button {
-                        toggleSubscribe(detail)
-                    } label: {
-                        Image(systemName: detail.subscribed ? "checkmark" : "plus")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(detail.subscribed ? Theme.accent : .primary)
-                            .frame(width: 38, height: 38)
-                            .background(.primary.opacity(0.06), in: Circle())
+                } else {
+                    localCollectionAction(detail)
+                    if !isOwnPlaylist, account.isLoggedIn {
+                        Button {
+                            toggleSubscribe(detail)
+                        } label: {
+                            Image(systemName: detail.subscribed ? "checkmark" : "plus")
+                                .frame(width: 30, height: 30)
+                        }
+                        .accessibilityLabel(detail.subscribed ? "取消收藏网易云歌单" : "收藏网易云歌单")
                     }
-                    .buttonStyle(.pressable)
                 }
             }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .controlSize(.regular)
+            .frame(maxWidth: 320)
         }
     }
 

@@ -21,6 +21,8 @@ struct TrackRow: View {
     /// Set when the row lives inside a user's own playlist (enables 删除).
     var removableFromPlaylistID: Int?
     var onRemoved: (() -> Void)?
+    /// Hairline under the text column, inset like system list separators.
+    var showsSeparator = false
     let onPlay: () -> Void
 
     @EnvironmentObject private var player: PlayerService
@@ -28,7 +30,7 @@ struct TrackRow: View {
     @ObservedObject private var localLibrary = LocalPlaylistStore.shared
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @ScaledMetric(relativeTo: .body) private var compactArtworkSize: CGFloat = 48
-    @ScaledMetric(relativeTo: .body) private var compactRowHeight: CGFloat = 64
+    @ScaledMetric(relativeTo: .body) private var compactRowHeight: CGFloat = 62
     @ScaledMetric(relativeTo: .body) private var compactAlbumRowHeight: CGFloat = 50
     @ScaledMetric(relativeTo: .body) private var regularRowHeight: CGFloat = 52
     @ScaledMetric(relativeTo: .body) private var regularAlbumRowHeight: CGFloat = 46
@@ -78,7 +80,7 @@ struct TrackRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(track.name)
-                        .font(isCompact ? .callout.weight(.medium) : .subheadline.weight(.medium))
+                        .font(isCompact ? Font.body : Font.subheadline.weight(.medium))
                         .foregroundStyle(isCurrent ? Theme.accent : .primary)
                         .lineLimit(1)
                     if let subtitle = track.subtitle, !isCompact {
@@ -91,18 +93,12 @@ struct TrackRow: View {
                         VIPBadge()
                     }
                 }
+                // Two lines like the system song row. Source and quality live
+                // in the player and the row menu, not under every song.
                 Text(track.artistNames)
-                    .font(isCompact ? .footnote : .caption)
+                    .font(isCompact ? Font.subheadline : Font.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                HStack(spacing: 4) {
-                    Text("来源：\(sourceName)")
-                    Text("·")
-                    Text("音质：\(qualityName)")
-                }
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -129,13 +125,23 @@ struct TrackRow: View {
                     .foregroundStyle(.tertiary)
             }
 
-            likeAndDuration
+            if isCompact {
+                rowMenu
+            } else {
+                likeAndDuration
+            }
         }
-        .padding(.horizontal, 10)
+        .padding(.leading, 10)
+        .padding(.trailing, isCompact ? 0 : 10)
         .padding(.vertical, isCompact ? 6 : 5)
         // Fixed row height keeps lazy-stack height estimation exact,
         // preventing scroll-offset jumps in long lists (#3).
         .frame(height: rowHeight)
+        .overlay(alignment: .bottom) {
+            if showsSeparator {
+                Divider().padding(.leading, separatorLeadingInset)
+            }
+        }
         .opacity(isPlayable ? 1 : 0.45)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
@@ -207,6 +213,32 @@ struct TrackRow: View {
             return isCompact ? compactAlbumRowHeight : regularAlbumRowHeight
         }
         return isCompact ? compactRowHeight : regularRowHeight
+    }
+
+    /// Separators start under the title, not under the artwork.
+    private var separatorLeadingInset: CGFloat {
+        var inset: CGFloat = 10
+        if !hidesLeadingIndex { inset += 28 + 12 }
+        if showsArtwork { inset += (isCompact ? compactArtworkSize : 42) + 12 }
+        return inset
+    }
+
+    /// Trailing "⋯" like the system song row. It carries the same actions
+    /// as the long-press menu, plus the source/quality detail removed from
+    /// the row itself.
+    private var rowMenu: some View {
+        Menu {
+            contextMenuItems
+            Divider()
+            Text("来源：\(sourceName) · 音质：\(qualityName)")
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("更多操作：\(track.name)")
     }
 
     @ViewBuilder
@@ -519,6 +551,10 @@ struct TrackListView: View {
     /// Optional selection binding used by local-playlist batch actions.
     /// Existing callers stay in the normal, non-selectable mode.
     var selectedTrackKeys: Binding<Set<String>>? = nil
+    var showsSeparators = true
+    /// Footer with song count and total length; for playlist/album pages,
+    /// not for short song shelves inside feeds.
+    var showsSummary = true
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
@@ -528,18 +564,7 @@ struct TrackListView: View {
 
     var body: some View {
         VStack(spacing: 4) {
-            #if os(iOS)
-            if tracks.count > 1 {
-                Text("\(tracks.count) 首歌曲")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-            }
-            #endif
-
-            LazyVStack(spacing: 1) {
+            LazyVStack(spacing: 0) {
             ForEach(Array(tracks.enumerated()), id: \.element.playbackKey) { index, track in
                 HStack(spacing: 6) {
                     if let selection = selectedTrackKeys {
@@ -571,7 +596,8 @@ struct TrackListView: View {
                         style: style,
                         playability: playability(of: track),
                         removableFromPlaylistID: removableFromPlaylistID,
-                        onRemoved: { onRemoved?(track) }
+                        onRemoved: { onRemoved?(track) },
+                        showsSeparator: showsSeparators && index < tracks.count - 1
                     ) {
                         player.play(tracks: playableTracks, source: source, startAt: track,
                                     context: context)
@@ -579,7 +605,29 @@ struct TrackListView: View {
                 }
             }
             }
+
+            #if os(iOS)
+            // Count summary sits under the list, like the system footer
+            // "24 首歌曲，1 小时 20 分钟".
+            if showsSummary, tracks.count > 1 {
+                Text(trackSummary)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 12)
+            }
+            #endif
         }
+    }
+
+    private var trackSummary: String {
+        let totalMinutes = tracks.reduce(0) { $0 + $1.duration } / 60
+        guard totalMinutes >= 1 else { return "\(tracks.count) 首歌曲" }
+        let hours = Int(totalMinutes) / 60
+        let minutes = Int(totalMinutes) % 60
+        let length = hours > 0 ? "\(hours) 小时 \(minutes) 分钟" : "\(minutes) 分钟"
+        return "\(tracks.count) 首歌曲，\(length)"
     }
 
     private var playableTracks: [Track] {

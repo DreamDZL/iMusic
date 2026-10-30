@@ -116,61 +116,31 @@ struct LXPlaylistDetailView: View {
                 .frame(minHeight: 120)
             }
 
-            HStack(alignment: .top, spacing: 16) {
-                CachedAsyncImage(url: detail.coverURL?.resizedImageURL(512))
-                    .frame(width: 142, height: 142)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(detail.name)
-                        .font(.title3.weight(.semibold))
-                        .lineLimit(3)
-                    Text([detail.source.displayName, detail.author].compactMap { $0 }.joined(separator: " · "))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Text(trackCountDescription(detail))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, Theme.Layout.contentInset)
-
-            catalogSaveButton(detail)
-                .padding(.horizontal, Theme.Layout.contentInset)
-
-            if let description = detail.description, !description.isEmpty {
-                Text(description)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(4)
-                    .padding(.horizontal, Theme.Layout.contentInset)
+            CollectionHeader(
+                title: detail.name,
+                curator: detail.author ?? detail.source.displayName,
+                detail: [detail.source.displayName, trackCountDescription(detail)].joined(separator: " · "),
+                description: detail.description,
+                playDisabled: detail.tracks.isEmpty,
+                onPlay: { player.play(tracks: detail.tracks, source: .none, context: .recents) },
+                onShuffle: { player.playShuffled(tracks: detail.tracks, source: .none, context: .recents) }
+            ) {
+                CachedAsyncImage(url: detail.coverURL?.resizedImageURL(600))
+            } actions: {
+                catalogSaveButton(detail)
+                    .controlSize(.regular)
+                    .frame(maxWidth: 280)
             }
 
             if detail.tracks.isEmpty {
                 EmptyStateView(icon: "music.note.list", title: "歌单暂无歌曲")
                     .frame(minHeight: 240)
             } else {
-                HStack {
-                    Text("歌曲")
-                        .font(.headline)
-                    Spacer()
-                    Button {
-                        player.play(tracks: detail.tracks, source: .none,
-                                    context: .recents)
-                    } label: {
-                        Label("播放全部", systemImage: "play.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .frame(minHeight: 44)
-                }
-                .padding(.horizontal, Theme.Layout.contentInset)
-
                 TrackListView(tracks: detail.tracks)
                     .padding(.horizontal, Theme.Layout.contentInset - 10)
             }
         }
-        .padding(.vertical, Theme.Layout.contentInset)
+        .padding(.vertical, 12)
     }
 
     @ViewBuilder

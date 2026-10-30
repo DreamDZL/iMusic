@@ -169,27 +169,30 @@ final class ExploreViewModel: ObservableObject {
 }
 
 struct ExploreView: View {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @StateObject private var model = ExploreViewModel.shared
     @EnvironmentObject private var settings: SettingsManager
+    /// Measured page width for the featured carousel cards.
+    @State private var exploreWidth: CGFloat = 390
+    @State private var showsAllGenres = false
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) {
-                if model.selectedCategory == "推荐",
-                   let featured = model.playlists.first {
-                    featuredPlaylistShelf(featured)
+            LazyVStack(alignment: .leading, spacing: 30) {
+                if !featuredPlaylists.isEmpty {
+                    featuredCarousel(featuredPlaylists)
                 }
 
                 if model.platform == .wy && !model.newSongs.isEmpty {
-                    SectionHeader(title: "网易云新歌推荐")
-                        .padding(.horizontal, Theme.Layout.contentInset)
-                    TrackListView(tracks: model.newSongs)
-                        .padding(.horizontal, Theme.Layout.contentInset - 10)
+                    VStack(alignment: .leading, spacing: 8) {
+                        SectionHeader(title: "新歌推荐")
+                            .padding(.horizontal, Theme.Layout.contentInset)
+                        TrackListView(tracks: Array(model.newSongs.prefix(8)), showsSummary: false)
+                            .padding(.horizontal, Theme.Layout.contentInset - 10)
+                    }
                 }
 
                 if model.platform == .wy && !model.newAlbums.isEmpty {
-                    Shelf(title: "网易云新碟", rowHeight: Theme.Layout.coverShelfHeight) {
+                    Shelf(title: "新碟上架", rowHeight: Theme.Layout.coverShelfHeight) {
                         ForEach(model.newAlbums) { album in
                             newAlbumCard(album)
                         }
@@ -211,20 +214,26 @@ struct ExploreView: View {
                     .frame(minHeight: 300)
                 } else {
                     if model.platform == .wy && !model.toplists.isEmpty {
-                        SectionHeader(title: "网易云排行榜")
-                            .padding(.horizontal, Theme.Layout.contentInset)
-                        ToplistGrid(toplists: model.toplists)
-                            .padding(.horizontal, Theme.Layout.contentInset)
+                        VStack(alignment: .leading, spacing: 12) {
+                            SectionHeader(title: "排行榜")
+                                .padding(.horizontal, Theme.Layout.contentInset)
+                            ToplistGrid(toplists: model.toplists)
+                                .padding(.horizontal, Theme.Layout.contentInset)
+                        }
                     }
 
                     if !model.tracks.isEmpty {
-                        SectionHeader(title: "\(model.platform.displayName) 精选歌曲")
-                            .padding(.horizontal, Theme.Layout.contentInset)
-                        TrackListView(tracks: model.tracks)
-                            .padding(.horizontal, Theme.Layout.contentInset - 10)
+                        VStack(alignment: .leading, spacing: 8) {
+                            SectionHeader(title: "精选歌曲", subtitle: model.platform.displayName)
+                                .padding(.horizontal, Theme.Layout.contentInset)
+                            TrackListView(tracks: model.tracks, showsSummary: false)
+                                .padding(.horizontal, Theme.Layout.contentInset - 10)
+                        }
                     }
 
                     if !visiblePlaylists.isEmpty {
+                        SectionHeader(title: model.selectedCategory == "推荐" ? "更多歌单" : "\(model.selectedCategory)歌单")
+                            .padding(.horizontal, Theme.Layout.contentInset)
                         CardGrid {
                             ForEach(Array(visiblePlaylists.enumerated()), id: \.element.id) { index, playlist in
                                 NavigationLink(value: Destination.lxPlaylist(source: playlist.source, id: playlist.id)) {
@@ -261,12 +270,16 @@ struct ExploreView: View {
             }
         }
         .accessibilityIdentifier("exploreContentScrollView")
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            exploreWidth = width
+        }
         .navigationTitle("新发现")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 discoveryMenu
             }
         }
+        .tint(.primary)
         .task(id: "\(settings.homeRecommendationMode.rawValue)-\(settings.homeRecommendationPlatform.rawValue)") {
             model.prepare(platform: settings.homeRecommendationPlatform)
             guard !IOSUITestMode.isEnabled else { return }
@@ -317,7 +330,7 @@ struct ExploreView: View {
         } label: {
             Label(
                 discoveryFilterTitle,
-                systemImage: "line.3.horizontal.decrease.circle"
+                systemImage: "line.3.horizontal.decrease"
             )
         }
         .accessibilityLabel("筛选新发现：\(model.platform.displayName)、\(model.selectedCategory)")
@@ -329,8 +342,18 @@ struct ExploreView: View {
             : "\(model.platform.displayName) · \(model.selectedCategory)"
     }
 
+    private static let featuredCount = 5
+
+    private var featuredPlaylists: [LXPlaylistSummary] {
+        model.selectedCategory == "推荐" ? Array(model.playlists.prefix(Self.featuredCount)) : []
+    }
+
+    /// The grid below never repeats a playlist already shown in the
+    /// featured carousel.
     private var visiblePlaylists: [LXPlaylistSummary] {
-        model.selectedCategory == "推荐" ? Array(model.playlists.dropFirst()) : model.playlists
+        model.selectedCategory == "推荐"
+            ? Array(model.playlists.dropFirst(Self.featuredCount))
+            : model.playlists
     }
 
     private func newAlbumCard(_ album: AlbumSummary) -> some View {
@@ -344,77 +367,106 @@ struct ExploreView: View {
         .buttonStyle(.plain)
     }
 
-    private func featuredPlaylistShelf(_ playlist: LXPlaylistSummary) -> some View {
-        NavigationLink(value: Destination.lxPlaylist(source: playlist.source, id: playlist.id)) {
-            HStack(spacing: 16) {
-                CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(900), animated: false)
-                    .frame(width: featuredCardHeight - 32, height: featuredCardHeight - 32)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("为你发现")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(Theme.accent)
-                    Text(playlist.name)
-                        .font(.headline.weight(.bold))
-                        .lineLimit(2)
-                    Text([playlist.source.displayName, playlist.author].compactMap { $0 }.joined(separator: " · "))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                    Spacer(minLength: 0)
-                    Label("打开歌单", systemImage: "arrow.up.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.accent)
+    /// Featured playlists at the top of New, as a horizontally paged shelf
+    /// in the style of the system "New" tab: eyebrow, title and subtitle
+    /// above a wide artwork card. The next card peeks in to signal swiping.
+    private func featuredCarousel(_ playlists: [LXPlaylistSummary]) -> some View {
+        let cardWidth = max(240, (exploreWidth - Theme.Layout.contentInset * 2) * 0.92)
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(playlists) { playlist in
+                    featuredPlaylistCard(playlist, width: cardWidth)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: featuredCardHeight)
-            .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
-            }
+            .scrollTargetLayout()
         }
-        .buttonStyle(.plain)
+        .contentMargins(.horizontal, Theme.Layout.contentInset, for: .scrollContent)
+        .scrollTargetBehavior(.viewAligned)
+        .compatScrollClipDisabled()
+    }
+
+    private func featuredPlaylistCard(_ playlist: LXPlaylistSummary, width: CGFloat) -> some View {
+        NavigationLink(value: Destination.lxPlaylist(source: playlist.source, id: playlist.id)) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("为你发现")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(playlist.name)
+                    .font(.title3)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text([playlist.source.displayName, playlist.author].compactMap { $0 }.joined(separator: " · "))
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.bottom, 8)
+                CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(900), animated: false)
+                    .frame(width: width, height: (width * 0.66).rounded())
+                    .background(.quaternary.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous)
+                            .strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
+                    )
+            }
+            .frame(width: width, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.interactiveCard)
         .accessibilityLabel("打开推荐歌单：\(playlist.name)")
-        .padding(.horizontal, Theme.Layout.contentInset)
     }
 
-    private var featuredCardHeight: CGFloat {
-        dynamicTypeSize.isAccessibilitySize ? 460 : 330
-    }
-
+    /// Category tiles in the system "Browse Categories" style: solid colour,
+    /// title at the bottom-left, no decorative glyphs. Eight are shown by
+    /// default so the grid does not dominate the page.
     private var genreBrowser: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "按类型浏览")
-                .padding(.horizontal, Theme.Layout.contentInset)
+        let visible = showsAllGenres
+            ? ExploreViewModel.categories
+            : Array(ExploreViewModel.categories.prefix(8))
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                SectionHeader(title: "按类型浏览")
+                if ExploreViewModel.categories.count > 8 {
+                    Button(showsAllGenres ? "收起" : "全部") {
+                        withAnimation(AppAnimation.standard) { showsAllGenres.toggle() }
+                    }
+                    .font(.body)
+                    .tint(Theme.accent)
+                }
+            }
+            .padding(.horizontal, Theme.Layout.contentInset)
 
             LazyVGrid(
-                columns: [GridItem(.flexible()), GridItem(.flexible())],
+                columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
                 spacing: 12
             ) {
-                ForEach(Array(ExploreViewModel.categories.enumerated()), id: \.element) { index, category in
+                ForEach(Array(visible.enumerated()), id: \.element) { index, category in
+                    let isSelected = model.selectedCategory == category
                     Button {
                         model.select(category)
                     } label: {
-                        HStack(spacing: 10) {
+                        ZStack(alignment: .bottomLeading) {
+                            genreColor(index)
                             Text(category)
-                                .font(.headline.weight(.semibold))
-                            Spacer(minLength: 0)
-                            Image(systemName: model.selectedCategory == category ? "checkmark" : "arrow.up.right")
-                                .font(.caption.weight(.bold))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(12)
                         }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 15)
-                        .frame(maxWidth: .infinity, minHeight: 70, alignment: .leading)
-                        .background(genreColor(index), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .frame(maxWidth: .infinity, minHeight: 96)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
+                        .overlay(alignment: .topTrailing) {
+                            if isSelected {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.title3)
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(genreColor(index), .white)
+                                    .padding(10)
+                            }
+                        }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.interactiveCard)
                     .accessibilityLabel("浏览\(category)音乐")
-                    .accessibilityAddTraits(model.selectedCategory == category ? .isSelected : [])
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
             .padding(.horizontal, Theme.Layout.contentInset)

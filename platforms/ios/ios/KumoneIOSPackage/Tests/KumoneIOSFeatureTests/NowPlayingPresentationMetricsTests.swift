@@ -36,6 +36,24 @@ final class NowPlayingPresentationMetricsTests: XCTestCase {
         }
     }
 
+    /// The hidden lyric deck keeps exactly the accessory row plus a reveal
+    /// band; it must stay smaller than the full deck so lyrics gain space.
+    func testHiddenLyricsDeckReservesAccessoryRowAndRevealBand() {
+        XCTAssertEqual(NowPlayingView.hiddenLyricsDeckHeight, 112)
+        XCTAssertLessThan(NowPlayingView.hiddenLyricsDeckHeight, 228)
+    }
+
+    /// The timeline badge must stay short; full wording belongs to the
+    /// accessibility label and the quality sheet.
+    func testQualityBadgeNamesAreShort() {
+        for quality in AudioQuality.allCases {
+            XCTAssertLessThanOrEqual(quality.badgeName.count, 11, "\(quality) badge is too long")
+            XCTAssertFalse(quality.badgeName.contains("/"), "\(quality) badge should be a single label")
+        }
+        XCTAssertEqual(AudioQuality(lxType: "320k")?.badgeName, "320K")
+        XCTAssertEqual(AudioQuality(lxType: "flac")?.badgeName, "无损")
+    }
+
     func testMiniPlayerSwipeRequiresHorizontalIntent() {
         XCTAssertEqual(
             MiniPlayerSwipePolicy.trackDirection(

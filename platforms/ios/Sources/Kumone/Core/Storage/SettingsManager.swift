@@ -71,6 +71,20 @@ enum AudioQuality: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Short format tag for the player timeline, like the system "Lossless"
+    /// badge. Use `sourceDisplayName` wherever a full description fits.
+    var badgeName: String {
+        switch self {
+        case .master: return "Master"
+        case .atmos, .dolby: return "Dolby Atmos"
+        case .surround: return "环绕声"
+        case .hires: return "Hi-Res 无损"
+        case .lossless: return "无损"
+        case .exhigh, .higher: return "320K"
+        case .standard: return "128K"
+        }
+    }
+
     init?(lxType: String) {
         switch lxType.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) {
         case "master", "jymaster", "master_quality", "master-quality": self = .master

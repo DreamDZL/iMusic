@@ -21,6 +21,9 @@ struct NowPlayingView: View {
     @State private var artworkPalette = ArtworkPaletteTransition()
     @State private var activeIndex: Int?
     @State private var lyricLineFrames: [Int: CGRect] = [:]
+    /// Lyric scroll viewport and resume button, in the "lyricsPage" space.
+    @State private var lyricViewportFrame: CGRect = .zero
+    @State private var resumeButtonFrame: CGRect = .zero
     @State private var isUserScrolling = false
     @State private var isLyricsDragActive = false
     @State private var resumeTask: Task<Void, Never>?
@@ -173,8 +176,10 @@ struct NowPlayingView: View {
 #if os(iOS)
         artworkBackdrop
             .overlay {
+                // Keep the artwork tone visible to the bottom edge. Darken
+                // gently for legibility instead of fading to an opaque band.
                 LinearGradient(
-                    colors: [.black.opacity(0.12), .clear, .black.opacity(0.58)],
+                    colors: [.black.opacity(0.06), .clear, .black.opacity(0.30)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -216,7 +221,7 @@ struct NowPlayingView: View {
                             y: geometry.size.height * 0.08 + CGFloat(sin(motion * 0.12)) * 10
                         )
                     LinearGradient(
-                        colors: [.black.opacity(0.08), .clear, .black.opacity(0.58)],
+                        colors: [.black.opacity(0.04), .clear, .black.opacity(0.22)],
                         startPoint: .top,
                         endPoint: .bottom
                     )
@@ -234,9 +239,9 @@ struct NowPlayingView: View {
         LinearGradient(
             stops: [
                 .init(color: palette.primary.opacity(0.98), location: 0),
-                .init(color: palette.primary.opacity(0.92), location: 0.32),
-                .init(color: palette.secondary.opacity(0.94), location: 0.76),
-                .init(color: .black.opacity(0.96), location: 1),
+                .init(color: palette.primary.opacity(0.94), location: 0.38),
+                .init(color: palette.secondary.opacity(0.96), location: 0.82),
+                .init(color: palette.secondary.opacity(0.88), location: 1),
             ],
             startPoint: .top,
             endPoint: .bottom
@@ -372,16 +377,24 @@ struct NowPlayingView: View {
     @ViewBuilder
     private func appleMusicCompactLayout(size: CGSize) -> some View {
         let isShortScreen = size.height < 680
+        // Keep the full playback deck at one fixed screen position on both
+        // pages. While lyric controls are hidden only a slim reveal band and
+        // the accessory row stay reserved, so lyric lines are never laid out
+        // beneath a transparent tap target.
+        let controlsHeight: CGFloat = 228
+        let reservedDeckHeight = !showLyricsOnMobile || lyricsControlsVisible
+            ? controlsHeight
+            : Self.hiddenLyricsDeckHeight
+        // Artwork takes the space left after the title row and deck, with the
+        // same side margins as the controls (Apple's player keeps them equal).
+        // Non-artwork content on the song page: top inset, spacers, the gap
+        // below the artwork and the title row.
+        let songPageChrome: CGFloat = isShortScreen ? 130 : 170
         let artworkSize = max(0, min(
             size.width - 52,
-            size.height * (isShortScreen ? 0.34 : 0.39),
-            360
+            size.height - controlsHeight - songPageChrome,
+            400
         ))
-        // Keep the full playback deck at one fixed screen position on both
-        // pages. Its transparent footprint remains tappable while hidden so
-        // lyrics can never steal the gesture intended to reveal controls.
-        let controlsHeight: CGFloat = 228
-        let reservesControlsSpace = !showLyricsOnMobile || lyricsControlsVisible
 
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
@@ -395,7 +408,14 @@ struct NowPlayingView: View {
                             Spacer(minLength: isShortScreen ? 12 : 20)
 
                             artworkView(size: artworkSize)
-                                .padding(.bottom, isShortScreen ? 18 : 26)
+                                // Paused artwork recedes slightly, like the
+                                // system player; reduce motion skips the scale.
+                                .scaleEffect(player.isPlaying || reduceMotion ? 1 : 0.8)
+                                .animation(
+                                    reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.78),
+                                    value: player.isPlaying
+                                )
+                                .padding(.bottom, isShortScreen ? 22 : 34)
 
                             trackMetaView
 
@@ -409,14 +429,11 @@ struct NowPlayingView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                // Let lyrics continue behind the transparent reveal area when
-                // controls are hidden. Keep the space reserved on the song
-                // page and while the lyric controls are visible, so the deck
-                // never shifts vertically between its two normal states.
-                if reservesControlsSpace {
-                    Color.clear
-                        .frame(height: controlsHeight)
-                }
+                // Reserve exactly the deck's current footprint. Hidden lyric
+                // controls shrink it to the reveal band plus accessory row,
+                // which stays at the same screen position in both states.
+                Color.clear
+                    .frame(height: reservedDeckHeight)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -425,11 +442,25 @@ struct NowPlayingView: View {
         .animation(.easeInOut(duration: 0.22), value: showLyricsOnMobile)
     }
 
-    private func appleMusicPlaybackControls(height: CGFloat) -> some View {
+    // Deck geometry, shared by both visibility states so the accessory
+    // row's bottom edge (and midY) is identical whether controls show.
+    private static let deckAccessoryHeight: CGFloat = 44
+    private static let deckVerticalPadding: CGFloat = 8
+    private static let deckRowSpacing: CGFloat = 4
+    private static let deckRevealBandHeight: CGFloat = 48
+
+    /// Accessory row plus a slim reveal band. Bottom alignment keeps the
+    /// accessory row at the same screen position as the full deck.
+    static let hiddenLyricsDeckHeight: CGFloat =
+        deckRevealBandHeight + deckRowSpacing + deckAccessoryHeight + deckVerticalPadding * 2
+
+    private func appleMusicPlaybackControls(height fullHeight: CGFloat) -> some View {
         let isVisible = !showLyricsOnMobile || lyricsControlsVisible
         let playbackControlsHeight: CGFloat = 164
+        let revealBandHeight = Self.deckRevealBandHeight
+        let height = isVisible ? fullHeight : Self.hiddenLyricsDeckHeight
 
-        return ZStack {
+        return ZStack(alignment: .bottom) {
             if !isVisible {
                 Color.clear
                     .contentShape(Rectangle())
@@ -437,7 +468,7 @@ struct NowPlayingView: View {
                     .accessibilityHidden(true)
             }
 
-            VStack(spacing: 4) {
+            VStack(spacing: Self.deckRowSpacing) {
                 Group {
                     if isVisible {
                         VStack(spacing: 4) {
@@ -470,7 +501,7 @@ struct NowPlayingView: View {
                         .frame(height: playbackControlsHeight)
                     } else {
                         Color.clear
-                            .frame(height: playbackControlsHeight)
+                            .frame(height: revealBandHeight)
                             .accessibilityHidden(true)
                     }
                 }
@@ -494,18 +525,17 @@ struct NowPlayingView: View {
                     })
 
                 songPageAccessoryControls
-                    .frame(height: 44)
+                    .frame(height: Self.deckAccessoryHeight)
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("nowPlayingAccessoryControls")
             }
-            .padding(.top, 8)
-            .padding(.bottom, 8)
+            .padding(.vertical, Self.deckVerticalPadding)
             .frame(maxWidth: 460)
             .padding(.horizontal, 26)
             .frame(maxWidth: .infinity)
-            .frame(height: height)
+            .frame(height: height, alignment: .bottom)
         }
-        .frame(height: height)
+        .frame(height: height, alignment: .bottom)
         .contentShape(Rectangle())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("nowPlayingBottomControls")
@@ -515,16 +545,18 @@ struct NowPlayingView: View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    artworkView(size: 54)
+                    artworkView(size: 56)
                         .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
-                    trackMetaView
+                    trackMeta(compact: true)
                 }
-                .padding(.bottom, 18)
+                .padding(.bottom, 14)
 
                 lyricsColumn
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(.horizontal, 24)
+            // Same side margin as the playback deck so lyrics, header and
+            // controls share one leading edge.
+            .padding(.horizontal, 26)
             .padding(.top, 28)
             .frame(width: geometry.size.width, height: geometry.size.height)
             .contentShape(Rectangle())
@@ -533,7 +565,13 @@ struct NowPlayingView: View {
             .accessibilityAction(named: Text("显示播放控制")) { revealLyricsControls() }
             .simultaneousGesture(SpatialTapGesture(coordinateSpace: .named("lyricsPage"))
                 .onEnded { value in
-                    guard isUserScrolling,
+                    // Any tapped line seeks to its timestamp, whether or not
+                    // the reader was browsing. The reveal band is no longer
+                    // laid out over lyric lines, so the gestures never compete.
+                    // Only taps inside the lyric viewport seek; the header and
+                    // the resume button overlay must never select a line.
+                    guard lyricViewportFrame.contains(value.location),
+                          !resumeButtonFrame.contains(value.location),
                           let id = lyricLineFrames.first(where: { $0.value.contains(value.location) })?.key,
                           let line = player.lyrics?.lines.first(where: { $0.id == id }),
                           line.time.isFinite else { return }
@@ -578,28 +616,25 @@ struct NowPlayingView: View {
                     resumeTask?.cancel()
                 }
             } label: {
-                Image(systemName: showLyricsOnMobile ? "quote.bubble.fill" : "quote.bubble")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.86))
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .contentShape(Rectangle())
+                accessoryGlyph(showLyricsOnMobile ? "quote.bubble.fill" : "quote.bubble",
+                               isActive: showLyricsOnMobile)
             }
             .buttonStyle(.pressable)
             .accessibilityLabel(showLyricsOnMobile ? "返回歌曲页" : "显示同步歌词")
+            .accessibilityAddTraits(showLyricsOnMobile ? .isSelected : [])
             .accessibilityIdentifier("showSynchronizedLyrics")
 
-            RoutePickerButton(diameter: 40, glyphSize: 18)
+            // The output picker is a plain glyph like its neighbours; a filled
+            // circle made it read as a different kind of control.
+            RoutePickerButton(diameter: 44, glyphSize: 20, background: .clear)
                 .frame(maxWidth: .infinity)
 
             if hasLyricTranslation {
                 Button {
                     settings.showLyricsTranslation.toggle()
                 } label: {
-                    Image(systemName: settings.showLyricsTranslation ? "character.bubble.fill" : "character.bubble")
-                        .font(.system(size: 19, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.86))
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .contentShape(Rectangle())
+                    accessoryGlyph(settings.showLyricsTranslation ? "character.bubble.fill" : "character.bubble",
+                                   isActive: settings.showLyricsTranslation)
                 }
                 .buttonStyle(.pressable)
                 .accessibilityLabel(settings.showLyricsTranslation ? "隐藏歌词翻译" : "显示歌词翻译")
@@ -608,17 +643,30 @@ struct NowPlayingView: View {
 
             #if os(iOS)
             Button { showQueueSheet = true } label: {
-                Image(systemName: "list.bullet")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.86))
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .contentShape(Rectangle())
+                accessoryGlyph("list.bullet", isActive: false)
             }
             .buttonStyle(.pressable)
             .accessibilityLabel("播放队列")
             #endif
         }
         .frame(maxWidth: 360)
+    }
+
+    /// Active accessory toggles get a subtle rounded highlight rather than a
+    /// colour change, so the row stays monochrome over any artwork palette.
+    private func accessoryGlyph(_ systemName: String, isActive: Bool) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 20, weight: .medium))
+            .foregroundStyle(.white.opacity(isActive ? 1 : 0.78))
+            .frame(width: 40, height: 34)
+            .background {
+                if isActive {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(.white.opacity(0.18))
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .contentShape(Rectangle())
     }
 
     private var hasLyricTranslation: Bool {
@@ -630,9 +678,11 @@ struct NowPlayingView: View {
 
     private var primaryTransportControls: some View {
         HStack(spacing: 0) {
+            // Music uses the double-triangle skip glyphs; the bar-ended
+            // `.end` variants read as "jump to start/end" instead.
             Button(action: player.isFMMode ? player.fmTrash : player.previous) {
-                Image(systemName: player.isFMMode ? "trash" : "backward.end.fill")
-                    .font(.system(size: 29, weight: .semibold))
+                Image(systemName: player.isFMMode ? "hand.thumbsdown.fill" : "backward.fill")
+                    .font(.system(size: player.isFMMode ? 26 : 32, weight: .regular))
                     .frame(maxWidth: .infinity, minHeight: 64)
                     .contentShape(Rectangle())
             }
@@ -642,8 +692,8 @@ struct NowPlayingView: View {
                 .frame(maxWidth: .infinity)
 
             Button(action: player.next) {
-                Image(systemName: "forward.end.fill")
-                    .font(.system(size: 29, weight: .semibold))
+                Image(systemName: "forward.fill")
+                    .font(.system(size: 32, weight: .regular))
                     .frame(maxWidth: .infinity, minHeight: 64)
                     .contentShape(Rectangle())
             }
@@ -651,7 +701,8 @@ struct NowPlayingView: View {
         }
         .foregroundStyle(.white)
         .buttonStyle(.pressable)
-        .frame(maxWidth: 460)
+        .frame(maxWidth: 360)
+        .frame(maxWidth: .infinity)
     }
 
 
@@ -1004,25 +1055,6 @@ struct NowPlayingView: View {
         #endif
     }
 
-    @ViewBuilder
-    private var playerGlassCircle: some View {
-        #if os(iOS)
-        if #available(iOS 26.0, *) {
-            Circle().fill(.clear).glassEffect(.regular, in: Circle())
-        } else {
-            Circle().fill(.ultraThinMaterial)
-        }
-        #elseif os(macOS)
-        if #available(macOS 26.0, *) {
-            Circle().fill(.clear).glassEffect(.regular, in: Circle())
-        } else {
-            Circle().fill(.ultraThinMaterial)
-        }
-        #else
-        Circle().fill(.ultraThinMaterial)
-        #endif
-    }
-
     private func artworkView(size: CGFloat) -> some View {
         Group {
             if let artworkImage {
@@ -1040,8 +1072,10 @@ struct NowPlayingView: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(color: .black.opacity(0.3), radius: 18, y: 9)
+        // Radius and shadow scale with the artwork, so the 56pt lyric header
+        // thumbnail does not get the same 18pt corners as the hero artwork.
+        .clipShape(RoundedRectangle(cornerRadius: min(14, max(6, size * 0.045)), style: .continuous))
+        .shadow(color: .black.opacity(size > 120 ? 0.32 : 0.2), radius: size > 120 ? 22 : 6, y: size > 120 ? 12 : 3)
         .accessibilityLabel("专辑封面")
         .accessibilityIdentifier("nowPlayingArtworkImage")
     }
@@ -1083,20 +1117,22 @@ struct NowPlayingView: View {
     }
 #endif
 
-    private var trackMetaView: some View {
+    private var trackMetaView: some View { trackMeta(compact: false) }
+
+    /// Title row shared by the song page and the lyric header. The lyric
+    /// header is a compact variant next to the 56pt thumbnail.
+    private func trackMeta(compact: Bool) -> some View {
         HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: compact ? 1 : 2) {
                 Text(player.currentTrack?.name ?? "")
-                    .font(.system(.title2, design: .default, weight: .semibold))
+                    .font(compact ? Font.headline : Font.title3.weight(.semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.78)
                     .accessibilityAddTraits(.isHeader)
                 Text(player.currentTrack?.artistNames ?? "")
-                    .font(.system(.title3, design: .default, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.68))
+                    .font(compact ? Font.subheadline : Font.title3)
+                    .foregroundStyle(.white.opacity(0.62))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.78)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1106,10 +1142,11 @@ struct NowPlayingView: View {
                     localLibrary.toggleFavorite(track)
                 } label: {
                     Image(systemName: liked ? "star.fill" : "star")
-                        .font(.system(size: 21, weight: .medium))
-                        .foregroundStyle(liked ? Theme.accent : .white.opacity(0.88))
-                        .frame(width: 42, height: 44)
-                        .background { playerGlassCircle }
+                        .font(.system(size: compact ? 15 : 17, weight: .semibold))
+                        .foregroundStyle(.white.opacity(liked ? 1 : 0.9))
+                        .frame(width: compact ? 30 : 34, height: compact ? 30 : 34)
+                        .background { playerControlCircle }
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.pressable)
@@ -1166,10 +1203,11 @@ struct NowPlayingView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.88))
-                        .frame(width: 42, height: 44)
-                        .background { playerGlassCircle }
+                        .font(.system(size: compact ? 15 : 17, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .frame(width: compact ? 30 : 34, height: compact ? 30 : 34)
+                        .background { playerControlCircle }
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.pressable)
@@ -1177,6 +1215,12 @@ struct NowPlayingView: View {
             }
         }
         .frame(maxWidth: 460)
+    }
+
+    /// Neutral translucent fill. Glass over a saturated artwork palette tints
+    /// itself with that palette (the pink circles in red backdrops).
+    private var playerControlCircle: some View {
+        Circle().fill(.white.opacity(0.16))
     }
 
     private func leftColumn(artworkSize: CGFloat) -> some View {
@@ -1268,7 +1312,7 @@ struct NowPlayingView: View {
             player.togglePlayPause()
         } label: {
             Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                .font(.system(size: 40, weight: .semibold))
+                .font(.system(size: 44, weight: .regular))
                 .foregroundStyle(.white)
                 .contentTransition(.opacity)
                 .frame(width: 72, height: 72)
@@ -1298,18 +1342,36 @@ struct NowPlayingView: View {
             GeometryReader { geometry in
                 ScrollViewReader { proxy in
                     ScrollView(showsIndicators: false) {
-                        LazyVStack(alignment: .leading, spacing: 26) {
-                            Color.clear.frame(height: geometry.size.height * 0.08)
+                        LazyVStack(alignment: .leading, spacing: 24) {
+                            Color.clear.frame(height: geometry.size.height * 0.06)
                             ForEach(lyrics.lines) { line in
                                 bigLyricLine(line, isActive: line.id == activeIndex)
                                     .id(line.id)
                             }
                             Color.clear.frame(height: geometry.size.height * 0.78)
                         }
-                        .padding(.horizontal, 24)
+                        // The lyrics page already applies the shared side
+                        // margin; leave a little trailing room for wrapping.
+                        .padding(.trailing, 12)
                     }
                     .coordinateSpace(name: "synchronizedLyrics")
                     .accessibilityIdentifier("synchronizedLyricsScrollView")
+                    .onGeometryChange(for: CGRect.self) {
+                        $0.frame(in: .named("lyricsPage"))
+                    } action: { lyricViewportFrame = $0 }
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .black, location: 0.08),
+                                .init(color: .black, location: 0.86),
+                                .init(color: .clear, location: 1),
+                            ],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    )
+                    // Overlay after the mask: the resume action must stay fully
+                    // opaque instead of sitting in the bottom fade.
                     .overlay(alignment: .bottomTrailing) {
                         if isUserScrolling, let currentIndex = lyricsCursor.activeIndex {
                             Button {
@@ -1329,26 +1391,17 @@ struct NowPlayingView: View {
                             .buttonStyle(.plain)
                             .accessibilityHint("恢复歌词随播放进度滚动")
                             .accessibilityIdentifier("resumeCurrentLyrics")
-                            .padding(.trailing, 24)
-                            // Hidden playback controls still own their reveal
-                            // footprint. Keep this action above it, otherwise
-                            // taps reveal controls instead of resuming lyrics.
-                            .padding(.bottom, showLyricsOnMobile && !lyricsControlsVisible
-                                     && geometry.size.width < geometry.size.height ? 236 : 16)
+                            .onGeometryChange(for: CGRect.self) {
+                                $0.frame(in: .named("lyricsPage"))
+                            } action: { resumeButtonFrame = $0 }
+                            .onDisappear { resumeButtonFrame = .zero }
+                            .padding(.trailing, 4)
+                            // The lyric viewport ends above the reveal band,
+                            // so a small inset keeps this action hittable.
+                            .padding(.bottom, 16)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                     }
-                    .mask(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .clear, location: 0),
-                                .init(color: .black, location: 0.12),
-                                .init(color: .black, location: 0.85),
-                                .init(color: .clear, location: 1),
-                            ],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                    )
                     .onChange(of: lyricsCursor.activeIndex) { index in
                         guard index != activeIndex else { return }
                         activeIndex = index
@@ -1420,25 +1473,30 @@ struct NowPlayingView: View {
         }
     }
 
+    /// Every line uses the same large bold style; the active line is set
+    /// apart by opacity and sharpness only, so lines never reflow or jump in
+    /// size as playback advances. Browsing (manual scroll) removes the blur
+    /// so the whole page is readable.
     private func bigLyricLine(_ line: LyricLine, isActive: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             if settings.lyricsAnnotation == .romaji, let romaji = line.romaji {
                 Text(romaji)
-                    .font(.system(size: isActive ? 15 : 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.35))
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.white.opacity(isActive ? 0.72 : 0.34))
             }
             LyricMainText(
                 line: line, isActive: isActive,
-                font: .system(
-                    isActive ? .largeTitle : .title3,
-                    design: .default,
-                    weight: isActive ? .bold : .semibold
-                )
+                font: .system(.title, design: .default, weight: .bold),
+                inactiveOpacity: isUserScrolling ? 0.5 : 0.34,
+                rubySize: 28,
+                uniformWeight: true,
+                inactiveScale: 1,
+                inactiveBlur: 0
             )
             if settings.showLyricsTranslation, let translation = line.translation {
                 Text(translation)
-                    .font(.system(size: isActive ? 16 : 14, weight: .medium))
-                    .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.35))
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white.opacity(isActive ? 0.72 : 0.3))
             }
         }
         .multilineTextAlignment(.leading)
@@ -1452,9 +1510,11 @@ struct NowPlayingView: View {
                 )
             }
         }
-        .blur(radius: isActive ? 0 : 0.6)
-        .scaleEffect(1, anchor: .leading)
+        // One blur for the whole line (main text, romaji and translation).
+        // Reduce Motion users get the opacity cue only.
+        .blur(radius: isActive || isUserScrolling || reduceMotion ? 0 : 1.1)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isActive)
+        .animation(.easeOut(duration: 0.2), value: isUserScrolling)
     }
 }
 
@@ -1475,8 +1535,17 @@ struct LyricMainText: View {
     let font: Font
     var inactiveOpacity: Double = 0.45
     var rubySize: CGFloat = 20
+    /// Keep every line bold so the active line changes emphasis by opacity
+    /// alone, without the reflow a weight change causes.
+    var uniformWeight = false
+    var inactiveScale: CGFloat = 0.94
+    var inactiveBlur: CGFloat = 0.35
 
     @EnvironmentObject private var settings: SettingsManager
+
+    private var weight: Font.Weight {
+        uniformWeight || isActive ? .bold : .semibold
+    }
 
     var body: some View {
         Group {
@@ -1486,7 +1555,7 @@ struct LyricMainText: View {
             RubyText(
                 segments: segments,
                 size: rubySize,
-                weight: isActive ? .bold : .semibold,
+                weight: weight,
                 color: .white.opacity(isActive ? 1 : inactiveOpacity)
             )
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1499,11 +1568,11 @@ struct LyricMainText: View {
                     .minimumScaleFactor(0.72)
             }
         }
-        .font(font.weight(isActive ? .bold : .semibold))
+        .font(font.weight(weight))
         .minimumScaleFactor(0.64)
         .fixedSize(horizontal: false, vertical: true)
-        .scaleEffect(isActive ? 1 : 0.94, anchor: .leading)
-        .blur(radius: isActive ? 0 : 0.35)
+        .scaleEffect(isActive ? 1 : inactiveScale, anchor: .leading)
+        .blur(radius: isActive ? 0 : inactiveBlur)
         .animation(.spring(response: 0.36, dampingFraction: 0.86), value: isActive)
     }
 }
@@ -2026,15 +2095,44 @@ private struct MPSystemVolumeSlider: UIViewRepresentable {
         view.showsRouteButton = false
         view.showsVolumeSlider = true
         view.tintColor = .white
-        if let slider = view.subviews.compactMap({ $0 as? UISlider }).first {
-            slider.minimumTrackTintColor = .white
-            slider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.28)
-            slider.accessibilityLabel = "系统音量"
-        }
+        Self.style(view)
         return view
     }
 
-    func updateUIView(_ uiView: MPVolumeView, context: Context) {}
+    func updateUIView(_ uiView: MPVolumeView, context: Context) {
+        // MPVolumeView can rebuild its slider after a route change.
+        Self.style(uiView)
+    }
+
+    /// Slim capsule track with a small dot, matching the progress bar instead
+    /// of UIKit's large default thumb. The thumb canvas stays 32pt square so
+    /// the drag target remains comfortable.
+    private static func style(_ view: MPVolumeView) {
+        guard let slider = view.subviews.compactMap({ $0 as? UISlider }).first else { return }
+        slider.setMinimumTrackImage(capsule(UIColor.white.withAlphaComponent(0.72)), for: .normal)
+        slider.setMaximumTrackImage(capsule(UIColor.white.withAlphaComponent(0.22)), for: .normal)
+        slider.setThumbImage(thumb, for: .normal)
+        slider.setThumbImage(thumb, for: .highlighted)
+        slider.accessibilityLabel = "系统音量"
+    }
+
+    private static let trackHeight: CGFloat = 7
+
+    private static func capsule(_ color: UIColor) -> UIImage {
+        let size = CGSize(width: trackHeight * 2 + 1, height: trackHeight)
+        let image = UIGraphicsImageRenderer(size: size).image { _ in
+            color.setFill()
+            UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: trackHeight / 2).fill()
+        }
+        return image.resizableImage(withCapInsets: UIEdgeInsets(
+            top: 0, left: trackHeight, bottom: 0, right: trackHeight
+        ))
+    }
+
+    private static let thumb: UIImage = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32)).image { _ in
+        UIColor.white.setFill()
+        UIBezierPath(ovalIn: CGRect(x: 10, y: 10, width: 12, height: 12)).fill()
+    }
 }
 #endif
 
@@ -3043,20 +3141,18 @@ struct NowPlayingScrubber: View {
             GeometryReader { geo in
                 let width = geo.size.width
                 let progress = fraction(at: position)
+                // Thumbless track like the system player: it thickens while
+                // dragging instead of showing a knob.
+                let trackHeight: CGFloat = isDragging ? 11 : 7
                 ZStack(alignment: .leading) {
                     Capsule()
-                        .fill(.white.opacity(0.25))
-                        .frame(height: 4)
+                        .fill(.white.opacity(0.22))
+                        .frame(height: trackHeight)
                     Capsule()
-                        .fill(.white)
-                        .frame(width: max(4, width * progress), height: 4)
-                    Circle()
-                        .fill(.white)
-                        .frame(width: thumbDiameter, height: thumbDiameter)
-                        .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
-                        .offset(x: width * progress - thumbDiameter / 2)
-                        .opacity(isHovering || isDragging || player.isScrubbing ? 1 : 0)
+                        .fill(.white.opacity(isDragging ? 1 : 0.72))
+                        .frame(width: max(trackHeight, width * progress), height: trackHeight)
                 }
+                .animation(.spring(response: 0.26, dampingFraction: 0.82), value: isDragging)
                 .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .gesture(
@@ -3076,7 +3172,7 @@ struct NowPlayingScrubber: View {
                         }
                 )
             }
-            .frame(height: 14)
+            .frame(height: 24)
             .onHover { hovering in
                 withAnimation(AppAnimation.quick) { isHovering = hovering }
             }
@@ -3086,10 +3182,19 @@ struct NowPlayingScrubber: View {
                 Spacer()
                 if let onShowQuality {
                     Button(action: onShowQuality) {
-                        Label(qualityDisplayName, systemImage: "waveform")
-                            .font(.footnote.weight(.semibold))
+                        // A short format badge, like the system "Lossless"
+                        // tag. The full wording stays in the accessibility label.
+                        Text(qualityBadgeText)
+                            .font(.caption2.weight(.semibold))
                             .foregroundStyle(.white.opacity(0.78))
-                            .frame(minHeight: 44)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            // Fits the 64pt scrubber slot (24 track + 5 + 32)
+                            // without overlapping the transport row; the
+                            // padded content shape keeps a wide tap target.
+                            .frame(minHeight: 32)
+                            .padding(.horizontal, 8)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -3100,13 +3205,19 @@ struct NowPlayingScrubber: View {
                      ? "−\(Formatters.duration(max(player.duration - (isDragging ? dragProgress : position), 0)))"
                      : Formatters.duration(player.duration))
             }
-            .font(.system(size: 10.5).monospacedDigit())
-            .foregroundStyle(.white.opacity(0.55))
+            .font(.caption.weight(.medium).monospacedDigit())
+            .foregroundStyle(.white.opacity(0.56))
         }
     }
 
-    private var thumbDiameter: CGFloat {
-        isDragging ? 13 : (isHovering ? 11 : 9)
+    private var qualityBadgeText: String {
+        if let served = player.servedQuality {
+            return AudioQuality(lxType: served)?.badgeName ?? served.uppercased()
+        }
+        if let requested = player.requestedQuality, player.currentTrack != nil, !player.isResolvingSource {
+            return AudioQuality(lxType: requested)?.badgeName ?? requested.uppercased()
+        }
+        return qualityDisplayName
     }
 
     private var qualityDisplayName: String {

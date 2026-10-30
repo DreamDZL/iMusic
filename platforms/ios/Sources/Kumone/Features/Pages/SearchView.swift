@@ -382,19 +382,38 @@ final class SearchViewModel: ObservableObject {
     }
 }
 
+/// Leading magnifying glass in secondary colour with a fixed-width slot, so
+/// suggestion text lines up with the separator inset.
+private struct SearchSuggestionLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 12) {
+            configuration.icon
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            configuration.title
+                .font(.body)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+        }
+    }
+}
+
 struct SearchView: View {
     @StateObject private var model: SearchViewModel
     @StateObject private var history = SearchHistoryStore.shared
     @State private var searchText: String = ""
     @State private var searchDebounceTask: Task<Void, Never>?
 
+    // Deep, evenly weighted tones so white titles stay legible in both
+    // appearances; gradients and decorative glyphs were removed.
     private let browseCategories: [(title: String, color: Color)] = [
-        ("华语", Color(red: 0.88, green: 0.22, blue: 0.31)),
-        ("流行", Color(red: 0.86, green: 0.39, blue: 0.20)),
-        ("摇滚", Color(red: 0.54, green: 0.26, blue: 0.55)),
-        ("电子", Color(red: 0.22, green: 0.38, blue: 0.72)),
-        ("古典", Color(red: 0.15, green: 0.48, blue: 0.53)),
-        ("影视原声", Color(red: 0.52, green: 0.37, blue: 0.24)),
+        ("华语", Color(red: 0.80, green: 0.18, blue: 0.27)),
+        ("流行", Color(red: 0.84, green: 0.36, blue: 0.16)),
+        ("摇滚", Color(red: 0.45, green: 0.22, blue: 0.52)),
+        ("电子", Color(red: 0.18, green: 0.33, blue: 0.68)),
+        ("古典", Color(red: 0.10, green: 0.44, blue: 0.48)),
+        ("影视原声", Color(red: 0.42, green: 0.32, blue: 0.22)),
     ]
 
     init(query: String) {
@@ -512,49 +531,37 @@ struct SearchView: View {
     }
 
     private var platformPicker: some View {
+        // One row of scope chips, like the system search scope bar. The
+        // selected chip itself shows the platform; no separate caption row.
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("搜索平台")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(model.platform.displayName)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.accent)
-            }
-            .padding(.horizontal, Theme.Layout.contentInset)
-
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     ForEach(LXCatalogPlatform.catalogueCases) { platform in
                         Button {
                             model.setPlatform(platform)
                             resignSearchInput()
                         } label: {
-                            HStack(spacing: 5) {
-                                if model.platform == platform {
-                                    Image(systemName: "checkmark")
-                                        .font(.caption2.weight(.bold))
-                                }
-                                Text(platform.displayName)
-                            }
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(model.platform == platform ? .white : .primary)
+                            Text(platform.displayName)
+                            .font(.subheadline.weight(.semibold))
                             .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
+                            .padding(.vertical, 7)
                             .background(
                                 model.platform == platform
-                                    ? Theme.accent
-                                    : Color.secondary.opacity(0.12),
+                                    ? Color.primary
+                                    : Color.secondary.opacity(0.14),
                                 in: Capsule()
                             )
+                            .foregroundStyle(model.platform == platform
+                                             ? Platform.windowBackgroundColor : .primary)
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .frame(minHeight: 44)
+                        .accessibilityAddTraits(model.platform == platform ? .isSelected : [])
                     }
                 }
-                .padding(.horizontal, Theme.Layout.contentInset)
             }
+            .contentMargins(.horizontal, Theme.Layout.contentInset, for: .scrollContent)
         }
     }
 
@@ -578,53 +585,96 @@ struct SearchView: View {
         .padding(.horizontal, Theme.Layout.contentInset)
     }
 
+    /// Search landing page in the system order: recent searches as a plain
+    /// list, then category tiles, then trending searches. Section titles use
+    /// one bold style with no decorative icons.
     private var emptySearchPrompt: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 28) {
+            if !history.entries.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("最近搜索")
+                            .font(.title3.weight(.bold))
+                        Spacer()
+                        Button("清除") { history.clear() }
+                            .font(.body)
+                            .tint(Theme.accent)
+                    }
+                    .padding(.bottom, 4)
+
+                    ForEach(Array(history.entries.prefix(6).enumerated()), id: \.element) { index, item in
+                        HStack(spacing: 12) {
+                            Button {
+                                searchText = item
+                                performSearch(item)
+                            } label: {
+                                Label(item, systemImage: "magnifyingglass")
+                                    .labelStyle(SearchSuggestionLabelStyle())
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .frame(minHeight: 44)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                history.remove(item)
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("删除搜索记录：\(item)")
+                        }
+                        if index < min(history.entries.count, 6) - 1 {
+                            Divider().padding(.leading, 30)
+                        }
+                    }
+                }
+            }
+
             VStack(alignment: .leading, spacing: 12) {
                 Text("快速浏览")
                     .font(.title3.weight(.bold))
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                LazyVGrid(
+                    columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                    spacing: 12
+                ) {
                     ForEach(browseCategories, id: \.title) { category in
                         Button {
                             performSearch(category.title)
                         } label: {
-                            HStack(alignment: .top) {
+                            ZStack(alignment: .bottomLeading) {
+                                category.color
                                 Text(category.title)
                                     .font(.headline.weight(.bold))
+                                    .foregroundStyle(.white)
                                     .multilineTextAlignment(.leading)
-                                Spacer(minLength: 0)
-                                Image(systemName: "music.note")
-                                    .font(.title3.weight(.semibold))
-                                    .opacity(0.85)
+                                    .padding(12)
                             }
-                            .foregroundStyle(.white)
-                            .padding(14)
-                            .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading)
-                            .background(
-                                LinearGradient(
-                                    colors: [category.color, category.color.opacity(0.72)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            )
+                            .frame(maxWidth: .infinity)
+                            .aspectRatio(1.6, contentMode: .fit)
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.interactiveCard)
                         .accessibilityIdentifier("searchBrowse-\(category.title)")
                     }
                 }
             }
 
             if !model.hotKeywords.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Label("热门搜索", systemImage: "flame.fill")
-                            .font(.headline)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("热门搜索")
+                            .font(.title3.weight(.bold))
                         Spacer()
                         Text(model.platform.displayName)
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
+                    .padding(.bottom, 4)
 
                     LazyVStack(spacing: 0) {
                         ForEach(Array(model.hotKeywords.enumerated()), id: \.offset) { index, keyword in
@@ -633,66 +683,24 @@ struct SearchView: View {
                             } label: {
                                 HStack(spacing: 12) {
                                     Text("\(index + 1)")
-                                        .font(.subheadline.monospacedDigit().weight(.bold))
-                                        .foregroundStyle(index < 3 ? Theme.accent : Theme.ColorToken.tertiaryText)
-                                        .frame(width: 24, alignment: .leading)
+                                        .font(.body.monospacedDigit().weight(.semibold))
+                                        .foregroundStyle(index < 3 ? Theme.accent : Theme.ColorToken.secondaryText)
+                                        .frame(width: 26, alignment: .leading)
                                     Text(keyword)
+                                        .font(.body)
+                                        .foregroundStyle(.primary)
                                         .lineLimit(1)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(.tertiary)
                                 }
-                                .padding(.horizontal, 14)
                                 .frame(minHeight: 44)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("第\(index + 1)名，\(keyword)")
                             if index < model.hotKeywords.count - 1 {
-                                Divider().padding(.leading, 50)
+                                Divider().padding(.leading, 38)
                             }
                         }
-                    }
-                    .background(.quaternary.opacity(0.32), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                }
-            }
-
-            if !history.entries.isEmpty {
-                HStack {
-                    Label("搜索历史", systemImage: "clock.arrow.circlepath")
-                        .font(.headline)
-                    Spacer()
-                    Button("清空") { history.clear() }
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], spacing: 10) {
-                    ForEach(history.entries, id: \.self) { item in
-                        HStack(spacing: 6) {
-                            Button {
-                                searchText = item
-                                performSearch(item)
-                            } label: {
-                                Text(item)
-                                    .lineLimit(1)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .buttonStyle(.plain)
-
-                            Button {
-                                history.remove(item)
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("删除搜索记录")
-                        }
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: 44)
-                        .background(.quaternary.opacity(0.45), in: Capsule())
                     }
                 }
             }
@@ -718,7 +726,7 @@ struct SearchView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     SectionHeader(title: "单曲") { model.tab = .songs }
                         .padding(.horizontal, Theme.Layout.contentInset)
-                    TrackListView(tracks: Array(model.songs.prefix(6)))
+                    TrackListView(tracks: Array(model.songs.prefix(6)), showsSummary: false)
                         .padding(.horizontal, Theme.Layout.contentInset - 10)
                 }
             }

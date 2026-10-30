@@ -141,6 +141,124 @@ struct SectionHeader: View {
     }
 }
 
+// MARK: - Collection header (playlist / album pages)
+
+/// Header for playlist and album pages, laid out like the system music
+/// collection page: centered artwork, title, accent curator line, a muted
+/// detail line, two equal capsule actions and an expandable description.
+struct CollectionHeader<Artwork: View, Actions: View>: View {
+    let title: String
+    var curator: String?
+    var detail: String?
+    var description: String?
+    var playDisabled = false
+    let onPlay: () -> Void
+    let onShuffle: () -> Void
+    @ViewBuilder var artwork: () -> Artwork
+    @ViewBuilder var actions: () -> Actions
+
+    @State private var isDescriptionExpanded = false
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private var artworkSide: CGFloat {
+        #if os(iOS)
+        return min(horizontalSizeClass == .regular ? 300 : 264, DeviceMetrics.portraitWidth * 0.66)
+        #else
+        return 240
+        #endif
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            artwork()
+                .frame(width: artworkSide, height: artworkSide)
+                .background(.quaternary.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard + 2, style: .continuous))
+                .shadow(color: .black.opacity(0.18), radius: 16, y: 8)
+                .padding(.bottom, 18)
+
+            Text(title)
+                .font(.title2.weight(.bold))
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+            if let curator, !curator.isEmpty {
+                Text(curator)
+                    .font(.title3)
+                    .foregroundStyle(Theme.accent)
+                    .lineLimit(1)
+                    .padding(.top, 2)
+            }
+            if let detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 4)
+            }
+
+            HStack(spacing: 14) {
+                Button(action: onPlay) {
+                    Label("播放", systemImage: "play.fill")
+                        .font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 34)
+                }
+                Button(action: onShuffle) {
+                    Label("随机播放", systemImage: "shuffle")
+                        .font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 34)
+                }
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .controlSize(.large)
+            .tint(Theme.accent)
+            .disabled(playDisabled)
+            .padding(.top, 18)
+
+            actions()
+                .padding(.top, 10)
+
+            if let description, !description.isEmpty {
+                Button {
+                    withAnimation(AppAnimation.standard) { isDescriptionExpanded.toggle() }
+                } label: {
+                    Text(description)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(isDescriptionExpanded ? nil : 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint(isDescriptionExpanded ? "收起简介" : "展开简介")
+                .padding(.top, 16)
+            }
+        }
+        .frame(maxWidth: 560)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, Theme.Layout.contentInset)
+    }
+}
+
+extension CollectionHeader where Actions == EmptyView {
+    init(
+        title: String,
+        curator: String? = nil,
+        detail: String? = nil,
+        description: String? = nil,
+        playDisabled: Bool = false,
+        onPlay: @escaping () -> Void,
+        onShuffle: @escaping () -> Void,
+        @ViewBuilder artwork: @escaping () -> Artwork
+    ) {
+        self.init(
+            title: title, curator: curator, detail: detail, description: description,
+            playDisabled: playDisabled, onPlay: onPlay, onShuffle: onShuffle,
+            artwork: artwork, actions: { EmptyView() }
+        )
+    }
+}
+
 // MARK: - Badges
 
 struct PlayCountBadge: View {

@@ -328,17 +328,23 @@ struct HomeView: View {
     @EnvironmentObject private var settings: SettingsManager
     @StateObject private var model = HomeViewModel.shared
     @ObservedObject private var localLibrary = LocalPlaylistStore.shared
+    /// Measured page width, used to size the portrait feature cards.
+    @State private var shelfWidth: CGFloat = 390
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 30) {
                 featureCards
                 if !localLibrary.recentTracks.isEmpty {
                     recentTracksShelf
                 }
                 standardHomeBody
             }
+            .padding(.top, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            shelfWidth = width
         }
         .navigationTitle("主页")
         #if os(iOS)
@@ -357,19 +363,24 @@ struct HomeView: View {
                         }
                     }
                 } label: {
-                    Label(homeSourceTitle, systemImage: "line.3.horizontal.decrease.circle")
+                    // Bare glyph: the toolbar's glass capsule already draws
+                    // the circle, and `.circle` symbols doubled it.
+                    Label(homeSourceTitle, systemImage: "line.3.horizontal.decrease")
                 }
                 .accessibilityLabel("首页推荐来源：\(homeSourceTitle)")
                 .accessibilityHint("更改首页为你推荐的音乐平台")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink(value: Destination.recents) {
-                    Image(systemName: "clock.arrow.circlepath")
+                    Image(systemName: "clock")
                 }
                 .accessibilityLabel("最近播放")
                 .accessibilityHint("打开最近播放的歌曲列表")
             }
         }
+        // Toolbar glyphs use the label colour like the system apps; the
+        // accent stays for selection and primary actions.
+        .tint(.primary)
         #endif
         .task(id: homeTaskID) {
             guard !IOSUITestMode.isEnabled else { return }
@@ -390,7 +401,7 @@ struct HomeView: View {
     }
 
     private var recentTracksShelf: some View {
-        Shelf(title: "最近播放", rowHeight: 214) {
+        Shelf(title: "最近播放", rowHeight: Theme.Layout.coverShelfHeight) {
             ForEach(Array(localLibrary.recentTracks.prefix(12)), id: \.playbackKey) { track in
                 Button {
                     player.play(
@@ -399,20 +410,26 @@ struct HomeView: View {
                         startAt: track
                     )
                 } label: {
-                    VStack(alignment: .leading, spacing: 8) {
+                    // Same artwork size, radius and type as every other cover
+                    // shelf, instead of a one-off 16pt-radius card.
+                    VStack(alignment: .leading, spacing: 6) {
                         CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(320), animated: false)
-                            .frame(width: 156, height: 156)
-                            .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .frame(width: Theme.Layout.cardSize, height: Theme.Layout.cardSize)
+                            .background(.quaternary.opacity(0.45))
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
+                                    .strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
+                            )
                         Text(track.name)
-                            .font(.subheadline.weight(.semibold))
+                            .font(Theme.Typography.cardTitle)
                             .lineLimit(1)
                         Text(track.artistNames)
-                            .font(.caption)
+                            .font(Theme.Typography.cardSubtitle)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
-                    .frame(width: 156, alignment: .leading)
+                    .frame(width: Theme.Layout.cardSize, alignment: .leading)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -460,16 +477,9 @@ struct HomeView: View {
     }
 
     private var lxLoadedBody: some View {
-        LazyVStack(alignment: .leading, spacing: 22) {
-            HStack(spacing: 10) {
-                Image(systemName: model.activePlatform == .wy ? "flame.fill" : "waveform")
-                    .foregroundStyle(Theme.accent)
-                Text(model.activePlatform == .wy ? "网易云热门歌曲" : "\(model.activePlatform.displayName) 推荐")
-                    .font(.title3.weight(.semibold))
-                Spacer()
-            }
-            .padding(.horizontal, Theme.Layout.contentInset)
-
+        // The active platform is shown by the toolbar filter, so the feed
+        // does not repeat it as an extra coloured heading row.
+        LazyVStack(alignment: .leading, spacing: 30) {
             if !model.lxRecommendPlaylists.isEmpty {
                 Shelf(title: "推荐歌单", rowHeight: Theme.Layout.coverShelfHeight) {
                     ForEach(model.lxRecommendPlaylists.prefix(12)) { playlist in
@@ -479,14 +489,15 @@ struct HomeView: View {
             }
 
             if !model.recommendTracks.isEmpty {
-                SectionHeader(title: model.activePlatform == .wy ? "热门歌曲" : "推荐歌曲")
-                    .padding(.horizontal, Theme.Layout.contentInset)
-                TrackListView(tracks: model.recommendTracks)
-                    .padding(.horizontal, Theme.Layout.contentInset - 10)
+                VStack(alignment: .leading, spacing: 8) {
+                    SectionHeader(title: model.activePlatform == .wy ? "热门歌曲" : "推荐歌曲")
+                        .padding(.horizontal, Theme.Layout.contentInset)
+                    TrackListView(tracks: model.recommendTracks, showsSummary: false)
+                        .padding(.horizontal, Theme.Layout.contentInset - 10)
+                }
             }
             PlayerClearanceSpacer()
         }
-        .padding(.vertical, Theme.Layout.contentInset - 8)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -524,7 +535,7 @@ struct HomeView: View {
     }
 
     private var loadedBody: some View {
-        LazyVStack(alignment: .leading, spacing: 34) {
+        LazyVStack(alignment: .leading, spacing: 30) {
             if !model.recommendPlaylists.isEmpty {
                 Shelf(title: "推荐歌单", rowHeight: Theme.Layout.coverShelfHeight) {
                     ForEach(Array(model.recommendPlaylists.prefix(12).enumerated()), id: \.element.id) { index, playlist in
@@ -535,10 +546,12 @@ struct HomeView: View {
             }
 
             if !model.recommendTracks.isEmpty {
-                SectionHeader(title: "热门歌曲")
-                    .padding(.horizontal, Theme.Layout.contentInset)
-                TrackListView(tracks: model.recommendTracks)
-                    .padding(.horizontal, Theme.Layout.contentInset - 10)
+                VStack(alignment: .leading, spacing: 8) {
+                    SectionHeader(title: "热门歌曲")
+                        .padding(.horizontal, Theme.Layout.contentInset)
+                    TrackListView(tracks: model.recommendTracks, showsSummary: false)
+                        .padding(.horizontal, Theme.Layout.contentInset - 10)
+                }
             }
 
             if !model.radarPlaylists.isEmpty {
@@ -587,77 +600,83 @@ struct HomeView: View {
 
             PlayerClearanceSpacer()
         }
-        .padding(.vertical, Theme.Layout.contentInset - 8)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Feature cards
 
+    /// Portrait "Top Picks" cards: about 62% of the page width so the next
+    /// card peeks in, 3:4 ratio, eyebrow label above each card.
+    private var featureCardSize: CGSize {
+        let width = min(260, max(200, (shelfWidth - Theme.Layout.contentInset * 2) * 0.66))
+        return CGSize(width: width, height: (width * 4 / 3).rounded())
+    }
+
     private var featureCards: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let size = featureCardSize
+        return VStack(alignment: .leading, spacing: 10) {
             Text("为你精选")
                 .font(.title2.weight(.bold))
                 .padding(.horizontal, Theme.Layout.contentInset)
 
-            GeometryReader { _ in
-                // Keep the portrait cards aligned with the real shelf row
-                // height. The previous outer frame was based on the maximum
-                // width even when the available width was smaller, leaving a
-                // large blank gap below the cards on iPhone.
-                let cardHeight = Theme.Layout.featureCardBaseHeight
-                let cardWidth = min(Theme.Layout.featureCardMaxWidth, cardHeight * 3 / 4)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 14) {
-                        // Daily recommendations are always visible; the page shows
-                        // a separate login CTA when account sync is unavailable.
-                        NavigationLink(value: Destination.daily) {
-                            FeatureCard(
-                                title: "每日推荐",
-                                subtitle: "根据你的口味生成",
-                                icon: "calendar",
-                                coverURL: model.dailyFirstCover?.resizedImageURL(512),
-                                showsDate: true,
-                                size: CGSize(width: cardWidth, height: cardHeight)
-                            )
-                        }
-                        .buttonStyle(.plain)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 12) {
+                    // Daily recommendations are always visible; the page shows
+                    // a separate login CTA when account sync is unavailable.
+                    NavigationLink(value: Destination.daily) {
+                        FeatureCard(
+                            eyebrow: String(localized: "为你推荐"),
+                            title: String(localized: "每日推荐"),
+                            subtitle: String(localized: "根据你的口味每日更新"),
+                            icon: "calendar",
+                            coverURL: model.dailyFirstCover?.resizedImageURL(600),
+                            showsDate: true,
+                            size: size
+                        )
+                    }
+                    .buttonStyle(.interactiveCard)
 
+                    Button {
+                        player.startFM()
+                    } label: {
+                        FeatureCard(
+                            eyebrow: String(localized: "电台"),
+                            title: String(localized: "电台推荐"),
+                            subtitle: String(localized: "按首页平台连续播放推荐"),
+                            icon: "dot.radiowaves.left.and.right",
+                            coverURL: (player.isFMMode ? player.currentTrack : nil)?
+                                .album.picUrl?.resizedImageURL(600),
+                            gradient: [Color(red: 0.16, green: 0.20, blue: 0.42),
+                                       Color(red: 0.36, green: 0.24, blue: 0.62)],
+                            size: size
+                        )
+                    }
+                    .buttonStyle(.interactiveCard)
+
+                    if account.isLoggedIn {
                         Button {
-                            player.startFM()
+                            startHeartbeatMode()
                         } label: {
                             FeatureCard(
-                                title: "电台推荐",
-                                subtitle: "按首页平台生成推荐队列",
-                                icon: "wave.3.right.circle.fill",
-                                gradient: [Color(red: 0.16, green: 0.20, blue: 0.42),
-                                           Color(red: 0.36, green: 0.24, blue: 0.62)],
-                                size: CGSize(width: cardWidth, height: cardHeight)
+                                eyebrow: String(localized: "根据收藏"),
+                                title: String(localized: "心动模式"),
+                                subtitle: String(localized: "你的收藏和相似推荐"),
+                                icon: "heart.fill",
+                                coverURL: localLibrary.favoriteTracks.first?
+                                    .album.picUrl?.resizedImageURL(600),
+                                gradient: [Color(red: 0.85, green: 0.19, blue: 0.41),
+                                           Color(red: 0.98, green: 0.42, blue: 0.34)],
+                                size: size
                             )
                         }
                         .buttonStyle(.interactiveCard)
-
-                        if account.isLoggedIn {
-                            Button {
-                                startHeartbeatMode()
-                            } label: {
-                                FeatureCard(
-                                    title: "心动模式",
-                                    subtitle: "你的红心歌曲和相似推荐",
-                                    icon: "heart.circle.fill",
-                                    gradient: [Color(red: 0.85, green: 0.19, blue: 0.41),
-                                               Color(red: 0.98, green: 0.42, blue: 0.34)],
-                                    size: CGSize(width: cardWidth, height: cardHeight)
-                                )
-                            }
-                            .buttonStyle(.interactiveCard)
-                        }
                     }
-                    .padding(.horizontal, Theme.Layout.contentInset)
-                    .padding(.vertical, 2)
                 }
-                .frame(height: cardHeight + 4)
+                .scrollTargetLayout()
             }
-            .frame(height: Theme.Layout.featureCardBaseHeight + 4)
+            .contentMargins(.horizontal, Theme.Layout.contentInset, for: .scrollContent)
+            .scrollTargetBehavior(.viewAligned)
+            .frame(height: size.height + FeatureCard.eyebrowHeight)
         }
         .compatScrollClipDisabled()
     }
@@ -726,7 +745,7 @@ struct HomeView: View {
                     .clipShape(Circle())
                     .overlay(Circle().strokeBorder(.primary.opacity(0.08), lineWidth: 0.5))
                 Text(artist.name)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
             }
@@ -744,13 +763,13 @@ struct HomeView: View {
                 LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .center, endPoint: .bottom)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous))
                 Text(toplist.updateFrequency ?? "")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.caption2.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.9))
                     .padding(8)
             }
             .frame(width: Theme.Layout.cardSize, height: Theme.Layout.cardSize)
             Text(toplist.name)
-                .font(.system(size: 13, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
         }
@@ -778,7 +797,14 @@ struct HomeView: View {
 
 // MARK: - Feature card
 
+/// Portrait recommendation card in the style of the system "Top Picks"
+/// shelf: an eyebrow label above, artwork filling the card, and a soft
+/// gradient band carrying the title. Without artwork it falls back to a
+/// tinted gradient with one large symbol, never an empty block.
 struct FeatureCard: View {
+    static let eyebrowHeight: CGFloat = 24
+
+    var eyebrow: String = ""
     let title: String
     let subtitle: String
     let icon: String
@@ -786,54 +812,73 @@ struct FeatureCard: View {
     var gradient: [Color] = [Color(red: 0.75, green: 0.16, blue: 0.22),
                              Color(red: 0.95, green: 0.35, blue: 0.28)]
     var showsDate = false
-    var size = CGSize(width: 230, height: 132)
+    var size = CGSize(width: 230, height: 306)
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            if let coverURL {
-                CachedAsyncImage(url: coverURL)
-                    .frame(width: size.width, height: size.height)
-                LinearGradient(colors: [.black.opacity(0.1), .black.opacity(0.68)],
-                               startPoint: .top, endPoint: .bottom)
-            } else {
-                LinearGradient(colors: gradient, startPoint: .topLeading, endPoint: .bottomTrailing)
-                RadialGradient(colors: [.white.opacity(0.18), .clear],
-                               center: .topLeading, startRadius: 0, endRadius: 220)
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            Text(eyebrow)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(height: Self.eyebrowHeight, alignment: .top)
 
-            VStack(alignment: .leading, spacing: 3) {
+            ZStack(alignment: .bottomLeading) {
+                background
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0.45),
+                        .init(color: .black.opacity(0.62), location: 1),
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.title3.weight(.bold))
+                        .lineLimit(2)
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.82))
+                        .lineLimit(2)
+                }
+                .foregroundStyle(.white)
+                .padding(14)
+            }
+            .frame(width: size.width, height: size.height)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous)
+                    .strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
+            )
+        }
+        .frame(width: size.width, alignment: .leading)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var background: some View {
+        if let coverURL {
+            CachedAsyncImage(url: coverURL)
+                .frame(width: size.width, height: size.height)
+                .clipped()
+        } else {
+            ZStack {
+                LinearGradient(colors: gradient, startPoint: .topLeading, endPoint: .bottomTrailing)
                 ZStack {
                     Image(systemName: icon)
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(.white)
+                        .font(.system(size: size.width * 0.3, weight: .regular))
                     if showsDate {
                         Text("\(Calendar.current.component(.day, from: .now))")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.white)
-                            .offset(y: 3)
+                            .font(.system(size: size.width * 0.12, weight: .bold))
+                            .offset(y: size.width * 0.04)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                Text(title)
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.75))
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                .foregroundStyle(.white.opacity(0.9))
+                .offset(y: -size.height * 0.1)
             }
-            .padding(14)
-            .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
+            .accessibilityHidden(true)
         }
-        .frame(width: size.width, height: size.height)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous)
-                .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
-        )
-        .contentShape(Rectangle())
     }
 }
 
@@ -869,15 +914,16 @@ struct CoverCardBody: View {
                 }
             }
 
+            // Semantic type (Dynamic Type) instead of fixed 13/11pt.
             Text(title)
-                .font(.system(size: 13, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
                 .foregroundStyle(.primary)
                 .frame(maxWidth: flexibleWidth ? .infinity : size, alignment: .leading)
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)
-                    .font(.system(size: 11))
+                    .font(.subheadline)
                     .lineLimit(1)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: flexibleWidth ? .infinity : size, alignment: .leading)

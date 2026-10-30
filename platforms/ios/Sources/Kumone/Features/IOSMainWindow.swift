@@ -477,25 +477,20 @@ struct IOSMiniPlayerBar: View {
             .accessibilityLabel(nowPlayingAccessibilityLabel)
             .accessibilityHint("打开正在播放")
             .accessibilityIdentifier("miniPlayerOpenNowPlaying")
-
-            if !presentation.isInline {
-                Button(action: player.previous) {
-                    Image(systemName: "backward.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.pressable)
-                .disabled(player.isFMMode)
-                .opacity(player.isFMMode ? 0.35 : 1)
-                .accessibilityLabel("上一首")
+            // VoiceOver cannot perform the drag that skips back, so the
+            // previous-track action is exposed as a named action instead.
+            .accessibilityAction(named: Text("上一首")) {
+                guard !player.isFMMode else { return }
+                player.previous()
             }
 
+            // Like the system mini player: play/pause and next only. Previous
+            // is a horizontal swipe here and a button in the full player.
             Button(action: player.togglePlayPause) {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: presentation.isInline ? 16 : 19, weight: .semibold))
                     .foregroundStyle(.primary)
+                    .contentTransition(.symbolEffect(.replace))
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
@@ -504,8 +499,8 @@ struct IOSMiniPlayerBar: View {
 
             Button(action: player.next) {
                 Image(systemName: "forward.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: presentation.isInline ? 15 : 18, weight: .semibold))
+                    .foregroundStyle(.primary)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
@@ -514,14 +509,13 @@ struct IOSMiniPlayerBar: View {
             .opacity(player.isFMMode ? 0.35 : 1)
             .accessibilityLabel("下一首")
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 6)
-        .padding(.vertical, 4)
+        .padding(.leading, presentation.isInline ? 8 : 10)
+        .padding(.trailing, 4)
         .frame(maxWidth: .infinity)
     }
 
     private var trackSummary: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .center, spacing: 10) {
             CachedAsyncImage(url: player.currentTrack?.album.picUrl?.resizedImageURL(128))
                 .frame(
                     width: artworkSize,
@@ -541,26 +535,31 @@ struct IOSMiniPlayerBar: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            // The system accessory has a fixed height; cap growth so the two
+            // lines never clip at the largest accessibility sizes.
+            .dynamicTypeSize(...DynamicTypeSize.xLarge)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .contentShape(Rectangle())
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var artworkSize: CGFloat {
-        presentation.isInline ? 28 : 32
+        presentation.isInline ? 28 : 36
     }
 
+    // Dynamic Type styles, so the accessory follows the user's text size
+    // like other system chrome instead of pinning 10pt/8pt labels.
     private var titleFont: Font {
-        .system(size: presentation.isInline ? 10 : 13, weight: .semibold)
+        presentation.isInline ? Font.footnote.weight(.semibold) : Font.subheadline.weight(.semibold)
     }
 
     private var artistFont: Font {
-        .system(size: presentation.isInline ? 8 : 10)
+        presentation.isInline ? Font.caption2 : Font.footnote
     }
 
     private var metadataSpacing: CGFloat {
-        presentation.isInline ? 2 : 3
+        presentation.isInline ? 0 : 1
     }
 
     private var nowPlayingAccessibilityLabel: String {

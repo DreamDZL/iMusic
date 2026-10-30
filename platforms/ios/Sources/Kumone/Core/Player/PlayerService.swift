@@ -794,6 +794,16 @@ final class PlayerService: ObservableObject {
         startPlaying(activeQueue[currentIndex])
     }
 
+    /// "随机播放" on a collection page: enable shuffle, then start the list
+    /// from a random song. Leaves shuffle on, matching the system player.
+    func playShuffled(tracks: [Track], source: PlaySource, context: PlayContext? = nil) {
+        guard !tracks.isEmpty else { return }
+        // `toggleShuffle` is a no-op in FM mode; `play` leaves FM anyway.
+        isFMMode = false
+        if !shuffleEnabled { toggleShuffle() }
+        play(tracks: tracks, source: source, context: context)
+    }
+
     func playTrack(_ track: Track) {
         if let idx = activeQueue.firstIndex(where: { $0.playbackKey == track.playbackKey }) {
             currentIndex = idx

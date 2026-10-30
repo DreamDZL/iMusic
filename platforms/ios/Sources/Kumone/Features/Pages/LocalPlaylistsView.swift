@@ -15,43 +15,38 @@ struct LocalPlaylistsView: View {
 
     var body: some View {
         List {
+            // One block of plain navigation rows with accent glyphs, as in
+            // the system library. The page title already says 资料库, so the
+            // block has no second "资料库" header.
             Section {
                 NavigationLink(value: Destination.likedSongs) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "star.fill")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 48, height: 48)
-                            .background(Theme.accent, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("我喜欢的音乐").font(.body.weight(.medium))
-                            Text(likedSongsSubtitle).font(.subheadline).foregroundStyle(.secondary)
-                        }
-                    }
+                    libraryRowLabel("我喜欢的音乐", icon: "star", detail: favoriteCountText)
                 }
                 .accessibilityIdentifier("libraryLikedSongs")
-            }
-
-            Section("资料库") {
-                libraryNavigationRow("最近播放", icon: "clock.arrow.circlepath", destination: .recents)
-                libraryNavigationRow("我的收藏", icon: "square.grid.2x2", destination: .collections)
+                .accessibilityLabel("我喜欢的音乐，\(likedSongsSubtitle)")
+                libraryNavigationRow("最近播放", icon: "clock", destination: .recents)
+                libraryNavigationRow("我的收藏", icon: "square.stack", destination: .collections)
                 NavigationLink {
                     LXSyncSettingsView()
                 } label: {
-                    HStack(spacing: 12) {
-                        Label("同步资料库", systemImage: "arrow.triangle.2.circlepath")
-                        Spacer()
-                        Text(sync.statusMessage)
-                            .font(.caption)
-                            .foregroundStyle(sync.isConnected ? .green : .secondary)
-                            .lineLimit(1)
+                    libraryRowLabel("同步资料库", icon: "arrow.triangle.2.circlepath", detail: nil) {
+                        HStack(spacing: 5) {
+                            if sync.isConnected {
+                                Circle().fill(.green).frame(width: 7, height: 7)
+                            }
+                            Text(sync.statusMessage)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
                 }
                 .accessibilityIdentifier("librarySyncEntry")
             }
+            .listSectionSeparator(.hidden, edges: .top)
 
             if !store.playlists.isEmpty || !isSelectingPlaylists {
-                Section("我的播放列表") {
+                Section {
                     if store.playlists.isEmpty {
                         ContentUnavailableView {
                             Label("还没有播放列表", systemImage: "music.note.list")
@@ -99,6 +94,13 @@ struct LocalPlaylistsView: View {
                     .onMove { offsets, destination in
                         store.movePlaylists(fromOffsets: offsets, toOffset: destination)
                     }
+                } header: {
+                    Text("我的播放列表")
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(.primary)
+                        .textCase(nil)
+                        .padding(.top, 14)
+                        .padding(.bottom, 2)
                 }
             }
         }
@@ -172,7 +174,8 @@ struct LocalPlaylistsView: View {
                             Label("设置", systemImage: "gearshape")
                         }
                     } label: {
-                        Image(systemName: "ellipsis.circle")
+                        // Plain glyph; the toolbar glass already draws the circle.
+                        Image(systemName: "ellipsis")
                             .accessibilityLabel("更多资料库选项")
                     }
                     Button {
@@ -225,29 +228,66 @@ struct LocalPlaylistsView: View {
         destination: Destination
     ) -> some View {
         NavigationLink(value: destination) {
-            Label {
-                Text(title)
-            } icon: {
-                Image(systemName: icon).foregroundStyle(Theme.accent)
-            }
+            libraryRowLabel(title, icon: icon, detail: nil)
         }
+    }
+
+    private func libraryRowLabel(
+        _ title: LocalizedStringKey,
+        icon: String,
+        detail: String?
+    ) -> some View {
+        libraryRowLabel(title, icon: icon, detail: detail) { EmptyView() }
+    }
+
+    /// Library row: fixed-width accent glyph, title in body type, optional
+    /// trailing detail (count or status) in secondary text.
+    private func libraryRowLabel<Trailing: View>(
+        _ title: LocalizedStringKey,
+        icon: String,
+        detail: String?,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(Theme.accent)
+                .frame(width: 28)
+            Text(title)
+                .font(.title3)
+                .foregroundStyle(.primary)
+            Spacer(minLength: 8)
+            if let detail {
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            trailing()
+        }
+        .frame(minHeight: 44)
+    }
+
+    private var favoriteCountText: String? {
+        store.favoriteTracks.isEmpty ? nil : "\(store.favoriteTracks.count)"
     }
 
     private func playlistListRow(_ playlist: LocalPlaylist) -> some View {
         HStack(spacing: 12) {
-            CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(128), animated: false)
-                .frame(width: 48, height: 48)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(160), animated: false)
+                .frame(width: 56, height: 56)
+                .background(.quaternary.opacity(0.6))
                 .overlay {
                     if playlist.coverURL == nil {
                         Image(systemName: "music.note.list")
-                            .foregroundStyle(Theme.accent)
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(playlist.name).font(.body.weight(.medium)).lineLimit(1)
-                Text("\(playlist.tracks.count) 首歌曲")
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(playlist.name).font(.body).lineLimit(1)
+                Text(["\(playlist.tracks.count) 首歌曲", playlist.sourceName]
+                    .compactMap { $0 }.joined(separator: " · "))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -406,36 +446,30 @@ struct LikedSongsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                header
-
-                Button(action: importAccountFavorites) {
-                    if isImportingAccountFavorites {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        Label("从网易云导入红心", systemImage: "icloud.and.arrow.down")
+            VStack(alignment: .leading, spacing: 18) {
+                CollectionHeader(
+                    title: String(localized: "我喜欢的音乐"),
+                    curator: String(localized: "iMusic 资料库"),
+                    detail: isImportingAccountFavorites || isImportingQQFavorites
+                        ? String(localized: "正在导入账号收藏…")
+                        : nil,
+                    description: String(localized: "账号收藏会复制到 iMusic 资料库；在这里的收藏和删除不会写回网易云或 QQ 音乐。"),
+                    playDisabled: visibleTracks.isEmpty,
+                    onPlay: { player.play(tracks: visibleTracks, source: .none) },
+                    onShuffle: { player.playShuffled(tracks: visibleTracks, source: .none) }
+                ) {
+                    LinearGradient(
+                        colors: [Theme.accent, Theme.accentDeep],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .overlay {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 88, weight: .semibold))
+                            .foregroundStyle(.white)
                     }
+                    .accessibilityHidden(true)
                 }
-                .buttonStyle(.bordered)
-                .padding(.horizontal, Theme.Layout.contentInset)
-                .disabled(isImportingAccountFavorites)
-                Button(action: importQQFavorites) {
-                    if isImportingQQFavorites {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        Label("从 QQ 音乐导入收藏", systemImage: "arrow.down.circle")
-                    }
-                }
-                .buttonStyle(.bordered)
-                .padding(.horizontal, Theme.Layout.contentInset)
-                .disabled(isImportingQQFavorites || qqPlaylists.isImporting)
-                Text("歌单与账号收藏会复制到 iMusic 资料库；在这里的收藏和删除不会写回网易云或 QQ 音乐。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, Theme.Layout.contentInset)
 
                 if store.favoriteTracks.isEmpty {
                     EmptyStateView(
@@ -499,12 +533,22 @@ struct LikedSongsView: View {
                         Label("删除所选（\(selectedFavoriteKeys.count)）", systemImage: "trash")
                     }
                 }
-                if !isSelectingFavorites, !visibleTracks.isEmpty {
-                    Button {
-                        player.play(tracks: visibleTracks, source: .none)
+                if !isSelectingFavorites {
+                    // Account imports are occasional maintenance actions, so
+                    // they move off the page body into one toolbar menu.
+                    Menu {
+                        Button(action: importAccountFavorites) {
+                            Label("从网易云导入红心", systemImage: "icloud.and.arrow.down")
+                        }
+                        .disabled(isImportingAccountFavorites)
+                        Button(action: importQQFavorites) {
+                            Label("从 QQ 音乐导入收藏", systemImage: "arrow.down.circle")
+                        }
+                        .disabled(isImportingQQFavorites || qqPlaylists.isImporting)
                     } label: {
-                        Label("播放全部", systemImage: "play.fill")
+                        Image(systemName: "ellipsis")
                     }
+                    .accessibilityLabel("导入账号收藏")
                 }
             }
         }
@@ -547,33 +591,6 @@ struct LikedSongsView: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "star.fill")
-                .font(.system(size: 34, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 84, height: 84)
-                .background(
-                    LinearGradient(
-                        colors: [Theme.accent, Theme.accent.opacity(0.58)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    in: RoundedRectangle(cornerRadius: 22, style: .continuous)
-                )
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("我喜欢的音乐")
-                    .font(.title3.weight(.bold))
-                Text("\(store.favoriteTracks.count) 首 · iMusic 资料库")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, Theme.Layout.contentInset)
-    }
 }
 
 struct ImportPlaylistSheet: View {
@@ -717,26 +734,25 @@ struct LocalPlaylistDetailView: View {
         ScrollView {
             if let playlist = store.playlist(id: playlistID) {
                 VStack(alignment: .leading, spacing: 18) {
-                    header(playlist)
-
-                    HStack(spacing: 10) {
-                        Button {
-                            player.play(tracks: playlist.tracks, source: .none)
-                        } label: {
-                            Label("播放全部", systemImage: "play.fill")
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(playlist.tracks.isEmpty)
-
-                        ShareLink(item: store.exportText(playlist)) {
-                            Image(systemName: "square.and.arrow.up")
-                                .frame(width: 44, height: 44)
-                        }
-                        .buttonStyle(.bordered)
-                        .accessibilityLabel("导出歌单")
+                    CollectionHeader(
+                        title: playlist.name,
+                        curator: playlist.sourceName ?? String(localized: "iMusic 资料库"),
+                        detail: playlist.updatedAt.map {
+                            "更新于 \($0.formatted(date: .abbreviated, time: .omitted))"
+                        },
+                        playDisabled: playlist.tracks.isEmpty,
+                        onPlay: { player.play(tracks: playlist.tracks, source: .none) },
+                        onShuffle: { player.playShuffled(tracks: playlist.tracks, source: .none) }
+                    ) {
+                        CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(600))
+                            .overlay {
+                                if playlist.coverURL == nil {
+                                    Image(systemName: "music.note.list")
+                                        .font(.system(size: 56, weight: .light))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
                     }
-                    .padding(.horizontal, Theme.Layout.contentInset)
 
                     if playlist.tracks.isEmpty {
                         EmptyStateView(icon: "music.note.list", title: "歌单暂无歌曲")
@@ -798,28 +814,40 @@ struct LocalPlaylistDetailView: View {
                         Label("删除所选", systemImage: "trash")
                     }
                 }
-                if !isSelectingTracks, !(store.playlist(id: playlistID)?.tracks.isEmpty ?? true) {
-                    Button {
-                        showAddTracks = true
+                if !isSelectingTracks, let playlist = store.playlist(id: playlistID) {
+                    // One "⋯" menu instead of a row of five toolbar glyphs.
+                    Menu {
+                        if !playlist.tracks.isEmpty {
+                            Button {
+                                showAddTracks = true
+                            } label: {
+                                Label("添加到歌单", systemImage: "text.badge.plus")
+                            }
+                            Button {
+                                showReorderTracks = true
+                            } label: {
+                                Label("调整歌曲顺序", systemImage: "line.3.horizontal")
+                            }
+                        }
+                        ShareLink(item: store.exportText(playlist)) {
+                            Label("导出歌单", systemImage: "square.and.arrow.up")
+                        }
+                        Button {
+                            renameText = playlist.name
+                            showRename = true
+                        } label: {
+                            Label("重命名", systemImage: "pencil")
+                        }
+                        Divider()
+                        Button(role: .destructive) {
+                            store.delete(id: playlistID)
+                        } label: {
+                            Label("删除歌单", systemImage: "trash")
+                        }
                     } label: {
-                        Label("添加到歌单", systemImage: "text.badge.plus")
+                        Image(systemName: "ellipsis")
                     }
-                    Button {
-                        showReorderTracks = true
-                    } label: {
-                        Label("调整歌曲顺序", systemImage: "line.3.horizontal")
-                    }
-                }
-                Button {
-                    renameText = store.playlist(id: playlistID)?.name ?? ""
-                    showRename = true
-                } label: {
-                    Label("重命名", systemImage: "pencil")
-                }
-                Button(role: .destructive) {
-                    store.delete(id: playlistID)
-                } label: {
-                    Label("删除歌单", systemImage: "trash")
+                    .accessibilityLabel("歌单选项")
                 }
             }
         }
@@ -854,37 +882,6 @@ struct LocalPlaylistDetailView: View {
         playlist.tracks.filter { selectedTrackKeys.contains($0.playbackKey) }
     }
 
-    private func header(_ playlist: LocalPlaylist) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(384))
-                .frame(width: 126, height: 126)
-                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay {
-                    if playlist.coverURL == nil {
-                        Image(systemName: "music.note.list")
-                            .font(.system(size: 36, weight: .light))
-                            .foregroundStyle(Theme.accent)
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 7) {
-                Text(playlist.name)
-                    .font(.title3.weight(.bold))
-                    .lineLimit(3)
-                if let sourceName = playlist.sourceName, !sourceName.isEmpty {
-                    Text("来源：\(sourceName)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                Text("\(playlist.tracks.count) 首")
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, Theme.Layout.contentInset)
-    }
 }
 
 private struct ReorderLocalPlaylistsSheet: View {
