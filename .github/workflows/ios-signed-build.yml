@@ -17,17 +17,113 @@ on:
 jobs:
   build:
     runs-on: xcode-27
+    timeout-minutes: 60
+    concurrency:
+      group: ios-signed-build-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: write
 
     steps:
-      - name: Checkout
+      - name: Validate release selection
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RELEASE_TAG" || ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo 'Publish requires a tag in vN.N or vN.N.N format.' >&2
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null || {
+            echo 'The selected tag does not exist on the remote.' >&2
+            exit 1
+          }
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+      - name: Checkout selected source
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.publish_release && inputs.release_tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Bind publish build to remote tag
+        if: ${{ inputs.publish_release }}
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          tag_refs="$(git ls-remote origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
+          remote_sha="$(printf '%s\n' "$tag_refs" | awk -v ref="refs/tags/$RELEASE_TAG^{}" '$2 == ref { print $1; exit }')"
+          if [[ -z "$remote_sha" ]]; then
+            remote_sha="$(printf '%s\n' "$tag_refs" | awk -v ref="refs/tags/$RELEASE_TAG" '$2 == ref { print $1; exit }')"
+          fi
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ -z "$remote_sha" || "$checked_out_sha" != "$remote_sha" ]]; then
+            echo 'Checked-out source does not match the selected remote tag.' >&2
+            exit 1
+          fi
+          echo "IMUSIC_PUBLISH_SHA=$checked_out_sha" >> "$GITHUB_ENV"
 
       - name: Install XcodeGen
         run: |
           brew untap aws/tap || true
           HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: platforms/ios/ios
+        run: xcodegen generate
+
+      - name: Test iOS 27 feature and UI targets
+        if: ${{ inputs.publish_release }}
+        working-directory: platforms/ios/ios
+        run: |
+          set -euo pipefail
+          simulator_id="$(python3 - <<'PY'
+          import json, subprocess, sys
+          devices = json.loads(subprocess.check_output(
+              ["xcrun", "simctl", "list", "devices", "available", "-j"], text=True
+          ))["devices"]
+          matches = [device for runtime, entries in devices.items()
+                     if runtime.startswith("com.apple.CoreSimulator.SimRuntime.iOS-27")
+                     for device in entries
+                     if device.get("isAvailable") and device.get("name", "").startswith("iPhone")]
+          if not matches:
+              sys.exit("No available iOS 27 iPhone simulator was found.")
+          print(matches[0]["udid"])
+          PY
+          )"
+          result_bundle="$RUNNER_TEMP/iMusic-publish-tests.xcresult"
+          xcrun simctl shutdown "$simulator_id" || true
+          xcrun simctl boot "$simulator_id"
+          xcrun simctl bootstatus "$simulator_id" -b
+          xcodebuild test \
+            -project KumoneIOS.xcodeproj \
+            -scheme KumoneIOS \
+            -destination "platform=iOS Simulator,id=$simulator_id" \
+            -destination-timeout 120 \
+            -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/imusic-publish-test-derived" \
+            -resultBundlePath "$result_bundle" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Upload publish test results
+        if: ${{ always() && inputs.publish_release }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: iMusic-ios-publish-tests
+          path: ${{ runner.temp }}/iMusic-publish-tests.xcresult
+          if-no-files-found: warn
+
+      - name: Backup signing environment
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          backup="$RUNNER_TEMP/imusic-keychain-search-list.txt"
+          security list-keychains -d user | sed 's/^ *"//; s/"$//' > "$backup"
+          echo "IMUSIC_KEYCHAIN_SEARCH_LIST_BACKUP=$backup" >> "$GITHUB_ENV"
 
       - name: Import signing assets and validate profiles
         env:
@@ -41,7 +137,7 @@ jobs:
           : "${IOS_CERTIFICATE_PASSWORD:?Missing IOS_CERTIFICATE_PASSWORD repository secret}"
           : "${IOS_PROVISIONING_PROFILE_BASE64:?Missing IOS_PROVISIONING_PROFILE_BASE64 repository secret}"
 
-          keychain_path="$RUNNER_TEMP/imusic-signing.keychain-db"
+          keychain_path="$RUNNER_TEMP/imusic-signing-$(uuidgen).keychain-db"
           keychain_password="$(uuidgen)"
           certificate_path="$RUNNER_TEMP/imusic-signing.p12"
           app_profile_path="$RUNNER_TEMP/imusic-app.mobileprovision"
@@ -52,6 +148,7 @@ jobs:
           security cms -D -i "$app_profile_path" > "$app_profile_plist"
 
           security create-keychain -p "$keychain_password" "$keychain_path"
+          echo "IMUSIC_CREATED_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
           security set-keychain-settings -lut 21600 "$keychain_path"
           security unlock-keychain -p "$keychain_password" "$keychain_path"
           security import "$certificate_path" -k "$keychain_path" -P "$IOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
@@ -71,6 +168,17 @@ jobs:
             echo 'The app provisioning profile is missing required signing metadata.' >&2
             exit 1
           fi
+
+          profile_dir="$HOME/Library/MobileDevice/Provisioning Profiles"
+          installed_profile="$profile_dir/$profile_uuid.mobileprovision"
+          profile_backup="$RUNNER_TEMP/imusic-original-profile.mobileprovision"
+          if [[ -e "$installed_profile" ]]; then
+            cp -p "$installed_profile" "$profile_backup"
+            echo 'IMUSIC_PROFILE_EXISTED=true' >> "$GITHUB_ENV"
+          else
+            echo 'IMUSIC_PROFILE_EXISTED=false' >> "$GITHUB_ENV"
+          fi
+          echo "IMUSIC_PROFILE_UUID=$profile_uuid" >> "$GITHUB_ENV"
 
           profile_allows_bundle() {
             local profile_app_id="$1"
@@ -93,9 +201,8 @@ jobs:
             exit 1
           fi
 
-
-          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          cp "$app_profile_path" "$HOME/Library/MobileDevice/Provisioning Profiles/$profile_uuid.mobileprovision"
+          mkdir -p "$profile_dir"
+          cp "$app_profile_path" "$installed_profile"
 
           identity="$(security find-identity -v -p codesigning "$keychain_path" | sed -n 's/.*"\(.*\)".*/\1/p' | head -n 1)"
           if [[ -z "$identity" ]]; then
@@ -121,9 +228,28 @@ jobs:
           echo "IMUSIC_EXPORT_CERTIFICATE=$export_certificate" >> "$GITHUB_ENV"
           echo "Validated profile: $profile_name ($application_id)"
 
-      - name: Generate Xcode project
+      - name: Set expected app versions
         working-directory: platforms/ios/ios
-        run: xcodegen generate
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+        run: |
+          set -euo pipefail
+          marketing_version="$(sed -n 's/^[[:space:]]*MARKETING_VERSION[[:space:]]*=[[:space:]]*//p' Config/Shared.xcconfig | head -n 1 | tr -d '\r')"
+          build_version="$(sed -n 's/^[[:space:]]*CURRENT_PROJECT_VERSION[[:space:]]*=[[:space:]]*//p' Config/Shared.xcconfig | head -n 1 | tr -d '\r')"
+          if [[ "$PUBLISH_RELEASE" == 'true' ]]; then
+            marketing_version="${RELEASE_TAG#v}"
+            if [[ ! "$build_version" =~ ^[1-9][0-9]*$ ]]; then
+              echo 'CURRENT_PROJECT_VERSION must be a positive integer for publishing.' >&2
+              exit 1
+            fi
+          fi
+          if [[ -z "$marketing_version" || -z "$build_version" ]]; then
+            echo 'App marketing/build version is missing from Shared.xcconfig.' >&2
+            exit 1
+          fi
+          echo "IMUSIC_EXPECTED_MARKETING_VERSION=$marketing_version" >> "$GITHUB_ENV"
+          echo "IMUSIC_EXPECTED_BUILD_VERSION=$build_version" >> "$GITHUB_ENV"
 
       - name: Archive signed app
         working-directory: platforms/ios/ios
@@ -142,7 +268,9 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$IMUSIC_TEAM_ID" \
             CODE_SIGN_IDENTITY="$IMUSIC_SIGNING_IDENTITY" \
-            MOU_APP_PROVISIONING_PROFILE="$IMUSIC_APP_PROVISIONING_PROFILE"
+            MOU_APP_PROVISIONING_PROFILE="$IMUSIC_APP_PROVISIONING_PROFILE" \
+            MARKETING_VERSION="$IMUSIC_EXPECTED_MARKETING_VERSION" \
+            CURRENT_PROJECT_VERSION="$IMUSIC_EXPECTED_BUILD_VERSION"
 
       - name: Export signed IPA
         run: |
@@ -175,9 +303,20 @@ jobs:
           verify_dir="$RUNNER_TEMP/imusic-ipa-verify"
           mkdir -p "$verify_dir"
           unzip -q iMusic-signed.ipa -d "$verify_dir"
-          codesign --verify --deep --strict --verbose=2 "$verify_dir/Payload/iMusic.app"
+          app_path="$verify_dir/Payload/iMusic.app"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
           if find "$verify_dir/Payload" -name '*.appex' -print -quit | grep -q .; then
             echo 'The signed iMusic IPA must not contain an app extension.' >&2
+            exit 1
+          fi
+          info_plist="$app_path/Info.plist"
+          actual_marketing_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist")"
+          actual_build_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info_plist")"
+          actual_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info_plist")"
+          if [[ "$actual_marketing_version" != "$IMUSIC_EXPECTED_MARKETING_VERSION" || \
+                "$actual_build_version" != "$IMUSIC_EXPECTED_BUILD_VERSION" || \
+                "$actual_bundle_id" != 'com.jiajia2222.imusic.ios' ]]; then
+            echo 'The signed IPA version, build number, or bundle identifier does not match the expected values.' >&2
             exit 1
           fi
 
@@ -188,8 +327,71 @@ jobs:
           path: iMusic-signed.ipa
           if-no-files-found: error
 
-      - name: Publish signed IPA to Release
-        if: ${{ inputs.publish_release && inputs.release_tag != '' }}
+      - name: Confirm tag and publish signed IPA
+        if: ${{ inputs.publish_release }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ inputs.release_tag }}" iMusic-signed.ipa --clobber --repo "$GITHUB_REPOSITORY"
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          tag_refs="$(git ls-remote origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
+          remote_sha="$(printf '%s\n' "$tag_refs" | awk -v ref="refs/tags/$RELEASE_TAG^{}" '$2 == ref { print $1; exit }')"
+          if [[ -z "$remote_sha" ]]; then
+            remote_sha="$(printf '%s\n' "$tag_refs" | awk -v ref="refs/tags/$RELEASE_TAG" '$2 == ref { print $1; exit }')"
+          fi
+          if [[ -z "$remote_sha" || "$remote_sha" != "$IMUSIC_PUBLISH_SHA" ]]; then
+            echo 'Remote tag moved after checkout; refusing to publish.' >&2
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" iMusic-signed.ipa --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Restore signing environment
+        if: ${{ always() }}
+        env:
+          IMUSIC_PROFILE_UUID: ${{ env.IMUSIC_PROFILE_UUID }}
+          IMUSIC_PROFILE_EXISTED: ${{ env.IMUSIC_PROFILE_EXISTED }}
+          IMUSIC_KEYCHAIN_SEARCH_LIST_BACKUP: ${{ env.IMUSIC_KEYCHAIN_SEARCH_LIST_BACKUP }}
+          IMUSIC_CREATED_KEYCHAIN: ${{ env.IMUSIC_CREATED_KEYCHAIN }}
+        run: |
+          # GitHub's default bash has -e enabled. Attempt every cleanup even
+          # when one restoration fails, then report the combined result.
+          set +e
+          set -u
+          cleanup_status=0
+          profile_dir="$HOME/Library/MobileDevice/Provisioning Profiles"
+          if [[ -n "$IMUSIC_PROFILE_UUID" ]]; then
+            installed_profile="$profile_dir/$IMUSIC_PROFILE_UUID.mobileprovision"
+            if [[ "$IMUSIC_PROFILE_EXISTED" == 'true' ]]; then
+              if [[ -f "$RUNNER_TEMP/imusic-original-profile.mobileprovision" ]]; then
+                cp -p "$RUNNER_TEMP/imusic-original-profile.mobileprovision" "$installed_profile" || cleanup_status=1
+              else
+                echo 'Original profile backup is missing; preserving the installed profile.' >&2
+                cleanup_status=1
+              fi
+            elif [[ "$IMUSIC_PROFILE_EXISTED" == 'false' ]]; then
+              rm -f "$installed_profile" || cleanup_status=1
+            fi
+          fi
+          if [[ -n "$IMUSIC_KEYCHAIN_SEARCH_LIST_BACKUP" && -f "$IMUSIC_KEYCHAIN_SEARCH_LIST_BACKUP" ]]; then
+            original_keychains=()
+            while IFS= read -r keychain; do
+              original_keychains+=("$keychain")
+            done < "$IMUSIC_KEYCHAIN_SEARCH_LIST_BACKUP"
+            if (( ${#original_keychains[@]} > 0 )); then
+              security list-keychains -d user -s "${original_keychains[@]}" || cleanup_status=1
+            fi
+          fi
+          if [[ -n "$IMUSIC_CREATED_KEYCHAIN" ]]; then
+            security delete-keychain "$IMUSIC_CREATED_KEYCHAIN" >/dev/null 2>&1 || cleanup_status=1
+          fi
+          rm -f "$RUNNER_TEMP/imusic-signing.p12" \
+            "$RUNNER_TEMP/imusic-app.mobileprovision" \
+            "$RUNNER_TEMP/imusic-app-profile.plist" \
+            "$RUNNER_TEMP/iMusic-ExportOptions.plist" || cleanup_status=1
+          # Keep recovery copies when restoration failed; do not turn a failed
+          # restore into irreversible loss of the user's original profile.
+          if (( cleanup_status == 0 )); then
+            rm -f "$RUNNER_TEMP/imusic-original-profile.mobileprovision" \
+              "$RUNNER_TEMP/imusic-keychain-search-list.txt" || cleanup_status=1
+          fi
+          exit "$cleanup_status"
