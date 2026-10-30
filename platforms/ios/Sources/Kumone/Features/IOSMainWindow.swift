@@ -885,7 +885,7 @@ private struct NativeTabReselectionObserver: UIViewControllerRepresentable {
 
         private func findTabs(in controller: UIViewController) -> UITabBarController? {
             if let tabs = controller as? UITabBarController { return tabs }
-            return controller.children.lazy.compactMap { findTabs(in: $0) }.first
+            return controller.children.lazy.compactMap { self.findTabs(in: $0) }.first
         }
 
         func uninstall() {

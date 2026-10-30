@@ -22,6 +22,7 @@ class IOSDesignCompileGuards(unittest.TestCase):
                 self.assertIn("os(iOS)", conditions)
         self.assertTrue(found)
         self.assertEqual(conditions, [])
+        self.assertNotIn("lazy.compactMap { findTabs(", source)
 
     def test_tertiary_token_is_a_concrete_color(self):
         source = (ROOT / "DesignSystem/Theme.swift").read_text(encoding="utf-8")
