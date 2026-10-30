@@ -297,6 +297,8 @@ struct NowPlayingView: View {
                 if showLyricsOnMobile {
                     appleMusicLyricsPage()
                         .padding(.bottom, 54)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("appleMusicLyricsPage")
                 } else {
                     let artworkSize = max(0, min(size.height - 124, 240))
                     HStack(spacing: 28) {
@@ -316,6 +318,8 @@ struct NowPlayingView: View {
                     .padding(.horizontal, 36)
                     .padding(.vertical, 36)
                     .padding(.bottom, 54)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("appleMusicSongPage")
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

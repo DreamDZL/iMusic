@@ -233,10 +233,17 @@ final class KumoneIOSUITests: XCTestCase {
         XCUIDevice.shared.orientation = .landscapeLeft
         let window = app.windows.firstMatch
         let landscapeExpectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "frame.size.width > frame.size.height"),
+            predicate: NSPredicate { _, _ in
+                let frame = window.frame
+                return CGFloat(frame.size.width) > CGFloat(frame.size.height)
+            },
             object: window
         )
-        XCTAssertEqual(XCTWaiter.wait(for: [landscapeExpectation], timeout: 5), .completed)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [landscapeExpectation], timeout: 5),
+            .completed,
+            "The app window must become wider than it is tall after rotating to landscape"
+        )
         XCTAssertTrue(accessoryControls.waitForExistence(timeout: 5))
         let landscapeAccessoryMidY = accessoryControls.frame.midY
         accessoryControls.tap()
