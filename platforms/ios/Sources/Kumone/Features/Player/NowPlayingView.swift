@@ -563,8 +563,6 @@ struct NowPlayingView: View {
                 )
             )
             guard !Task.isCancelled, showLyricsOnMobile, !isLyricsDragActive else { return }
-            isUserScrolling = false
-            resumeTask?.cancel()
             withAnimation(.easeInOut(duration: 0.28)) {
                 lyricsControlsVisible = false
             }
@@ -1312,6 +1310,30 @@ struct NowPlayingView: View {
                     }
                     .coordinateSpace(name: "synchronizedLyrics")
                     .accessibilityIdentifier("synchronizedLyricsScrollView")
+                    .overlay(alignment: .bottomTrailing) {
+                        if isUserScrolling, let currentIndex = lyricsCursor.activeIndex {
+                            Button {
+                                resumeTask?.cancel()
+                                resumeTask = nil
+                                isUserScrolling = false
+                                withAnimation(AppAnimation.standard) {
+                                    proxy.scrollTo(currentIndex, anchor: UnitPoint(x: 0.5, y: 0.18))
+                                }
+                            } label: {
+                                Label("回到正在播放", systemImage: "scope")
+                                    .font(.subheadline.weight(.semibold))
+                                    .padding(.horizontal, 14)
+                                    .frame(minHeight: 44)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("恢复歌词随播放进度滚动")
+                            .accessibilityIdentifier("resumeCurrentLyrics")
+                            .padding(.trailing, 24)
+                            .padding(.bottom, 96)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
+                    }
                     .mask(
                         LinearGradient(
                             stops: [
@@ -1357,19 +1379,8 @@ struct NowPlayingView: View {
                             .onEnded { _ in
                                 guard isLyricsDragActive else { return }
                                 isLyricsDragActive = false
-                                resumeTask?.cancel()
-                                resumeTask = Task { @MainActor in
-                                    // Scrolling only enters browse mode. A
-                                    // deliberate tap on a row chooses its time.
-                                    try? await Task.sleep(for: .seconds(3))
-                                    guard !Task.isCancelled else { return }
-                                    isUserScrolling = false
-                                    if let index = lyricsCursor.activeIndex {
-                                        withAnimation(AppAnimation.standard) {
-                                            proxy.scrollTo(index, anchor: UnitPoint(x: 0.5, y: 0.18))
-                                        }
-                                    }
-                                }
+                                 resumeTask?.cancel()
+                                 resumeTask = nil
                                 if showLyricsOnMobile, lyricsControlsVisible {
                                     scheduleLyricsControlsAutoHide()
                                 }

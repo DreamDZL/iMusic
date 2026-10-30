@@ -35,5 +35,21 @@ final class NowPlayingPresentationMetricsTests: XCTestCase {
             )
         }
     }
+
+    func testMiniPlayerSwipeRequiresHorizontalIntent() {
+        XCTAssertEqual(
+            MiniPlayerSwipePolicy.trackDirection(
+                translation: CGSize(width: -80, height: 8),
+                predictedTranslation: CGSize(width: -100, height: 10)
+            ),
+            -1
+        )
+        XCTAssertNil(
+            MiniPlayerSwipePolicy.trackDirection(
+                translation: CGSize(width: -30, height: -40),
+                predictedTranslation: CGSize(width: -120, height: -100)
+            )
+        )
+    }
 }
 #endif

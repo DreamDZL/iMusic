@@ -238,6 +238,10 @@ final class KumoneIOSUITests: XCTestCase {
         lyricsScroll.swipeUp()
         XCTAssertTrue(lyricsPage.exists, "Vertical lyric scrolling must not navigate away from lyrics")
         XCTAssertFalse(transportControls.exists, "Transport controls must remain hidden until the playback deck is tapped")
+        let returnToPlayback = app.buttons["resumeCurrentLyrics"]
+        XCTAssertTrue(returnToPlayback.waitForExistence(timeout: 5), "Browsing lyrics should offer a clear return-to-current-line action")
+        returnToPlayback.tap()
+        XCTAssertTrue(returnToPlayback.waitForNonExistence(timeout: 5), "Returning to the current line should leave lyric browse mode")
         bottomControls.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
         let revealedPlaybackState = app.descendants(matching: .any).matching(
             NSPredicate(
