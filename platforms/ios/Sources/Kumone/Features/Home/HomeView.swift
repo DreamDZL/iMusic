@@ -622,8 +622,8 @@ struct HomeView: View {
                             player.startFM()
                         } label: {
                             FeatureCard(
-                                title: "LX 漫游",
-                                subtitle: "按首页平台生成漫游队列",
+                                title: "电台推荐",
+                                subtitle: "按首页平台生成推荐队列",
                                 icon: "wave.3.right.circle.fill",
                                 gradient: [Color(red: 0.16, green: 0.20, blue: 0.42),
                                            Color(red: 0.36, green: 0.24, blue: 0.62)],

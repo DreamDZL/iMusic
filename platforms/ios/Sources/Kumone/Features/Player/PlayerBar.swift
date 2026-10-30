@@ -107,7 +107,7 @@ struct PlayerBar: View {
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.accent)
                         .frame(width: 26, height: 26)
-                        .help("私人漫游中")
+                        .help("电台播放中")
                 } else {
                     PlayerIconButton(
                         icon: player.repeatMode == .one ? "repeat.1" : "repeat", size: 12,

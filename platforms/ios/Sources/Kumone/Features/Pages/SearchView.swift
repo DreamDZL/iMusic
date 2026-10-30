@@ -627,14 +627,15 @@ struct SearchView: View {
                     }
 
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 10)], spacing: 10) {
-                        ForEach(model.hotKeywords, id: \.self) { keyword in
+                        ForEach(Array(model.hotKeywords.enumerated()), id: \.element) { index, keyword in
                             Button {
                                 performSearch(keyword)
                             } label: {
                                 HStack(spacing: 8) {
-                                    Image(systemName: "magnifyingglass")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(Theme.accent)
+                                    Text("\(index + 1)")
+                                        .font(.caption.monospacedDigit().weight(.bold))
+                                        .foregroundStyle(index < 3 ? Theme.accent : .secondary)
+                                        .frame(width: 20, alignment: .leading)
                                     Text(keyword)
                                         .lineLimit(1)
                                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -644,6 +645,7 @@ struct SearchView: View {
                                 .background(.quaternary.opacity(0.45), in: Capsule())
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("第\(index + 1)名，\(keyword)")
                         }
                     }
                 }

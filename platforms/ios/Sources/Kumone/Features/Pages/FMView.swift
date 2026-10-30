@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 私人漫游 — immersive personal FM page.
+/// 电台 — immersive personal FM page.
 struct FMView: View {
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
@@ -73,14 +73,14 @@ struct FMView: View {
 
             VStack(spacing: 6) {
                 HStack(spacing: 8) {
-                    Text(track?.name ?? String(localized: "私人漫游"))
+                    Text(track?.name ?? String(localized: "电台推荐"))
                         .font(.system(size: 22, weight: .bold))
                         .lineLimit(1)
                     if track?.fee == 1 {
                         VIPBadge()
                     }
                 }
-                Text(track?.artistNames ?? String(localized: "根据你的口味漫游好音乐"))
+                Text(track?.artistNames ?? String(localized: "根据你的口味推荐好音乐"))
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -93,7 +93,7 @@ struct FMView: View {
                 Button {
                     player.startFM()
                 } label: {
-                    Label("开始漫游", systemImage: "wave.3.right")
+                    Label("开始播放", systemImage: "wave.3.right")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 28)
@@ -165,7 +165,7 @@ struct FMView: View {
             Image(systemName: "wave.3.right.circle")
                 .font(.system(size: 52, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text("登录后开启私人漫游")
+                Text("登录后开启电台")
                 .font(.headline)
             Text("网易云会根据你的听歌口味推荐音乐")
                 .font(.subheadline)
