@@ -1494,11 +1494,16 @@ struct NowPlayingView: View {
         }
     }
 
+    /// Depth-of-field like the system lyrics: every line except the sung one
+    /// is blurred, more strongly the farther it is. Browsing clears the blur
+    /// so the page can be read; Reduce Motion keeps the opacity cue only.
+    /// The lines are static between line changes (the player no longer
+    /// redraws per frame), so the blur is not re-rendered continuously.
     private func lyricBlurRadius(for lineID: Int, isActive: Bool) -> CGFloat {
-        guard !isActive, !isUserScrolling, !reduceMotion,
-              renderingBudget.allowsContinuousEffects else { return 0 }
-        guard let activeIndex else { return 1.1 }
-        return abs(lineID - activeIndex) <= 4 ? 1.1 : 0
+        guard !isActive, !isUserScrolling, !reduceMotion else { return 0 }
+        guard let activeIndex else { return 1.6 }
+        let distance = CGFloat(abs(lineID - activeIndex))
+        return min(1.0 + (distance - 1) * 0.8, 3.4)
     }
 
     /// Every line uses the same large bold style; the active line is set
