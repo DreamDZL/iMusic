@@ -65,14 +65,16 @@ enum LXCatalogPlatform: String, CaseIterable, Identifiable {
     }
 }
 
-enum LXCatalogError: LocalizedError {
+enum LXCatalogError: LocalizedError, Equatable {
     case invalidResponse
+    case playlistIdentityMismatch
     case unsupported
     case unavailable
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse: return "平台返回了无法识别的结果"
+        case .playlistIdentityMismatch: return "歌单来源或编号与请求不一致，请重试"
         case .unsupported: return "当前平台暂不支持此功能"
         case .unavailable: return "搜索服务暂时不可用"
         }
@@ -1522,12 +1524,21 @@ enum LXCatalogService {
             guard let neteaseID = Int(id) else { throw LXCatalogError.invalidResponse }
             let response = try await NeteaseAPI.playlistDetail(id: neteaseID)
             let complete = try await NeteaseAPI.completePlaylistTracks(from: response)
+            let declaredCount = response.playlist.trackCount > 0
+                ? response.playlist.trackCount
+                : (response.playlist.trackIds.isEmpty ? nil : response.playlist.trackIds.count)
             return LXPlaylistDetail(id: id, name: response.playlist.name,
                                     coverURL: response.playlist.coverImgUrl,
                                     description: response.playlist.description,
                                     author: response.playlist.creator?.nickname,
                                     playCount: response.playlist.playCount,
-                                    tracks: complete.tracks.map { $0.withSource("wy") }, source: .wy)
+                                    tracks: complete.tracks.map { $0.withSource("wy") }, source: .wy,
+                                    declaredTrackCount: declaredCount,
+                                    isTrackListComplete: PlaylistTrackCompleteness.isComplete(
+                                        declaredTrackCount: response.playlist.trackCount,
+                                        authoritativeTrackIDs: response.playlist.trackIds,
+                                        resolvedTrackCount: complete.tracks.count
+                                    ))
         case .kw:
             let parts = id.components(separatedBy: "__")
             let listID = parts.last ?? id
@@ -1583,10 +1594,18 @@ enum LXCatalogService {
             guard !rawTracks.isEmpty else { throw LXCatalogError.invalidResponse }
             let tracks = rawTracks.compactMap { track(from: $0, source: .kw) }
             guard !tracks.isEmpty else { throw LXCatalogError.invalidResponse }
+            let declaredCount = LXPlaylistTrackCompleteness.declaredCount(
+                in: root,
+                keys: ["total", "totalnum", "songnum", "song_count", "songcount", "musicNum"]
+            )
             return LXPlaylistDetail(id: id, name: text(root?["name"]) ?? text(root?["title"]) ?? "酷我歌单",
                                     coverURL: normalizedImageURL(text(root?["pic"])), description: text(root?["intro"]),
                                     author: text(root?["uname"]), playCount: int(root?["playnum"]) ?? 0,
-                                    tracks: tracks, source: .kw)
+                                    tracks: tracks, source: .kw,
+                                    declaredTrackCount: declaredCount,
+                                    isTrackListComplete: LXPlaylistTrackCompleteness.isComplete(
+                                        declaredCount: declaredCount, rawCount: rawTracks.count, parsedCount: tracks.count
+                                    ))
         case .tx:
             let url = URL(string: "https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg?type=1&json=1&utf8=1&onlysong=0&new_format=1&disstid=\(id)&loginUin=0&hostUin=0&format=json&inCharset=utf8&outCharset=utf-8&notice=0&platform=yqq.json&needNewCode=0")!
             let root = try await fetchObject(url, headers: [
@@ -1598,10 +1617,18 @@ enum LXCatalogService {
             guard !rawTracks.isEmpty else { throw LXCatalogError.invalidResponse }
             let tracks = rawTracks.compactMap { track(from: $0, source: .tx) }
             guard !tracks.isEmpty else { throw LXCatalogError.invalidResponse }
+            let declaredCount = LXPlaylistTrackCompleteness.declaredCount(
+                in: cd,
+                keys: ["songnum", "song_count", "songCount", "total_song_num", "total"]
+            )
             return LXPlaylistDetail(id: id, name: text(cd?["dissname"]) ?? "QQ 音乐歌单",
                                     coverURL: normalizedImageURL(text(cd?["logo"])), description: text(cd?["desc"]),
                                     author: text(cd?["nickname"]), playCount: int(cd?["visitnum"]) ?? 0,
-                                    tracks: tracks, source: .tx)
+                                    tracks: tracks, source: .tx,
+                                    declaredTrackCount: declaredCount,
+                                    isTrackListComplete: LXPlaylistTrackCompleteness.isComplete(
+                                        declaredCount: declaredCount, rawCount: rawTracks.count, parsedCount: tracks.count
+                                    ))
         case .mg:
             let url = URL(string: "https://app.c.nf.migu.cn/MIGUM3.0/resource/playlist/song/v2.0?pageNo=1&pageSize=1000&playlistId=\(id)")!
             let root = try await fetchObject(url, headers: ["Referer": "https://m.music.migu.cn/"]) as? [String: Any]
@@ -1611,11 +1638,28 @@ enum LXCatalogService {
             guard !tracks.isEmpty else { throw LXCatalogError.invalidResponse }
             let infoObject = try? await fetchObject(URL(string: "https://c.musicapp.migu.cn/MIGUM3.0/resource/playlist/v2.0?playlistId=\(id)")!, headers: ["Referer": "https://m.music.migu.cn/"])
             let info = (infoObject as? [String: Any])?["data"] as? [String: Any]
+            let rootCountKeys = ["totalCount", "total", "songCount", "musicNum"]
+            let rootDictionary = root as? [String: Any]
+            let declaredCount: Int?
+            if let rootDictionary,
+               rootCountKeys.contains(where: { rootDictionary.keys.contains($0) }) {
+                declaredCount = LXPlaylistTrackCompleteness.declaredCount(
+                    in: rootDictionary, keys: rootCountKeys
+                )
+            } else {
+                declaredCount = LXPlaylistTrackCompleteness.declaredCount(
+                    in: info, keys: ["totalCount", "total", "songCount", "musicNum", "contentCount"]
+                )
+            }
             return LXPlaylistDetail(id: id, name: text(info?["title"]) ?? "咪咕歌单",
                                     coverURL: normalizedImageURL(text((info?["imgItem"] as? [String: Any])?["img"])),
                                     description: text(info?["summary"]), author: text(info?["ownerName"]),
                                     playCount: int((info?["opNumItem"] as? [String: Any])?["playNum"]) ?? 0,
-                                    tracks: tracks, source: .mg)
+                                    tracks: tracks, source: .mg,
+                                    declaredTrackCount: declaredCount,
+                                    isTrackListComplete: LXPlaylistTrackCompleteness.isComplete(
+                                        declaredCount: declaredCount, rawCount: rawTracks.count, parsedCount: tracks.count
+                                    ))
         case .kg:
             let cleanID = id.replacingOccurrences(of: "id_", with: "")
             // This is the endpoint used by LX Mobile's Kugou adapter. The

@@ -26,7 +26,7 @@ The backup is retained after completion for rollback/recovery. To recover a
 pre-migration account copy, decode the backup value as `[LocalPlaylist]` (the
 dates use ISO-8601 encoding) and restore the desired row into the existing
 `moumusic.localPlaylists.v1` collection through the app's normal playlist
-storage path. Do not clear the marker to resolve ordinary sync deletions; that
-would reintroduce every backed-up playlist. Clearing the marker is only an
-intentional migration retry after verifying/restoring local data. No existing
+storage path. Clearing migration markers does not restore the backup and is
+not a way to undo ordinary sync deletions. Only retry initialization after
+explicitly verifying/restoring the desired local rows. No existing
 playlist storage key, schema, or identity format changes in this migration.

@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 // MARK: - User
 
@@ -110,8 +111,98 @@ struct LXPlaylistDetail: Hashable {
     let playCount: Int
     let tracks: [Track]
     let source: LXCatalogPlatform
+    let declaredTrackCount: Int?
+    let isTrackListComplete: Bool
 
-    var trackCount: Int { tracks.count }
+    init(
+        id: String,
+        name: String,
+        coverURL: String?,
+        description: String?,
+        author: String?,
+        playCount: Int,
+        tracks: [Track],
+        source: LXCatalogPlatform,
+        declaredTrackCount: Int? = nil,
+        isTrackListComplete: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.coverURL = coverURL
+        self.description = description
+        self.author = author
+        self.playCount = playCount
+        self.tracks = tracks
+        self.source = source
+        self.declaredTrackCount = declaredTrackCount
+        self.isTrackListComplete = isTrackListComplete
+    }
+
+    var trackCount: Int { declaredTrackCount ?? tracks.count }
+}
+
+enum LXPlaylistTrackCompleteness {
+    /// Only certify completeness when a provider declares a positive total and
+    /// every raw item parsed into a track with an exact count match.
+    static func isComplete(declaredCount: Int?, rawCount: Int, parsedCount: Int) -> Bool {
+        guard let declaredCount, declaredCount > 0 else { return false }
+        return rawCount == declaredCount && parsedCount == declaredCount
+    }
+
+    /// Reads provider totals conservatively. A present malformed field or
+    /// conflicting aliases makes the total unknown instead of selecting a
+    /// convenient value and accidentally certifying a partial response.
+    static func declaredCount(in object: [String: Any]?, keys: [String]) -> Int? {
+        guard let object else { return nil }
+        var parsed: [Int] = []
+        for key in keys where object.keys.contains(key) {
+            guard let value = object[key],
+                  let count = strictNonnegativeInteger(value) else { return nil }
+            parsed.append(count)
+        }
+        guard let first = parsed.first,
+              parsed.allSatisfy({ $0 == first }) else { return nil }
+        return first
+    }
+
+    private static func strictNonnegativeInteger(_ value: Any) -> Int? {
+        if let number = value as? NSNumber {
+            guard CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+            let numberType = String(cString: number.objCType)
+            if numberType == "f" || numberType == "d" {
+                let double = number.doubleValue
+                guard double.isFinite, double >= 0,
+                      double.rounded(.towardZero) == double else { return nil }
+                return Int(exactly: double)
+            }
+            guard let integer = Int(number.stringValue), integer >= 0 else { return nil }
+            return integer
+        }
+        if let string = value as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed.allSatisfy(\.isNumber),
+                  let integer = Int(trimmed), integer >= 0 else { return nil }
+            return integer
+        }
+        return nil
+    }
+}
+
+enum PlaylistTrackCompleteness {
+    /// A positive declared total or an authoritative ID sequence can establish
+    /// completeness, but known totals/IDs must agree with the resolved count.
+    static func isComplete(
+        declaredTrackCount: Int,
+        authoritativeTrackIDs: [TrackIDRef],
+        resolvedTrackCount: Int
+    ) -> Bool {
+        guard resolvedTrackCount > 0 else { return false }
+        if declaredTrackCount > 0 {
+            guard resolvedTrackCount == declaredTrackCount else { return false }
+            return authoritativeTrackIDs.isEmpty || authoritativeTrackIDs.count == declaredTrackCount
+        }
+        return !authoritativeTrackIDs.isEmpty && authoritativeTrackIDs.count == resolvedTrackCount
+    }
 }
 
 struct TrackIDRef: Codable, Hashable {

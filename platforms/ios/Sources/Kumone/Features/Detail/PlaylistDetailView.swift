@@ -9,6 +9,9 @@ final class PlaylistDetailViewModel: ObservableObject {
     @Published var isLoading = true
     @Published var errorMessage: String?
     @Published var filter = ""
+    @Published private(set) var hasCompleteTracks = false
+
+    private var generation = 0
 
     init(playlistID: Int) {
         self.playlistID = playlistID
@@ -25,17 +28,35 @@ final class PlaylistDetailViewModel: ObservableObject {
     }
 
     func load() async {
+        generation += 1
+        let requestGeneration = generation
         isLoading = tracks.isEmpty
         errorMessage = nil
+        defer {
+            if requestGeneration == generation { isLoading = false }
+        }
         do {
             let response = try await NeteaseAPI.playlistDetail(id: playlistID)
+            guard !Task.isCancelled, requestGeneration == generation else { return }
             let complete = try await NeteaseAPI.completePlaylistTracks(from: response)
+            guard !Task.isCancelled, requestGeneration == generation else { return }
+            guard response.playlist.trackCount <= 0
+                    || complete.tracks.count == response.playlist.trackCount else {
+                throw NeteaseAPIError.incompletePlaylist(
+                    expected: response.playlist.trackCount,
+                    received: complete.tracks.count
+                )
+            }
             detail = response.playlist
             tracks = complete.tracks
+            hasCompleteTracks = PlaylistTrackCompleteness.isComplete(
+                declaredTrackCount: response.playlist.trackCount,
+                authoritativeTrackIDs: response.playlist.trackIds,
+                resolvedTrackCount: complete.tracks.count
+            )
             merge(privileges: complete.privileges)
-            isLoading = false
         } catch {
-            isLoading = false
+            guard !Task.isCancelled, requestGeneration == generation else { return }
             if tracks.isEmpty { errorMessage = error.localizedDescription }
         }
     }
@@ -47,7 +68,9 @@ final class PlaylistDetailViewModel: ObservableObject {
     }
 
     func remove(_ track: Track) {
+        let oldCount = tracks.count
         tracks.removeAll { $0.id == track.id }
+        if tracks.count != oldCount { hasCompleteTracks = false }
     }
 }
 
@@ -59,7 +82,9 @@ struct PlaylistDetailView: View {
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @StateObject private var localPlaylists = LocalPlaylistStore.shared
     @State private var showFullDescription = false
+    @State private var showLoadedSnapshotConfirmation = false
 
     init(playlistID: Int, isLikedList: Bool = false) {
         self.playlistID = playlistID
@@ -93,15 +118,28 @@ struct PlaylistDetailView: View {
                             .padding(.top, 16)
                     }
 
-                    TrackListView(
-                        tracks: model.filteredTracks,
-                        privileges: model.privileges,
-                        source: .playlist(playlistID),
-                        context: model.detail.map { .playlist(id: playlistID, name: $0.name) },
-                        removableFromPlaylistID: isOwnPlaylist ? playlistID : nil,
-                        onRemoved: { model.remove($0) }
-                    )
-                    .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+                    if !isLikedList {
+                        localCollectionAction(detail)
+                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+                    }
+
+                    if model.tracks.isEmpty {
+                        EmptyStateView(icon: "music.note.list", title: "歌单暂无歌曲")
+                            .frame(minHeight: 240)
+                    } else if model.filteredTracks.isEmpty {
+                        EmptyStateView(icon: "magnifyingglass", title: "没有匹配的歌曲")
+                            .frame(minHeight: 180)
+                    } else {
+                        TrackListView(
+                            tracks: model.filteredTracks,
+                            privileges: model.privileges,
+                            source: .playlist(playlistID),
+                            context: model.detail.map { .playlist(id: playlistID, name: $0.name) },
+                            removableFromPlaylistID: isOwnPlaylist ? playlistID : nil,
+                            onRemoved: { model.remove($0) }
+                        )
+                        .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+                    }
 
                 } else if model.isLoading {
                     loadingHeader
@@ -210,6 +248,7 @@ struct PlaylistDetailView: View {
                     .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
                 }
                 .buttonStyle(.pressable)
+                .disabled(playable.isEmpty)
 
                 if isLikedList {
                     Button {
@@ -317,6 +356,7 @@ struct PlaylistDetailView: View {
                     .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
             }
             .buttonStyle(.pressable)
+            .disabled(playable.isEmpty)
 
             if isLikedList {
                 Button {
@@ -357,6 +397,68 @@ struct PlaylistDetailView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(.primary.opacity(0.05), in: Capsule())
+        }
+    }
+
+    @ViewBuilder
+    private func localCollectionAction(_ detail: PlaylistDetail) -> some View {
+        let existingID = localPlaylists.playlists.first(where: {
+            LocalPlaylistSyncPolicy.matchesProviderPlaylist($0, source: "netease", id: String(detail.id))
+        })?.id
+        if let existingID {
+            NavigationLink(value: Destination.localPlaylist(existingID)) {
+                Label("已在资料库", systemImage: "checkmark")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.bordered)
+        } else if model.hasCompleteTracks {
+            Button {
+                saveLocalPlaylist(detail, intent: .verifiedCompletePlaylist)
+            } label: {
+                Label("收藏到本地资料库", systemImage: "plus")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.bordered)
+            .disabled(model.tracks.isEmpty)
+        } else {
+            Button {
+                showLoadedSnapshotConfirmation = true
+            } label: {
+                Label("保存已加载歌曲", systemImage: "square.and.arrow.down")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.bordered)
+            .disabled(model.tracks.isEmpty)
+            .confirmationDialog(
+                "保存已加载歌曲？",
+                isPresented: $showLoadedSnapshotConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("保存已加载歌曲") {
+                    saveLocalPlaylist(detail, intent: .loadedTracksSnapshot)
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("网易云未提供可核验的完整歌曲 ID 序列或声明总数。保存内容仅包含当前已加载的 \(model.tracks.count) 首歌曲，可能不是完整歌单。")
+            }
+        }
+    }
+
+    private func saveLocalPlaylist(_ detail: PlaylistDetail, intent: CatalogPlaylistSaveIntent) {
+        do {
+            _ = try localPlaylists.saveCatalogPlaylist(
+                source: "netease",
+                playlistID: String(detail.id),
+                name: detail.name,
+                tracks: model.tracks,
+                coverURL: detail.coverImgUrl,
+                sourceName: "网易云",
+                intent: intent,
+                declaredTrackCount: intent == .verifiedCompletePlaylist && detail.trackCount > 0
+                    ? detail.trackCount : nil
+            )
+        } catch {
+            ToastCenter.shared.show(error.localizedDescription)
         }
     }
 
