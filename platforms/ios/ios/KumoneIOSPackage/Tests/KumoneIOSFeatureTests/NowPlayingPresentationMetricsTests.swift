@@ -36,11 +36,31 @@ final class NowPlayingPresentationMetricsTests: XCTestCase {
         }
     }
 
-    /// The hidden lyric deck keeps exactly the accessory row plus a reveal
-    /// band; it must stay smaller than the full deck so lyrics gain space.
-    func testHiddenLyricsDeckReservesAccessoryRowAndRevealBand() {
-        XCTAssertEqual(NowPlayingView.hiddenLyricsDeckHeight, 112)
-        XCTAssertLessThan(NowPlayingView.hiddenLyricsDeckHeight, 228)
+    /// Hidden lyric controls come back only from a tap in the lower band;
+    /// taps higher up stay available for seeking to a line.
+    func testLyricsRevealTapOnlyInLowerBandWhileHidden() {
+        let page: CGFloat = 800, band: CGFloat = 228
+        XCTAssertTrue(NowPlayingPresentationMetrics.isLyricsControlsRevealTap(
+            locationY: 700, pageHeight: page, revealRegionHeight: band, controlsVisible: false))
+        XCTAssertTrue(NowPlayingPresentationMetrics.isLyricsControlsRevealTap(
+            locationY: 572, pageHeight: page, revealRegionHeight: band, controlsVisible: false))
+        XCTAssertFalse(NowPlayingPresentationMetrics.isLyricsControlsRevealTap(
+            locationY: 400, pageHeight: page, revealRegionHeight: band, controlsVisible: false))
+        XCTAssertFalse(NowPlayingPresentationMetrics.isLyricsControlsRevealTap(
+            locationY: 700, pageHeight: page, revealRegionHeight: band, controlsVisible: true))
+    }
+
+    /// The cursor switches slightly before the timestamp so the line is in
+    /// place when it is sung, but never more than a fraction of a second.
+    func testLyricLeadTimeIsShortAndPositive() {
+        XCTAssertGreaterThan(PlayerService.lyricLeadTime, 0)
+        XCTAssertLessThanOrEqual(PlayerService.lyricLeadTime, 0.25)
+        let lyrics = ParsedLyrics(lines: [
+            LyricLine(id: 0, time: 1, text: "a"),
+            LyricLine(id: 1, time: 3, text: "b"),
+        ])
+        XCTAssertEqual(lyrics.activeIndex(at: 2.9 + PlayerService.lyricLeadTime), 1)
+        XCTAssertEqual(lyrics.activeIndex(at: 2.5 + PlayerService.lyricLeadTime), 0)
     }
 
     /// The timeline badge must stay short; full wording belongs to the

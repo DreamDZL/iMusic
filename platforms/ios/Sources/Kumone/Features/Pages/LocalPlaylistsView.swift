@@ -105,6 +105,8 @@ struct LocalPlaylistsView: View {
             }
         }
         .listStyle(.plain)
+        // Same side margin as every other page instead of the bare list inset.
+        .contentMargins(.horizontal, Theme.Layout.contentInset - 16, for: .scrollContent)
         .tint(Theme.accent)
         .navigationTitle("资料库")
 #if os(iOS)

@@ -23,6 +23,31 @@ final class KumoneIOSUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// The deck slides in when revealed; wait for the row to settle instead
+    /// of sampling the first animation frame.
+    @MainActor
+    private func assertSettles(
+        _ element: XCUIElement,
+        atMidY expected: CGFloat,
+        timeout: TimeInterval = 3,
+        message: String
+    ) {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                element.exists && abs(element.frame.midY - expected) <= 1
+            },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed, message)
+    }
+
+    /// Let a lyric flick finish decelerating so the next tap is a tap, not
+    /// a scroll-stop the scroll view swallows.
+    @MainActor
+    private func waitForScrollToSettle() {
+        _ = XCTWaiter.wait(for: [XCTestExpectation(description: "scroll settles")], timeout: 1.5)
+    }
+
     @MainActor
     func testMainTabsNavigateAndCaptureScreens() throws {
         let app = XCUIApplication()
@@ -53,7 +78,10 @@ final class KumoneIOSUITests: XCTestCase {
                 "Tab \(destination.tab) did not show its root navigation title"
             )
             if destination.tab == "搜索" {
-                XCTAssertTrue(app.staticTexts["快速浏览"].waitForExistence(timeout: 5))
+                XCTAssertTrue(app.staticTexts["热门搜索"].waitForExistence(timeout: 5),
+                              "Search landing shows trending searches")
+                XCTAssertFalse(app.staticTexts["快速浏览"].exists,
+                               "Search landing no longer shows category tiles")
             }
             if destination.tab == "资料库" {
                 XCTAssertTrue(
@@ -200,35 +228,32 @@ final class KumoneIOSUITests: XCTestCase {
             NSPredicate(format: "identifier IN %@", ["lyricsTransportControls", "lyricsVolumeControl"])
         )
         let songTransportControls = app.descendants(matching: .any)["nowPlayingTransportControls"]
-        // Wait for the initial auto-hide before tapping the reveal footprint.
-        // Otherwise a fast simulator could tap the still-visible play button.
+        // Full-screen lyrics: after the initial auto-hide the whole deck,
+        // accessory row included, leaves the screen like the system player.
         XCTAssertTrue(transportControls.waitForNonExistence(timeout: 20),
                       "Lyrics transport controls must initially auto-hide")
         XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 20),
                       "Lyrics volume control must initially auto-hide")
-        XCTAssertTrue(accessoryControls.exists, "Auto-hide must preserve the accessory row")
-        XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
-                       "The accessory row must remain fixed after initial auto-hide")
-        bottomControls.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
-        // The lyrics page animates its control reveal after the navigation
-        // transition. Assert eventual visibility rather than sampling the
-        // first frame after the tap, which is flaky on slower CI simulators.
+        XCTAssertTrue(accessoryControls.waitForNonExistence(timeout: 5),
+                      "Full-screen lyrics must hide the bottom accessory row too")
+        // Tapping the lower part of the lyrics page brings the deck back.
+        lyricsPage.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
         assertEventually(
             initialVisibleControls,
             count: 2,
             timeout: 5,
             message: "Lyrics transport and volume controls must be visible together after reveal"
         )
-        XCTAssertTrue(accessoryControls.exists, "The accessory row must stay visible on both player pages")
-        XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
-                       "The accessory row must not jump when switching to lyrics")
+        XCTAssertTrue(accessoryControls.waitForExistence(timeout: 5),
+                      "Revealing controls must bring the accessory row back")
+        assertSettles(accessoryControls, atMidY: songAccessoryMidY,
+                      message: "The accessory row must reappear at the song page's position")
         XCTAssertTrue(transportControls.waitForNonExistence(timeout: 20),
                       "Lyrics transport controls must be removed from the accessibility tree when hidden")
         XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 20),
                       "Lyrics volume control must be removed from the accessibility tree when hidden")
-        XCTAssertTrue(accessoryControls.exists, "Hiding playback controls must not hide the accessory row")
-        XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
-                       "The accessory row must remain at the same height after controls hide")
+        XCTAssertTrue(accessoryControls.waitForNonExistence(timeout: 5),
+                      "The accessory row must hide again with the controls")
 
         lyricsScroll.swipeRight()
         XCTAssertTrue(lyricsPage.exists, "Horizontal swipes must stay on lyrics")
@@ -237,15 +262,9 @@ final class KumoneIOSUITests: XCTestCase {
 
         lyricsScroll.swipeUp()
         XCTAssertTrue(lyricsPage.exists, "Vertical lyric scrolling must not navigate away from lyrics")
-        XCTAssertFalse(transportControls.exists, "Transport controls must remain hidden until the playback deck is tapped")
-        let returnToPlayback = app.buttons["resumeCurrentLyrics"]
-        XCTAssertTrue(returnToPlayback.waitForExistence(timeout: 5), "Browsing lyrics should offer a clear return-to-current-line action")
-        XCTAssertLessThanOrEqual(returnToPlayback.frame.maxY, bottomControls.frame.minY,
-                                 "The resume action must stay above the hidden playback reveal footprint")
-        XCTAssertTrue(returnToPlayback.isHittable)
-        returnToPlayback.tap()
-        XCTAssertTrue(returnToPlayback.waitForNonExistence(timeout: 5), "Returning to the current line should leave lyric browse mode")
-        bottomControls.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
+        XCTAssertFalse(transportControls.exists, "Browsing lyrics must not reveal the playback deck")
+        waitForScrollToSettle()
+        lyricsPage.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
         let revealedPlaybackState = app.descendants(matching: .any).matching(
             NSPredicate(
                 format: "identifier IN %@ OR (elementType == %@ AND label == %@) OR (elementType == %@ AND label == %@)",
@@ -260,9 +279,7 @@ final class KumoneIOSUITests: XCTestCase {
             timeout: 2,
             message: "Revealed playback state must simultaneously contain transport, volume, 0:14, and the current quality button"
         )
-        XCTAssertTrue(app.buttons["showSynchronizedLyrics"].exists, "Lyrics need the same bottom toolbar")
-        // Time and quality were checked in the same snapshot above; querying
-        // them again serially could run past even the extended test window.
+        XCTAssertTrue(app.buttons["showSynchronizedLyrics"].exists, "Revealed lyrics need the same bottom toolbar")
         app.buttons["showSynchronizedLyrics"].tap()
         XCTAssertTrue(songTransportControls.waitForExistence(timeout: 5))
         XCTAssertTrue(songPage.exists)
@@ -331,13 +348,18 @@ final class KumoneIOSUITests: XCTestCase {
         let volumeControl = app.descendants(matching: .any)["lyricsVolumeControl"]
         // The real three-second window can finish during XCTest navigation
         // waits. The long interaction test separately verifies visible controls;
-        // this default-policy smoke verifies eventual hiding and a fixed toolbar.
+        // this default-policy smoke verifies eventual full-screen hiding and
+        // that a tap in the lower area restores the row at its position.
         XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7),
                       "Default lyrics transport controls must eventually auto-hide")
         XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 7),
                       "Default lyrics volume control must eventually auto-hide")
-        XCTAssertTrue(accessoryControls.exists, "Auto-hide must preserve the accessory row")
-        XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
-                       "The accessory row must remain fixed after auto-hide")
+        XCTAssertTrue(accessoryControls.waitForNonExistence(timeout: 5),
+                      "Full-screen lyrics must hide the accessory row")
+        lyricsPage.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
+        XCTAssertTrue(accessoryControls.waitForExistence(timeout: 5),
+                      "A tap in the lower area must bring the controls back")
+        assertSettles(accessoryControls, atMidY: songAccessoryMidY,
+                      message: "The accessory row must reappear at its fixed position")
     }
 }

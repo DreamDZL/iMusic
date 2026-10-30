@@ -276,6 +276,8 @@ final class PlayerService: ObservableObject {
     let clock = PlaybackClock()
     let lyricsCursor = LyricsCursor()
     let sleepTimer = SleepTimer()
+    /// Uptime of the last periodic lock-screen elapsed re-anchor.
+    private var lastNowPlayingElapsedSync: TimeInterval = 0
     /// Passthrough to the clock so existing `progress` reads/writes keep working.
     var progress: TimeInterval {
         get { clock.progress }
@@ -336,7 +338,15 @@ final class PlayerService: ObservableObject {
     @Published private(set) var recentContexts: [PlayContext] = []
     @Published private(set) var lyrics: ParsedLyrics?
     @Published var activePanel: RightPanel?
-    @Published var showNowPlaying = false
+    @Published var showNowPlaying = false {
+        didSet {
+            // The 10 Hz lyric sampler only serves the open player's lyrics;
+            // elsewhere the 5 Hz observer keeps the lock-screen lyric current.
+            guard showNowPlaying != oldValue, runtimeStarted else { return }
+            installTimeObserver()
+            installLyricCursorObserver()
+        }
+    }
 
     /// The list the player is walking through (shuffled or ordered).
     var activeQueue: [Track] { shuffleEnabled ? shuffledQueue : queue }
@@ -552,6 +562,9 @@ final class PlayerService: ObservableObject {
         isSceneActive ? 0.2 : 1.0
     }
 
+    /// How far ahead of the audio clock the active lyric line switches.
+    nonisolated static let lyricLeadTime: TimeInterval = 0.15
+
     nonisolated static func lyricCursorObserverInterval(
         lowPowerMode: Bool,
         thermalState: ProcessInfo.ThermalState
@@ -603,7 +616,9 @@ final class PlayerService: ObservableObject {
 
         timeObserver = engine.addPeriodicTimeObserver(
             forInterval: CMTime(
-                seconds: Self.playbackTimeObserverInterval(isSceneActive: isSceneActive),
+                // Only the open player shows a live position; with it closed
+                // (mini player, tabs) the background cadence is enough.
+                seconds: Self.playbackTimeObserverInterval(isSceneActive: isSceneActive && showNowPlaying),
                 preferredTimescale: 600
             ), queue: .main
         ) { [weak self] _ in
@@ -613,10 +628,10 @@ final class PlayerService: ObservableObject {
                 let seconds = item.currentTime().seconds
                 guard seconds.isFinite else { return }
 
-                // Background audio uses the slower shared observer. In the
-                // foreground, a separate lyric-only observer samples at up to
-                // 10 Hz without forcing scrubber or metadata publications.
-                if !self.isSceneActive {
+                // The 10 Hz lyric-only observer runs only while the player is
+                // open in the foreground; otherwise this observer keeps the
+                // cursor (and the lock-screen lyric) current at its cadence.
+                if self.lyricCursorObserver == nil {
                     self.updateLyricsCursor(at: seconds)
                 }
 
@@ -626,10 +641,19 @@ final class PlayerService: ObservableObject {
                 // pixel. Half a second is still smoother than the eye needs.
                 if abs(seconds - self.progress) > 0.45 {
                     self.progress = seconds
-                    NowPlayingManager.shared.updateElapsed(
-                        seconds,
-                        rate: self.isPlaying ? Double(self.playbackRate) : 0
-                    )
+                    // Energy: the system extrapolates lock-screen time from
+                    // elapsed + rate, and play/pause/seek/track changes write
+                    // it explicitly. A 10s re-anchor only corrects drift from
+                    // buffering stalls, instead of a full Now Playing write
+                    // (artwork included) every ~0.6s.
+                    let now = ProcessInfo.processInfo.systemUptime
+                    if now - self.lastNowPlayingElapsedSync >= 10 {
+                        self.lastNowPlayingElapsedSync = now
+                        NowPlayingManager.shared.updateElapsed(
+                            seconds,
+                            rate: self.isPlaying ? Double(self.playbackRate) : 0
+                        )
+                    }
                 }
             }
         }
@@ -640,7 +664,7 @@ final class PlayerService: ObservableObject {
             engine.removeTimeObserver(lyricCursorObserver)
             self.lyricCursorObserver = nil
         }
-        guard runtimeStarted, isSceneActive,
+        guard runtimeStarted, isSceneActive, showNowPlaying,
               lyrics?.lines.contains(where: { $0.time.isFinite }) == true else { return }
 
         let processInfo = ProcessInfo.processInfo
@@ -914,7 +938,10 @@ final class PlayerService: ObservableObject {
     /// Recomputes the current lyric line, publishing only on a change.
     /// The lead makes a line light up just before it is sung.
     private func updateLyricsCursor(at seconds: TimeInterval) {
-        let index = lyrics?.activeIndex(at: seconds)
+        // Line-level sync: the cursor runs a short lead ahead of the clock so
+        // the line is already in place when it is sung, offsetting the 10 Hz
+        // sampling gap and the scroll animation.
+        let index = lyrics?.activeIndex(at: seconds + Self.lyricLeadTime)
         if index != lyricsCursor.activeIndex {
             lyricsCursor.activeIndex = index
         }
@@ -923,7 +950,11 @@ final class PlayerService: ObservableObject {
         #if os(iOS)
         if snapshotLyric != lastPublishedSystemLyric {
             lastPublishedSystemLyric = snapshotLyric
-            NowPlayingManager.shared.updateCurrentLyric(snapshotLyric)
+            NowPlayingManager.shared.updateCurrentLyric(
+                snapshotLyric,
+                elapsed: seconds,
+                rate: isPlaying ? Double(playbackRate) : 0
+            )
         }
         #endif
     }

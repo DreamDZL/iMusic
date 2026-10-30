@@ -78,6 +78,37 @@ enum Destination: Hashable {
     case likedSongs
 }
 
+/// Lets full-screen surfaces (the player) ask the tab interface to show a
+/// destination. The main window observes `pending`, closes the player and
+/// pushes the destination onto the selected tab's stack.
+@MainActor
+final class AppRouter: ObservableObject {
+    static let shared = AppRouter()
+
+    struct Request: Equatable {
+        let id = UUID()
+        let destination: Destination
+    }
+
+    @Published private(set) var pending: Request?
+
+    func open(_ destination: Destination) {
+        pending = Request(destination: destination)
+    }
+
+    func consume(_ request: Request) {
+        if pending == request { pending = nil }
+    }
+
+    /// Artist page from the player: aggregate-search artist results, the
+    /// same page search opens for an artist without a NetEase ID.
+    func openArtist(named name: String, avatarURL: String? = nil) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        open(.lxArtist(source: .aggregate, name: trimmed, avatarURL: avatarURL))
+    }
+}
+
 /// Registers all shared navigation destinations on a stack.
 struct DestinationsModifier: ViewModifier {
     func body(content: Content) -> some View {

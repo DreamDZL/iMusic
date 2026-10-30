@@ -44,13 +44,12 @@ enum Theme {
     }
 
     enum Layout {
-        /// Leading/trailing margin for page content. It matches the system
-        /// layout margin that positions large navigation titles and search
-        /// fields: 16pt on standard iPhones, 20pt on Plus/Max widths and iPad.
-        /// A fixed 24pt left every section header misaligned with its title.
+        /// Leading/trailing margin for page content: 20pt on standard
+        /// iPhones, 24pt on Plus/Max widths and iPad. Device review found the
+        /// bare system margin (16pt) made shelves and lists read too wide.
         static var contentInset: CGFloat {
             #if os(iOS)
-            return DeviceMetrics.portraitWidth >= 414 ? 20 : 16
+            return DeviceMetrics.portraitWidth >= 414 ? 24 : 20
             #else
             return 24
             #endif

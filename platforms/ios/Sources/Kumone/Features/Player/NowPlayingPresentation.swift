@@ -32,6 +32,20 @@ enum NowPlayingPresentationMetrics {
     static let controlsTransitionOffset: CGFloat = 30
     static let controlsTransitionScale: CGFloat = 0.97
     static let lyricsControlsAutoHideDelay = Duration.seconds(3)
+    /// After the reader stops scrolling, lyrics glide back to the sung line.
+    static let lyricsBrowseResumeDelay = Duration.milliseconds(2500)
+
+    /// While lyric controls are hidden, a tap in the lower band where the
+    /// playback deck appears reveals the controls instead of seeking.
+    static func isLyricsControlsRevealTap(
+        locationY: CGFloat,
+        pageHeight: CGFloat,
+        revealRegionHeight: CGFloat,
+        controlsVisible: Bool
+    ) -> Bool {
+        guard !controlsVisible, pageHeight > 0, revealRegionHeight > 0 else { return false }
+        return locationY >= pageHeight - revealRegionHeight
+    }
 
     /// A strong ease-out lets the lyrics reclaim space immediately, then
     /// settles gently instead of moving at a constant speed.

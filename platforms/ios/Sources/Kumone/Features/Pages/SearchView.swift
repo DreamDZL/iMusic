@@ -405,17 +405,6 @@ struct SearchView: View {
     @State private var searchText: String = ""
     @State private var searchDebounceTask: Task<Void, Never>?
 
-    // Deep, evenly weighted tones so white titles stay legible in both
-    // appearances; gradients and decorative glyphs were removed.
-    private let browseCategories: [(title: String, color: Color)] = [
-        ("华语", Color(red: 0.80, green: 0.18, blue: 0.27)),
-        ("流行", Color(red: 0.84, green: 0.36, blue: 0.16)),
-        ("摇滚", Color(red: 0.45, green: 0.22, blue: 0.52)),
-        ("电子", Color(red: 0.18, green: 0.33, blue: 0.68)),
-        ("古典", Color(red: 0.10, green: 0.44, blue: 0.48)),
-        ("影视原声", Color(red: 0.42, green: 0.32, blue: 0.22)),
-    ]
-
     init(query: String) {
         _model = StateObject(wrappedValue: SearchViewModel(query: query))
         _searchText = State(initialValue: query)
@@ -585,9 +574,8 @@ struct SearchView: View {
         .padding(.horizontal, Theme.Layout.contentInset)
     }
 
-    /// Search landing page in the system order: recent searches as a plain
-    /// list, then category tiles, then trending searches. Section titles use
-    /// one bold style with no decorative icons.
+    /// Search landing page: recent searches as a plain list, then trending
+    /// searches. No category tiles; section titles use one bold style.
     private var emptySearchPrompt: some View {
         VStack(alignment: .leading, spacing: 28) {
             if !history.entries.isEmpty {
@@ -635,47 +623,25 @@ struct SearchView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 12) {
-                Text("快速浏览")
-                    .font(.title3.weight(.bold))
-                LazyVGrid(
-                    columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
-                    spacing: 12
-                ) {
-                    ForEach(browseCategories, id: \.title) { category in
-                        Button {
-                            performSearch(category.title)
-                        } label: {
-                            ZStack(alignment: .bottomLeading) {
-                                category.color
-                                Text(category.title)
-                                    .font(.headline.weight(.bold))
-                                    .foregroundStyle(.white)
-                                    .multilineTextAlignment(.leading)
-                                    .padding(12)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .aspectRatio(1.6, contentMode: .fit)
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
-                        }
-                        .buttonStyle(.interactiveCard)
-                        .accessibilityIdentifier("searchBrowse-\(category.title)")
-                    }
+            // Trending is always titled; while it loads (or a platform has
+            // none) a quiet line says so instead of leaving the page empty.
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("热门搜索")
+                        .font(.title3.weight(.bold))
+                    Spacer()
+                    Text(model.platform.displayName)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
-            }
+                .padding(.bottom, 4)
 
-            if !model.hotKeywords.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("热门搜索")
-                            .font(.title3.weight(.bold))
-                        Spacer()
-                        Text(model.platform.displayName)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.bottom, 4)
-
+                if model.hotKeywords.isEmpty {
+                    Text("暂无热门搜索，输入关键词开始搜索")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .frame(minHeight: 44, alignment: .leading)
+                } else {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(model.hotKeywords.enumerated()), id: \.offset) { index, keyword in
                             Button {

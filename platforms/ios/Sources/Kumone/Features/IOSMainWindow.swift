@@ -28,6 +28,7 @@ public struct IOSMainWindow: View {
     @State private var radioPath = NavigationPath()
     @State private var searchPath = NavigationPath()
     @State private var libraryPath = NavigationPath()
+    @StateObject private var router = AppRouter.shared
 
     public init() {}
 
@@ -83,6 +84,14 @@ public struct IOSMainWindow: View {
                     await MusicSessionRefreshCoordinator.shared.refreshIfNeeded()
                     await LXSyncService.shared.reconnectIfConfigured()
                 }
+            }
+            .onChange(of: router.pending) { _, request in
+                guard let request else { return }
+                router.consume(request)
+                // Push under the player first, then close it, so the page is
+                // already in place when the cover slides away.
+                appendToSelectedTab(request.destination)
+                player.showNowPlaying = false
             }
             .onOpenURL { url in
                 guard ["imusic", "moumusic"].contains(url.scheme?.lowercased() ?? "") else { return }
@@ -307,6 +316,16 @@ public struct IOSMainWindow: View {
             tabStack(.search) { SearchView(query: "") }
         case .library:
             tabStack(.library) { LocalPlaylistsView() }
+        }
+    }
+
+    private func appendToSelectedTab(_ destination: Destination) {
+        switch selectedTab {
+        case .home: homePath.append(destination)
+        case .new: newPath.append(destination)
+        case .radio: radioPath.append(destination)
+        case .search: searchPath.append(destination)
+        case .library: libraryPath.append(destination)
         }
     }
 

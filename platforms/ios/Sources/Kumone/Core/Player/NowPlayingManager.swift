@@ -107,11 +107,20 @@ final class NowPlayingManager {
     /// NetEase displays the current lyric in the system Now Playing artist
     /// row. Mirror that behavior on iOS while retaining the real artist as a
     /// fallback whenever lyrics are unavailable or the track changes.
-    func updateCurrentLyric(_ lyric: String?) {
+    /// `elapsed`/`rate` refresh the timeline in the same write: the system
+    /// extrapolates elapsed time from the last value, so republishing a stale
+    /// one would make the lock-screen progress jump back.
+    func updateCurrentLyric(_ lyric: String?, elapsed: TimeInterval? = nil, rate: Double? = nil) {
         let value = lyric?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard value != currentLyric else { return }
         currentLyric = value
         info[MPMediaItemPropertyArtist] = value.isEmpty ? baseArtist : value
+        if let elapsed, elapsed.isFinite {
+            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
+        }
+        if let rate {
+            info[MPNowPlayingInfoPropertyPlaybackRate] = rate
+        }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
     #endif
@@ -134,6 +143,9 @@ final class NowPlayingManager {
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
         info[MPNowPlayingInfoPropertyPlaybackRate] = rate
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        MPNowPlayingInfoCenter.default().playbackState = rate > 0 ? .playing : .paused
+        let state: MPNowPlayingPlaybackState = rate > 0 ? .playing : .paused
+        if MPNowPlayingInfoCenter.default().playbackState != state {
+            MPNowPlayingInfoCenter.default().playbackState = state
+        }
     }
 }

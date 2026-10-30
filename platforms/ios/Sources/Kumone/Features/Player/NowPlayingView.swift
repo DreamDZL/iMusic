@@ -20,10 +20,9 @@ struct NowPlayingView: View {
     @State private var artworkImage: PlatformImage?
     @State private var artworkPalette = ArtworkPaletteTransition()
     @State private var activeIndex: Int?
-    @State private var lyricLineFrames: [Int: CGRect] = [:]
-    /// Lyric scroll viewport and resume button, in the "lyricsPage" space.
+    @State private var lyricLineFrames = LyricLineFrameStore()
+    /// Lyric scroll viewport, in the "lyricsPage" coordinate space.
     @State private var lyricViewportFrame: CGRect = .zero
-    @State private var resumeButtonFrame: CGRect = .zero
     @State private var isUserScrolling = false
     @State private var isLyricsDragActive = false
     @State private var resumeTask: Task<Void, Never>?
@@ -166,7 +165,23 @@ struct NowPlayingView: View {
         activeIndex = index
         guard let index else { return }
         DispatchQueue.main.async {
-            proxy.scrollTo(index, anchor: UnitPoint(x: 0.5, y: 0.18))
+            proxy.scrollTo(index, anchor: Self.lyricReadingAnchor)
+        }
+    }
+
+    /// The sung line rests about a fifth of the way down the lyric viewport.
+    private static let lyricReadingAnchor = UnitPoint(x: 0.5, y: 0.18)
+
+    /// Move the sung line into reading position. The short spring settles in
+    /// well under a line's length, so the view never trails the audio; the
+    /// previous 0.8s response could still be moving when the next line began.
+    private func scrollToLyric(_ index: Int, proxy: ScrollViewProxy) {
+        if reduceMotion {
+            proxy.scrollTo(index, anchor: Self.lyricReadingAnchor)
+        } else {
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.9)) {
+                proxy.scrollTo(index, anchor: Self.lyricReadingAnchor)
+            }
         }
     }
 
@@ -192,11 +207,18 @@ struct NowPlayingView: View {
     }
 
     private var artworkBackdrop: some View {
+        // Energy: the drifting blobs move ~2pt/s, so they need only 4 fps; the
+        // full rate is kept for the 0.8s palette cross-fade. Paused playback
+        // freezes the backdrop entirely (it previously kept redrawing two
+        // full-screen blurs at 24 fps even when nothing played).
         TimelineView(.animation(
-            minimumInterval: renderingBudget.minimumAnimationInterval,
+            minimumInterval: artworkPalette.isTransitioning
+                ? renderingBudget.minimumAnimationInterval
+                : max(renderingBudget.minimumAnimationInterval, 0.25),
             paused: reduceMotion
                 || !renderingBudget.isSceneActive
                 || !renderingBudget.allowsContinuousEffects
+                || (!player.isPlaying && !artworkPalette.isTransitioning)
         )) { _ in
             let uptime = ProcessInfo.processInfo.systemUptime
             let palette = artworkPalette.displayedColors(at: uptime)
@@ -377,14 +399,12 @@ struct NowPlayingView: View {
     @ViewBuilder
     private func appleMusicCompactLayout(size: CGSize) -> some View {
         let isShortScreen = size.height < 680
-        // Keep the full playback deck at one fixed screen position on both
-        // pages. While lyric controls are hidden only a slim reveal band and
-        // the accessory row stay reserved, so lyric lines are never laid out
-        // beneath a transparent tap target.
+        // The deck keeps one fixed screen position whenever it is shown. On
+        // the lyrics page it hides completely (accessory row included) so the
+        // lyrics run full screen, as in the system player; tapping the lower
+        // part of the page brings it back.
         let controlsHeight: CGFloat = 228
-        let reservedDeckHeight = !showLyricsOnMobile || lyricsControlsVisible
-            ? controlsHeight
-            : Self.hiddenLyricsDeckHeight
+        let deckVisible = !showLyricsOnMobile || lyricsControlsVisible
         // Artwork takes the space left after the title row and deck, with the
         // same side margins as the controls (Apple's player keeps them equal).
         // Non-artwork content on the song page: top inset, spacers, the gap
@@ -400,7 +420,7 @@ struct NowPlayingView: View {
             VStack(spacing: 0) {
                 Group {
                     if showLyricsOnMobile {
-                        appleMusicLyricsPage()
+                        appleMusicLyricsPage(revealRegionHeight: controlsHeight)
                             .accessibilityElement(children: .contain)
                             .accessibilityIdentifier("appleMusicLyricsPage")
                     } else {
@@ -429,83 +449,60 @@ struct NowPlayingView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                // Reserve exactly the deck's current footprint. Hidden lyric
-                // controls shrink it to the reveal band plus accessory row,
-                // which stays at the same screen position in both states.
-                Color.clear
-                    .frame(height: reservedDeckHeight)
+                // Reserve the deck's footprint only while it is shown, so
+                // hidden controls give the whole page back to the lyrics.
+                if deckVisible {
+                    Color.clear
+                        .frame(height: controlsHeight)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            appleMusicPlaybackControls(height: controlsHeight)
+            if deckVisible {
+                appleMusicPlaybackControls(height: controlsHeight)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .animation(.easeInOut(duration: 0.22), value: showLyricsOnMobile)
     }
 
-    // Deck geometry, shared by both visibility states so the accessory
-    // row's bottom edge (and midY) is identical whether controls show.
     private static let deckAccessoryHeight: CGFloat = 44
     private static let deckVerticalPadding: CGFloat = 8
     private static let deckRowSpacing: CGFloat = 4
-    private static let deckRevealBandHeight: CGFloat = 48
 
-    /// Accessory row plus a slim reveal band. Bottom alignment keeps the
-    /// accessory row at the same screen position as the full deck.
-    static let hiddenLyricsDeckHeight: CGFloat =
-        deckRevealBandHeight + deckRowSpacing + deckAccessoryHeight + deckVerticalPadding * 2
-
-    private func appleMusicPlaybackControls(height fullHeight: CGFloat) -> some View {
-        let isVisible = !showLyricsOnMobile || lyricsControlsVisible
+    private func appleMusicPlaybackControls(height: CGFloat) -> some View {
         let playbackControlsHeight: CGFloat = 164
-        let revealBandHeight = Self.deckRevealBandHeight
-        let height = isVisible ? fullHeight : Self.hiddenLyricsDeckHeight
 
         return ZStack(alignment: .bottom) {
-            if !isVisible {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { revealLyricsControls() }
-                    .accessibilityHidden(true)
-            }
-
             VStack(spacing: Self.deckRowSpacing) {
-                Group {
-                    if isVisible {
-                        VStack(spacing: 4) {
-                            NowPlayingScrubber(
-                                onShowQuality: { showQualityPicker = true },
-                                showsRemainingTime: true,
-                                onSeek: {
-                                    guard showLyricsOnMobile else { return }
-                                    isUserScrolling = false
-                                    resumeTask?.cancel()
-                                    resumeTask = nil
-                                }
-                            )
-                            .frame(height: 64)
-
-                            primaryTransportControls
-                                .frame(height: 64)
-                                .accessibilityElement(children: .contain)
-                                .accessibilityIdentifier(
-                                    showLyricsOnMobile ? "lyricsTransportControls" : "nowPlayingTransportControls"
-                                )
-
-                            CompactVolumeControl()
-                                .frame(height: 28)
-                                .accessibilityElement(children: .contain)
-                                .accessibilityIdentifier(
-                                    showLyricsOnMobile ? "lyricsVolumeControl" : "nowPlayingVolumeControl"
-                                )
+                VStack(spacing: 4) {
+                    NowPlayingScrubber(
+                        onShowQuality: { showQualityPicker = true },
+                        showsRemainingTime: true,
+                        onSeek: {
+                            guard showLyricsOnMobile else { return }
+                            isUserScrolling = false
+                            resumeTask?.cancel()
+                            resumeTask = nil
                         }
-                        .frame(height: playbackControlsHeight)
-                    } else {
-                        Color.clear
-                            .frame(height: revealBandHeight)
-                            .accessibilityHidden(true)
-                    }
+                    )
+                    .frame(height: 64)
+
+                    primaryTransportControls
+                        .frame(height: 64)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier(
+                            showLyricsOnMobile ? "lyricsTransportControls" : "nowPlayingTransportControls"
+                        )
+
+                    CompactVolumeControl()
+                        .frame(height: 28)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier(
+                            showLyricsOnMobile ? "lyricsVolumeControl" : "nowPlayingVolumeControl"
+                        )
                 }
-                .allowsHitTesting(isVisible)
+                .frame(height: playbackControlsHeight)
                 .simultaneousGesture(TapGesture().onEnded {
                     if showLyricsOnMobile { scheduleLyricsControlsAutoHide() }
                 })
@@ -541,7 +538,10 @@ struct NowPlayingView: View {
         .accessibilityIdentifier("nowPlayingBottomControls")
     }
 
-    private func appleMusicLyricsPage() -> some View {
+    /// - Parameter revealRegionHeight: height of the bottom band that brings
+    ///   hidden controls back (the deck's footprint). Nil where the controls
+    ///   never auto-hide (landscape keeps its accessory row).
+    private func appleMusicLyricsPage(revealRegionHeight: CGFloat? = nil) -> some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
@@ -565,14 +565,22 @@ struct NowPlayingView: View {
             .accessibilityAction(named: Text("显示播放控制")) { revealLyricsControls() }
             .simultaneousGesture(SpatialTapGesture(coordinateSpace: .named("lyricsPage"))
                 .onEnded { value in
-                    // Any tapped line seeks to its timestamp, whether or not
-                    // the reader was browsing. The reveal band is no longer
-                    // laid out over lyric lines, so the gestures never compete.
-                    // Only taps inside the lyric viewport seek; the header and
-                    // the resume button overlay must never select a line.
+                    // While controls are hidden, a tap in the lower band (where
+                    // the deck appears) reveals them instead of seeking.
+                    if let revealRegionHeight,
+                       NowPlayingPresentationMetrics.isLyricsControlsRevealTap(
+                           locationY: value.location.y,
+                           pageHeight: geometry.size.height,
+                           revealRegionHeight: revealRegionHeight,
+                           controlsVisible: lyricsControlsVisible
+                       ) {
+                        revealLyricsControls()
+                        return
+                    }
+                    // Otherwise a tapped line seeks to its timestamp. Only taps
+                    // inside the lyric viewport count; the header never seeks.
                     guard lyricViewportFrame.contains(value.location),
-                          !resumeButtonFrame.contains(value.location),
-                          let id = lyricLineFrames.first(where: { $0.value.contains(value.location) })?.key,
+                          let id = lyricLineFrames.frames.first(where: { $0.value.contains(value.location) })?.key,
                           let line = player.lyrics?.lines.first(where: { $0.id == id }),
                           line.time.isFinite else { return }
                     resumeTask?.cancel()
@@ -601,6 +609,11 @@ struct NowPlayingView: View {
                 )
             )
             guard !Task.isCancelled, showLyricsOnMobile, !isLyricsDragActive else { return }
+            #if os(iOS)
+            // VoiceOver users cannot find a hidden deck by tapping blind; keep
+            // it visible for them.
+            guard !UIAccessibility.isVoiceOverRunning else { return }
+            #endif
             withAnimation(.easeInOut(duration: 0.28)) {
                 lyricsControlsVisible = false
             }
@@ -1129,10 +1142,7 @@ struct NowPlayingView: View {
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .accessibilityAddTraits(.isHeader)
-                Text(player.currentTrack?.artistNames ?? "")
-                    .font(compact ? Font.subheadline : Font.title3)
-                    .foregroundStyle(.white.opacity(0.62))
-                    .lineLimit(1)
+                artistLink(compact: compact)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1215,6 +1225,43 @@ struct NowPlayingView: View {
             }
         }
         .frame(maxWidth: 460)
+    }
+
+    /// Artist name opens that artist's aggregate-search page. With several
+    /// credited artists a menu lets the listener pick one, as in the system
+    /// player.
+    @ViewBuilder
+    private func artistLink(compact: Bool) -> some View {
+        let artists = (player.currentTrack?.artists ?? [])
+            .filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let label = Text(player.currentTrack?.artistNames ?? "")
+            .font(compact ? Font.subheadline : Font.title3)
+            .foregroundStyle(.white.opacity(0.62))
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        if artists.count > 1 {
+            Menu {
+                // LX artists often share id 0, so identify menu rows by index.
+                ForEach(Array(artists.enumerated()), id: \.offset) { _, artist in
+                    Button(artist.name) {
+                        AppRouter.shared.openArtist(named: artist.name, avatarURL: artist.picUrl)
+                    }
+                }
+            } label: { label }
+            .buttonStyle(.plain)
+            .accessibilityLabel("歌手：\(player.currentTrack?.artistNames ?? "")")
+            .accessibilityHint("选择歌手并打开歌手页")
+        } else if let artist = artists.first {
+            Button {
+                AppRouter.shared.openArtist(named: artist.name, avatarURL: artist.picUrl)
+            } label: { label }
+            .buttonStyle(.plain)
+            .accessibilityLabel("歌手：\(artist.name)")
+            .accessibilityHint("打开歌手页")
+        } else {
+            label
+        }
     }
 
     /// Neutral translucent fill. Glass over a saturated artwork palette tints
@@ -1370,45 +1417,11 @@ struct NowPlayingView: View {
                             startPoint: .top, endPoint: .bottom
                         )
                     )
-                    // Overlay after the mask: the resume action must stay fully
-                    // opaque instead of sitting in the bottom fade.
-                    .overlay(alignment: .bottomTrailing) {
-                        if isUserScrolling, let currentIndex = lyricsCursor.activeIndex {
-                            Button {
-                                resumeTask?.cancel()
-                                resumeTask = nil
-                                isUserScrolling = false
-                                withAnimation(AppAnimation.standard) {
-                                    proxy.scrollTo(currentIndex, anchor: UnitPoint(x: 0.5, y: 0.18))
-                                }
-                            } label: {
-                                Label("回到正在播放", systemImage: "scope")
-                                    .font(.subheadline.weight(.semibold))
-                                    .padding(.horizontal, 14)
-                                    .frame(minHeight: 44)
-                                    .background(.ultraThinMaterial, in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityHint("恢复歌词随播放进度滚动")
-                            .accessibilityIdentifier("resumeCurrentLyrics")
-                            .onGeometryChange(for: CGRect.self) {
-                                $0.frame(in: .named("lyricsPage"))
-                            } action: { resumeButtonFrame = $0 }
-                            .onDisappear { resumeButtonFrame = .zero }
-                            .padding(.trailing, 4)
-                            // The lyric viewport ends above the reveal band,
-                            // so a small inset keeps this action hittable.
-                            .padding(.bottom, 16)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
-                    }
                     .onChange(of: lyricsCursor.activeIndex) { index in
                         guard index != activeIndex else { return }
                         activeIndex = index
                         guard !isUserScrolling, let index else { return }
-                        withAnimation(.spring(response: 0.8, dampingFraction: 0.85)) {
-                            proxy.scrollTo(index, anchor: UnitPoint(x: 0.5, y: 0.18))
-                        }
+                        scrollToLyric(index, proxy: proxy)
                     }
                     .onAppear {
                         // Start the active line near the top, matching the
@@ -1418,10 +1431,7 @@ struct NowPlayingView: View {
                     }
                     .onChange(of: player.currentTrack?.playbackKey) { _ in
                         activeIndex = nil
-                        lyricLineFrames = [:]
-                    }
-                    .onPreferenceChange(LyricsLinePositionPreferenceKey.self) { positions in
-                        lyricLineFrames = positions
+                        lyricLineFrames.frames.removeAll()
                     }
                     .simultaneousGesture(
                         DragGesture()
@@ -1436,8 +1446,19 @@ struct NowPlayingView: View {
                             .onEnded { _ in
                                 guard isLyricsDragActive else { return }
                                 isLyricsDragActive = false
-                                 resumeTask?.cancel()
-                                 resumeTask = nil
+                                // Browsing ends on its own, like the system
+                                // player: after a short pause the page glides
+                                // back to the line that is being sung.
+                                resumeTask?.cancel()
+                                resumeTask = Task { @MainActor in
+                                    try? await Task.sleep(for: NowPlayingPresentationMetrics.lyricsBrowseResumeDelay)
+                                    guard !Task.isCancelled, !isLyricsDragActive else { return }
+                                    isUserScrolling = false
+                                    if let index = lyricsCursor.activeIndex {
+                                        activeIndex = index
+                                        scrollToLyric(index, proxy: proxy)
+                                    }
+                                }
                                 if showLyricsOnMobile, lyricsControlsVisible {
                                     scheduleLyricsControlsAutoHide()
                                 }
@@ -1473,6 +1494,13 @@ struct NowPlayingView: View {
         }
     }
 
+    private func lyricBlurRadius(for lineID: Int, isActive: Bool) -> CGFloat {
+        guard !isActive, !isUserScrolling, !reduceMotion,
+              renderingBudget.allowsContinuousEffects else { return 0 }
+        guard let activeIndex else { return 1.1 }
+        return abs(lineID - activeIndex) <= 4 ? 1.1 : 0
+    }
+
     /// Every line uses the same large bold style; the active line is set
     /// apart by opacity and sharpness only, so lines never reflow or jump in
     /// size as playback advances. Browsing (manual scroll) removes the blur
@@ -1482,7 +1510,7 @@ struct NowPlayingView: View {
             if settings.lyricsAnnotation == .romaji, let romaji = line.romaji {
                 Text(romaji)
                     .font(.callout.weight(.semibold))
-                    .foregroundStyle(.white.opacity(isActive ? 0.72 : 0.34))
+                    .foregroundStyle(.white.opacity(isActive ? 0.9 : 0.34))
             }
             LyricMainText(
                 line: line, isActive: isActive,
@@ -1493,37 +1521,38 @@ struct NowPlayingView: View {
                 inactiveScale: 1,
                 inactiveBlur: 0
             )
+            // The sung line's translation reads in near-white like the system
+            // player's secondary lyric line; inactive ones stay muted.
             if settings.showLyricsTranslation, let translation = line.translation {
                 Text(translation)
                     .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white.opacity(isActive ? 0.72 : 0.3))
+                    .foregroundStyle(.white.opacity(isActive ? 0.9 : 0.3))
             }
         }
         .multilineTextAlignment(.leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .background {
-            GeometryReader { geometry in
-                Color.clear.preference(
-                    key: LyricsLinePositionPreferenceKey.self,
-                    value: [line.id: geometry.frame(in: .named("lyricsPage"))]
-                )
-            }
+        // Frames go into a reference box, not @State: they change on every
+        // scroll frame, and publishing them re-rendered the whole player.
+        .onGeometryChange(for: CGRect.self) {
+            $0.frame(in: .named("lyricsPage"))
+        } action: { frame in
+            lyricLineFrames.frames[line.id] = frame
         }
+        .onDisappear { lyricLineFrames.frames[line.id] = nil }
         // One blur for the whole line (main text, romaji and translation).
-        // Reduce Motion users get the opacity cue only.
-        .blur(radius: isActive || isUserScrolling || reduceMotion ? 0 : 1.1)
+        // Reduce Motion, Low Power / thermal budgets and lines far from the
+        // sung one (already faded) skip the blur pass.
+        .blur(radius: lyricBlurRadius(for: line.id, isActive: isActive))
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isActive)
         .animation(.easeOut(duration: 0.2), value: isUserScrolling)
     }
 }
 
-private struct LyricsLinePositionPreferenceKey: PreferenceKey {
-    static var defaultValue: [Int: CGRect] = [:]
-
-    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, newest in newest })
-    }
+/// Lyric line frames used only for tap hit-testing. Mutating it does not
+/// invalidate any view.
+private final class LyricLineFrameStore {
+    var frames: [Int: CGRect] = [:]
 }
 
 
@@ -1572,7 +1601,9 @@ struct LyricMainText: View {
         .minimumScaleFactor(0.64)
         .fixedSize(horizontal: false, vertical: true)
         .scaleEffect(isActive ? 1 : inactiveScale, anchor: .leading)
-        .blur(radius: isActive ? 0 : inactiveBlur)
+        // Skip the modifier when there is nothing to blur; a radius-0 blur
+        // can still cost a render pass.
+        .blur(radius: isActive || inactiveBlur == 0 ? 0 : inactiveBlur, opaque: false)
         .animation(.spring(response: 0.36, dampingFraction: 0.86), value: isActive)
     }
 }
@@ -2108,15 +2139,19 @@ private struct MPSystemVolumeSlider: UIViewRepresentable {
     /// of UIKit's large default thumb. The thumb canvas stays 32pt square so
     /// the drag target remains comfortable.
     private static func style(_ view: MPVolumeView) {
-        guard let slider = view.subviews.compactMap({ $0 as? UISlider }).first else { return }
-        slider.setMinimumTrackImage(capsule(UIColor.white.withAlphaComponent(0.72)), for: .normal)
-        slider.setMaximumTrackImage(capsule(UIColor.white.withAlphaComponent(0.22)), for: .normal)
+        guard let slider = view.subviews.compactMap({ $0 as? UISlider }).first,
+              slider.thumbImage(for: .normal) !== thumb else { return }
+        slider.setMinimumTrackImage(minimumTrack, for: .normal)
+        slider.setMaximumTrackImage(maximumTrack, for: .normal)
         slider.setThumbImage(thumb, for: .normal)
         slider.setThumbImage(thumb, for: .highlighted)
         slider.accessibilityLabel = "系统音量"
     }
 
     private static let trackHeight: CGFloat = 7
+    // Rendered once; updateUIView runs on every player redraw.
+    private static let minimumTrack = capsule(UIColor.white.withAlphaComponent(0.72))
+    private static let maximumTrack = capsule(UIColor.white.withAlphaComponent(0.22))
 
     private static func capsule(_ color: UIColor) -> UIImage {
         let size = CGSize(width: trackHeight * 2 + 1, height: trackHeight)
@@ -3120,8 +3155,11 @@ struct NowPlayingScrubber: View {
     }
 
     var body: some View {
+        // The label changes once a second and the bar moves ~1.5pt/s, so 4 fps
+        // is visually identical to 24 fps. Dragging uses `dragProgress` and is
+        // unaffected.
         TimelineView(.animation(
-            minimumInterval: renderingBudget.minimumAnimationInterval,
+            minimumInterval: max(renderingBudget.minimumAnimationInterval, 0.25),
             paused: !RenderingBudget.permitsTimeDrivenLyricUpdates(
                 isPlaying: player.isPlaying,
                 isSceneActive: renderingBudget.isSceneActive

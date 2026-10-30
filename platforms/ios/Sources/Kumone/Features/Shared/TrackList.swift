@@ -471,8 +471,31 @@ final class SpectrumBarsView: PlatformView {
         }
     }
 
+    // Energy: a playing row in an unselected tab or a pushed-under page is
+    // off-window; its 24 Hz timer would otherwise keep running unseen.
+    #if os(macOS)
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        windowAvailabilityChanged(window != nil)
+    }
+    #else
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        windowAvailabilityChanged(window != nil)
+    }
+    #endif
+
+    private func windowAvailabilityChanged(_ inWindow: Bool) {
+        if inWindow {
+            if animating { start() }
+        } else if timer != nil {
+            timer?.invalidate()
+            timer = nil
+        }
+    }
+
     private func start() {
-        guard timer == nil else { return }
+        guard timer == nil, window != nil else { return }
         startedAt = CACurrentMediaTime()
         // Common mode so the bars keep moving while a list is being scrolled.
         let timer = Timer(timeInterval: minimumInterval, repeats: true) { [weak self] _ in
