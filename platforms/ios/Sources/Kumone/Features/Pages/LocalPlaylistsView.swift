@@ -32,13 +32,14 @@ struct LocalPlaylistsView: View {
             }
 
             Section("资料库") {
-                Label {
-                    Text("播放列表")
-                } icon: {
-                    Image(systemName: "music.note.list").foregroundStyle(Theme.accent)
-                }
                 libraryNavigationRow("最近播放", icon: "clock.arrow.circlepath", destination: .recents)
                 libraryNavigationRow("我的收藏", icon: "square.grid.2x2", destination: .collections)
+                NavigationLink {
+                    LXSyncSettingsView()
+                } label: {
+                    Label("同步资料库", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .accessibilityIdentifier("librarySyncEntry")
             }
 
             if !store.playlists.isEmpty || !isSelectingPlaylists {
@@ -90,14 +91,6 @@ struct LocalPlaylistsView: View {
                     .onMove { offsets, destination in
                         store.movePlaylists(fromOffsets: offsets, toOffset: destination)
                     }
-                }
-            }
-
-            Section {
-                NavigationLink {
-                    LXSyncSettingsView()
-                } label: {
-                    Label("同步资料库", systemImage: "arrow.triangle.2.circlepath")
                 }
             }
         }
@@ -260,16 +253,6 @@ struct LocalPlaylistsView: View {
             HStack(spacing: 10) {
                 libraryShortcut("最近播放", icon: "clock.arrow.circlepath", destination: .recents)
                 libraryShortcut("我的收藏", icon: "square.grid.2x2", destination: .collections)
-                NavigationLink {
-                    LXSyncSettingsView()
-                } label: {
-                    Label("同步资料库", systemImage: "arrow.triangle.2.circlepath")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 42)
-                        .compatGlass(interactive: true, in: Capsule())
-                }
-                .buttonStyle(.plain)
             }
             .padding(.horizontal, Theme.Layout.contentInset)
         }

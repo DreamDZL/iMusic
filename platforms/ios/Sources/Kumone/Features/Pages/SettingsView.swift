@@ -43,11 +43,6 @@ struct SettingsView: View {
 #if os(iOS)
             SettingsDisclosureSection("账号与同步", isExpanded: sectionBinding("accounts")) {
                 NavigationLink {
-                    LXSyncSettingsView()
-                } label: {
-                    Label("LX 多设备同步", systemImage: "arrow.triangle.2.circlepath")
-                }
-                NavigationLink {
                     AccountSyncView()
                 } label: {
                     Label("账号同步", systemImage: "person.crop.circle.badge.checkmark")

@@ -322,7 +322,7 @@ final class HomeViewModel: ObservableObject {
 }
 
 struct HomeView: View {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .headline) private var scaledFeatureCardHeight: CGFloat = 252
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var settings: SettingsManager
@@ -593,9 +593,7 @@ struct HomeView: View {
 
     // MARK: - Feature cards
 
-    private var featureCardHeight: CGFloat {
-        dynamicTypeSize.isAccessibilitySize ? 380 : 252
-    }
+    private var featureCardHeight: CGFloat { min(scaledFeatureCardHeight, 360) }
 
     private var featureCards: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -603,56 +601,60 @@ struct HomeView: View {
                 .font(.title2.weight(.bold))
                 .padding(.horizontal, Theme.Layout.contentInset)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 14) {
-                    Color.clear.frame(width: max(0, Theme.Layout.contentInset - 14), height: 1)
-                // Daily recommendations are always visible; the page shows
-                // a separate login CTA when account sync is unavailable.
-                NavigationLink(value: Destination.daily) {
-                    FeatureCard(
-                        title: "每日推荐",
-                        subtitle: "根据你的口味生成",
-                        icon: "calendar",
-                        coverURL: model.dailyFirstCover?.resizedImageURL(512),
-                        showsDate: true,
-                        size: CGSize(width: 310, height: featureCardHeight)
-                    )
-                }
-                .buttonStyle(.plain)
+            GeometryReader { geometry in
+                let cardWidth = min(310, geometry.size.width * 0.78)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 14) {
+                        // Daily recommendations are always visible; the page shows
+                        // a separate login CTA when account sync is unavailable.
+                        NavigationLink(value: Destination.daily) {
+                            FeatureCard(
+                                title: "每日推荐",
+                                subtitle: "根据你的口味生成",
+                                icon: "calendar",
+                                coverURL: model.dailyFirstCover?.resizedImageURL(512),
+                                showsDate: true,
+                                size: CGSize(width: cardWidth, height: featureCardHeight)
+                            )
+                        }
+                        .buttonStyle(.plain)
 
-                Button {
-                    player.startFM()
-                } label: {
-                    FeatureCard(
-                        title: "LX 漫游",
-                        subtitle: "按首页平台生成漫游队列",
-                        icon: "wave.3.right.circle.fill",
-                        gradient: [Color(red: 0.16, green: 0.20, blue: 0.42),
-                                   Color(red: 0.36, green: 0.24, blue: 0.62)],
-                        size: CGSize(width: 310, height: featureCardHeight)
-                    )
-                }
-                .buttonStyle(.interactiveCard)
+                        Button {
+                            player.startFM()
+                        } label: {
+                            FeatureCard(
+                                title: "LX 漫游",
+                                subtitle: "按首页平台生成漫游队列",
+                                icon: "wave.3.right.circle.fill",
+                                gradient: [Color(red: 0.16, green: 0.20, blue: 0.42),
+                                           Color(red: 0.36, green: 0.24, blue: 0.62)],
+                                size: CGSize(width: cardWidth, height: featureCardHeight)
+                            )
+                        }
+                        .buttonStyle(.interactiveCard)
 
-                if account.isLoggedIn {
-                    Button {
-                        startHeartbeatMode()
-                    } label: {
-                        FeatureCard(
-                            title: "心动模式",
-                            subtitle: "你的红心歌曲和相似推荐",
-                            icon: "heart.circle.fill",
-                            gradient: [Color(red: 0.85, green: 0.19, blue: 0.41),
-                                       Color(red: 0.98, green: 0.42, blue: 0.34)],
-                            size: CGSize(width: 310, height: featureCardHeight)
-                        )
+                        if account.isLoggedIn {
+                            Button {
+                                startHeartbeatMode()
+                            } label: {
+                                FeatureCard(
+                                    title: "心动模式",
+                                    subtitle: "你的红心歌曲和相似推荐",
+                                    icon: "heart.circle.fill",
+                                    gradient: [Color(red: 0.85, green: 0.19, blue: 0.41),
+                                               Color(red: 0.98, green: 0.42, blue: 0.34)],
+                                    size: CGSize(width: cardWidth, height: featureCardHeight)
+                                )
+                            }
+                            .buttonStyle(.interactiveCard)
+                        }
                     }
-                    .buttonStyle(.interactiveCard)
+                    .padding(.horizontal, Theme.Layout.contentInset)
+                    .padding(.vertical, 2)
                 }
-                    Color.clear.frame(width: max(0, Theme.Layout.contentInset - 14), height: 1)
-                }
-                .padding(.vertical, 2)
+                .frame(height: featureCardHeight + 4)
             }
+            .frame(height: featureCardHeight + 4)
         }
         .compatScrollClipDisabled()
     }

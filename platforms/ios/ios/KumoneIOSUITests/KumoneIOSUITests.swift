@@ -58,6 +58,12 @@ final class KumoneIOSUITests: XCTestCase {
                     "Search should show its offline empty-state prompt before the user enters a query"
                 )
             }
+            if destination.tab == "资料库" {
+                XCTAssertTrue(
+                    app.staticTexts["我的播放列表"].waitForExistence(timeout: 5),
+                    "The library should keep its playlists section visible even when it is empty"
+                )
+            }
             if destination.tab == "新发现" {
                 let topAttachment = XCTAttachment(screenshot: app.screenshot())
                 topAttachment.name = "iMusic-新发现-顶部"
@@ -89,6 +95,39 @@ final class KumoneIOSUITests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
         }
+    }
+
+    @MainActor
+    func testLibrarySyncEntryNavigatesFromLibrary() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing"]
+        app.launch()
+
+        let libraryTab = app.tabBars.buttons["资料库"]
+        XCTAssertTrue(libraryTab.waitForExistence(timeout: 15))
+        libraryTab.tap()
+        XCTAssertTrue(app.navigationBars["资料库"].waitForExistence(timeout: 10))
+
+        let syncEntry = app.buttons["librarySyncEntry"]
+        XCTAssertTrue(syncEntry.waitForExistence(timeout: 5), "The library should expose its LX sync entry")
+        for _ in 0..<2 where !syncEntry.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(syncEntry.isHittable, "The LX sync entry should be reachable with at most two swipes")
+        syncEntry.tap()
+
+        XCTAssertTrue(
+            app.navigationBars["LX 多设备同步"].waitForExistence(timeout: 10),
+            "The library sync entry should open the LX multi-device sync settings page"
+        )
+
+        let backButton = app.navigationBars["LX 多设备同步"].buttons["资料库"]
+        XCTAssertTrue(backButton.waitForExistence(timeout: 5), "The sync page should provide navigation back to the library")
+        backButton.tap()
+        XCTAssertTrue(
+            app.navigationBars["资料库"].waitForExistence(timeout: 10),
+            "Returning from LX sync settings should leave the user on the library tab"
+        )
     }
 
     @MainActor
