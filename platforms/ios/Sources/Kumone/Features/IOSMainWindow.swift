@@ -474,6 +474,20 @@ struct IOSMiniPlayerBar: View {
             .accessibilityHint("打开正在播放")
             .accessibilityIdentifier("miniPlayerOpenNowPlaying")
 
+            if !presentation.isInline {
+                Button(action: player.previous) {
+                    Image(systemName: "backward.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+                .disabled(player.isFMMode)
+                .opacity(player.isFMMode ? 0.35 : 1)
+                .accessibilityLabel("上一首")
+            }
+
             Button(action: player.togglePlayPause) {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 15, weight: .bold))

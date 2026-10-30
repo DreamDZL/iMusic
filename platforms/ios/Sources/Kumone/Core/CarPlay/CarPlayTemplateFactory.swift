@@ -243,7 +243,7 @@ extension CarPlayTemplateFactory {
                 }
                 sections.append(CPListSection(
                     items: [trackItem],
-                    header: "正在漫游",
+                    header: "电台播放中",
                     sectionIndexTitle: nil
                 ))
             } else {
@@ -252,7 +252,7 @@ extension CarPlayTemplateFactory {
                 placeholder.handler = { _, completion in completion() }
                 sections.append(CPListSection(
                     items: [placeholder],
-                    header: "正在漫游",
+                    header: "电台播放中",
                     sectionIndexTitle: nil
                 ))
             }
@@ -269,7 +269,7 @@ extension CarPlayTemplateFactory {
             actionItem.setImage(UIImage(systemName: isPlaying ? "forward.fill" : "play.fill"))
         } else {
             actionItem = CPListItem(
-                text: "开始漫游",
+                text: "开始播放",
                 detailText: "根据你的口味生成连续推荐"
             )
             actionItem.setImage(UIImage(systemName: "dot.radiowaves.left.and.right"))
@@ -384,7 +384,7 @@ enum CarPlayRecommendFeature {
     var title: String {
         switch self {
         case .daily: return "每日推荐"
-        case .fm: return "私人漫游"
+        case .fm: return "电台"
         case .heartbeat: return "心动模式"
         }
     }
@@ -392,7 +392,7 @@ enum CarPlayRecommendFeature {
     var detail: String {
         switch self {
         case .daily: return "根据你的口味生成"
-        case .fm: return "从喜欢的歌开始漫游"
+        case .fm: return "从喜欢的歌开始播放"
         case .heartbeat: return "你的红心歌曲和相似推荐"
         }
     }

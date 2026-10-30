@@ -186,7 +186,7 @@ struct PlayContext: Codable, Hashable {
     static var cloud: PlayContext { .init(kind: .cloud, id: 0, name: String(localized: "音乐云盘")) }
     static var recents: PlayContext { .init(kind: .recents, id: 0, name: String(localized: "最近播放")) }
     static var heartbeat: PlayContext { .init(kind: .heartbeat, id: 0, name: String(localized: "心动模式")) }
-    static var fm: PlayContext { .init(kind: .fm, id: 0, name: String(localized: "私人漫游")) }
+    static var fm: PlayContext { .init(kind: .fm, id: 0, name: String(localized: "电台")) }
 
     /// Identity is the place, not its current title — a renamed playlist is
     /// still the same entry in the recents list.
@@ -1195,7 +1195,7 @@ final class PlayerService: ObservableObject {
                     break
                 }
                 if attempt == 2 {
-                    ToastCenter.shared.show(String(localized: "获取私人漫游数据失败"))
+                    ToastCenter.shared.show(String(localized: "获取电台数据失败"))
                     return
                 }
                 try? await Task.sleep(for: .seconds(1))

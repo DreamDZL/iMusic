@@ -122,7 +122,8 @@ struct FMView: View {
                     .background(.primary.opacity(0.06), in: Circle())
             }
             .buttonStyle(.pressable)
-            .help("不喜欢，换一首")
+            .accessibilityLabel("不喜欢这首")
+            .accessibilityHint("跳过当前歌曲")
 
             Button {
                 player.togglePlayPause()
@@ -139,6 +140,7 @@ struct FMView: View {
                 }
             }
             .buttonStyle(.pressable)
+            .accessibilityLabel(player.isPlaying ? "暂停" : "播放")
 
             Button {
                 player.fmNext()
@@ -150,7 +152,8 @@ struct FMView: View {
                     .background(.primary.opacity(0.06), in: Circle())
             }
             .buttonStyle(.pressable)
-            .help("下一首")
+            .accessibilityLabel("下一首")
+            .accessibilityHint("播放下一首电台推荐")
 
             if let track {
                 LikeButton(track: track, size: 16)

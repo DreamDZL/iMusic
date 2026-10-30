@@ -433,7 +433,7 @@ struct LikedSongsView: View {
                     EmptyStateView(
                         icon: "star",
                         title: "还没有收藏歌曲",
-                        subtitle: "在播放器或歌曲菜单中点按心形，即可将歌曲加入资料库"
+                        subtitle: "在播放器或歌曲菜单中点按收藏按钮，即可将歌曲加入资料库"
                     )
                     .frame(minHeight: 260)
                 } else {

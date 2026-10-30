@@ -601,7 +601,7 @@ struct HomeView: View {
 
             GeometryReader { geometry in
                 let cardWidth = min(Theme.Layout.featureCardMaxWidth, geometry.size.width * 0.78)
-                let cardHeight = min(cardWidth * 4 / 3, dynamicTypeSize.isAccessibilitySize ? 420 : 380)
+                let cardHeight = cardWidth * 4 / 3
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 14) {
                         // Daily recommendations are always visible; the page shows
@@ -653,7 +653,7 @@ struct HomeView: View {
                 }
                 .frame(height: cardHeight + 4)
             }
-            .frame(height: dynamicTypeSize.isAccessibilitySize ? 424 : 384)
+            .frame(height: Theme.Layout.featureCardMaxWidth * 4 / 3 + 4)
         }
         .compatScrollClipDisabled()
     }

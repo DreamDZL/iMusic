@@ -627,7 +627,7 @@ struct SearchView: View {
                     }
 
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 10)], spacing: 10) {
-                        ForEach(Array(model.hotKeywords.enumerated()), id: \.element) { index, keyword in
+                        ForEach(Array(model.hotKeywords.enumerated()), id: \.offset) { index, keyword in
                             Button {
                                 performSearch(keyword)
                             } label: {

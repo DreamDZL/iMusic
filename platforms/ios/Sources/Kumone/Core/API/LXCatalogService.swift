@@ -1470,13 +1470,11 @@ enum LXCatalogService {
 
     static func hotKeywords(platform: LXCatalogPlatform) async throws -> [String] {
         if platform == .aggregate {
-            let results = await withTaskGroup(of: [String].self, returning: [[String]].self) { group in
-                for item in LXCatalogPlatform.catalogueCases where item != .aggregate {
-                    group.addTask { (try? await hotKeywords(platform: item)) ?? [] }
-                }
-                var all: [[String]] = []
-                for await result in group { all.append(result) }
-                return all
+            // Preserve catalogueCases priority. Completion-order aggregation
+            // made the displayed numbered list change with network latency.
+            var results: [[String]] = []
+            for item in LXCatalogPlatform.catalogueCases where item != .aggregate {
+                results.append((try? await hotKeywords(platform: item)) ?? [])
             }
             var seen = Set<String>()
             return results.flatMap { $0 }.filter { seen.insert($0.lowercased()).inserted }
