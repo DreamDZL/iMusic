@@ -258,6 +258,9 @@ final class LXSyncService: ObservableObject {
     private static let endpointKey = "imusic.lxSync.endpoint"
     private static let dataKey = "imusic.lxSync.listData.v1"
     private static let lastSyncKey = "imusic.lxSync.lastSyncAt"
+    private static let legacyPlaylistMigrationKey = "imusic.lxSync.legacyAccountPlaylistsMerged.v1"
+    private static let legacyPlaylistMigrationPendingKey = "imusic.lxSync.legacyAccountPlaylistsMigrationPending.v1"
+    private static let legacyPlaylistMigrationIntroducedIDsKey = "imusic.lxSync.legacyAccountPlaylistsIntroducedIDs.v1"
 
     private var listData: LXSyncListData
     private var socket: LXSyncSocket?
@@ -284,6 +287,8 @@ final class LXSyncService: ObservableObject {
     private var userRequestedDisconnect = false
     private var didFinishListSync = false
     private var listSyncDataDecodeError: String?
+    private var didApplyHandshakeSnapshot = false
+    private var migrationPublishTask: Task<Void, Never>?
     private let defaults: UserDefaults
     private let localStore: LocalPlaylistStore
     private let transport: LXSyncTransport
@@ -424,6 +429,7 @@ final class LXSyncService: ObservableObject {
         guard isCurrentConnection(generation) else { throw LXSyncError.disconnected }
         didFinishListSync = false
         listSyncDataDecodeError = nil
+        didApplyHandshakeSnapshot = false
         let address: LXSyncAddress
         do {
             address = try LXSyncAddress(endpoint)
@@ -597,9 +603,53 @@ final class LXSyncService: ObservableObject {
         )
     }
 
-    private func apply(_ newData: LXSyncListData) {
+    private func apply(_ newData: LXSyncListData, allowOneTimeMigration: Bool = false) {
         var scopedData = newData
         scopedData.userList = newData.userList.filter(LocalPlaylistSyncPolicy.shouldSyncToLX)
+        if allowOneTimeMigration,
+           !defaults.bool(forKey: Self.legacyPlaylistMigrationKey) {
+            let presentIDs = Set(scopedData.userList.map(\.id))
+            let presentProviderIDs = Set(scopedData.userList.compactMap { playlist -> String? in
+                guard let source = playlist.source, let id = playlist.sourceListId else { return nil }
+                return LocalPlaylistSyncPolicy.providerIdentityKey(source: source, id: id)
+            })
+            let introducedIDs = Set(defaults.stringArray(forKey: Self.legacyPlaylistMigrationIntroducedIDsKey) ?? [])
+            let candidates = localStore.currentLegacyLXSyncMigrationCandidates().filter { playlist in
+                let syncID = playlist.lxSyncID ?? playlist.id.uuidString
+                if defaults.bool(forKey: Self.legacyPlaylistMigrationPendingKey) {
+                    return introducedIDs.contains(syncID)
+                }
+                return true
+            }
+            let legacyCopies = candidates.filter { playlist in
+                let syncID = playlist.lxSyncID ?? playlist.id.uuidString
+                guard !presentIDs.contains(syncID) else { return false }
+                if let source = playlist.remoteSource, let id = playlist.remotePlaylistID,
+                   presentProviderIDs.contains(LocalPlaylistSyncPolicy.providerIdentityKey(source: source, id: id)) {
+                    return false
+                }
+                return true
+            }
+            if !legacyCopies.isEmpty {
+                var ids = introducedIDs
+                ids.formUnion(legacyCopies.map { $0.lxSyncID ?? $0.id.uuidString })
+                defaults.set(ids.sorted(), forKey: Self.legacyPlaylistMigrationIntroducedIDsKey)
+                defaults.set(true, forKey: Self.legacyPlaylistMigrationPendingKey)
+                scopedData.userList.append(contentsOf: legacyCopies.map { playlist in
+                    LXSyncUserPlaylist(
+                        id: playlist.lxSyncID ?? playlist.id.uuidString,
+                        name: playlist.name,
+                        source: playlist.remoteSource,
+                        sourceListId: playlist.remotePlaylistID,
+                        locationUpdateTime: Int((playlist.updatedAt ?? playlist.createdAt).timeIntervalSince1970 * 1_000),
+                        list: playlist.tracks.map(LXSyncMusicInfo.init(track:)),
+                        iMusicSourceName: playlist.sourceName,
+                        iMusicCoverURL: playlist.coverURL,
+                        iMusicLocalCopy: playlist.isLocalCopy
+                    )
+                })
+            }
+        }
         listData = scopedData
         persistListData()
         applyingRemoteData = true
@@ -615,8 +665,14 @@ final class LXSyncService: ObservableObject {
         defaults.set(data, forKey: Self.dataKey)
     }
 
-    private func sendFullListSnapshot() async throws {
-        guard isConnected else { throw LXSyncError.disconnected }
+    private func sendFullListSnapshot(
+        on expectedSocket: LXSyncSocket? = nil,
+        generation expectedGeneration: Int? = nil
+    ) async throws {
+        let generation = expectedGeneration ?? connectionGeneration
+        guard isConnected, isCurrentConnection(generation),
+              let activeSocket = expectedSocket ?? socket,
+              socket === activeSocket else { throw LXSyncError.disconnected }
         listData = makeLocalListData()
         persistListData()
         let serialized = try listData.encodedJSON()
@@ -624,8 +680,45 @@ final class LXSyncService: ObservableObject {
             throw LXSyncError.invalidServerResponse
         }
         let actionJSON = "{\"action\":\"list_data_overwrite\",\"data\":\(listJSON)}"
-        _ = try await callServer(path: ["onListSyncAction"], argumentsJSON: "[\(actionJSON)]")
+        _ = try await callServer(
+            path: ["onListSyncAction"],
+            argumentsJSON: "[\(actionJSON)]",
+            on: activeSocket,
+            generation: generation
+        )
+        guard isCurrentConnection(generation), socket === activeSocket else {
+            throw LXSyncError.disconnected
+        }
         markSynced()
+    }
+
+    private func scheduleMigrationPublish(generation: Int, socket expectedSocket: LXSyncSocket) {
+        guard isCurrentConnection(generation), socket === expectedSocket,
+              isConnected, didFinishListSync,
+              !defaults.bool(forKey: Self.legacyPlaylistMigrationKey) else { return }
+        guard defaults.bool(forKey: Self.legacyPlaylistMigrationPendingKey) else {
+            defaults.set(true, forKey: Self.legacyPlaylistMigrationKey)
+            return
+        }
+        migrationPublishTask?.cancel()
+        migrationPublishTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.sendFullListSnapshot(on: expectedSocket, generation: generation)
+                guard !Task.isCancelled,
+                      self.isCurrentConnection(generation),
+                      self.socket === expectedSocket else { return }
+                self.defaults.set(false, forKey: Self.legacyPlaylistMigrationPendingKey)
+                self.defaults.set(true, forKey: Self.legacyPlaylistMigrationKey)
+            } catch {
+                guard !Task.isCancelled,
+                      self.isCurrentConnection(generation),
+                      self.socket === expectedSocket else { return }
+                self.lastError = error.localizedDescription
+                self.statusMessage = "已连接，歌单迁移待重试"
+            }
+            self.migrationPublishTask = nil
+        }
     }
 
     private func markSynced() {
@@ -704,7 +797,7 @@ final class LXSyncService: ObservableObject {
     }
 
     private func handleMessage(_ text: String, generation: Int) async throws {
-        guard isCurrentConnection(generation) else { return }
+        guard isCurrentConnection(generation), let messageSocket = socket else { return }
         guard let data = text.data(using: .utf8),
               let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let name = message["name"] as? String else {
@@ -737,6 +830,9 @@ final class LXSyncService: ObservableObject {
                         didFinishListSync = true
                         markSynced()
                     }
+                } else if path.last == "finished" {
+                    guard isCurrentConnection(generation), socket === messageSocket else { return }
+                    scheduleMigrationPublish(generation: generation, socket: messageSocket)
                 }
             } catch {
                 if path.last == "list_sync_set_list_data" {
@@ -799,7 +895,8 @@ final class LXSyncService: ObservableObject {
                   let decoded = try? JSONDecoder().decode(LXSyncListData.self, from: serialized) else {
                 throw LXSyncError.invalidServerResponse
             }
-            apply(decoded)
+            apply(decoded, allowOneTimeMigration: !didApplyHandshakeSnapshot)
+            didApplyHandshakeSnapshot = true
             return NSNull()
         case "list_sync_finished":
             return NSNull()
@@ -942,8 +1039,16 @@ final class LXSyncService: ObservableObject {
         return try? JSONDecoder().decode(type, from: data)
     }
 
-    private func callServer(path: [String], argumentsJSON: String) async throws -> Any? {
-        guard socket != nil else { throw LXSyncError.disconnected }
+    private func callServer(
+        path: [String],
+        argumentsJSON: String,
+        on expectedSocket: LXSyncSocket? = nil,
+        generation expectedGeneration: Int? = nil
+    ) async throws -> Any? {
+        let generation = expectedGeneration ?? connectionGeneration
+        guard isCurrentConnection(generation),
+              let activeSocket = expectedSocket ?? socket,
+              socket === activeSocket else { throw LXSyncError.disconnected }
         let requestID = "\(path.joined(separator: "."))__\(UUID().uuidString)"
         let pathData = try JSONEncoder().encode(path)
         let nameData = try JSONEncoder().encode(requestID)
@@ -959,7 +1064,7 @@ final class LXSyncService: ObservableObject {
             pendingCalls[requestID] = continuation
             Task { [weak self] in
                 do {
-                    try await self?.sendRawMessage(message)
+                    try await self?.sendRawMessage(message, on: activeSocket, generation: generation)
                 } catch {
                     await self?.rejectCall(requestID, error: error)
                 }
@@ -1001,6 +1106,17 @@ final class LXSyncService: ObservableObject {
 
     private func sendRawMessage(_ text: String) async throws {
         guard let socket else { throw LXSyncError.disconnected }
+        try await sendRawMessage(text, on: socket, generation: connectionGeneration)
+    }
+
+    private func sendRawMessage(
+        _ text: String,
+        on expectedSocket: LXSyncSocket,
+        generation: Int
+    ) async throws {
+        guard isCurrentConnection(generation), socket === expectedSocket else {
+            throw LXSyncError.disconnected
+        }
         let frame: String
         if LXSyncWireCodec.shouldOffloadEncoding(text) {
             frame = try await Task.detached(priority: .utility) {
@@ -1009,8 +1125,10 @@ final class LXSyncService: ObservableObject {
         } else {
             frame = try LXSyncWireCodec.encode(text)
         }
-        guard self.socket === socket else { throw LXSyncError.disconnected }
-        try await socket.send(.string(frame))
+        guard isCurrentConnection(generation), self.socket === expectedSocket else {
+            throw LXSyncError.disconnected
+        }
+        try await expectedSocket.send(.string(frame))
     }
 
     private func socketDidClose(
@@ -1029,6 +1147,10 @@ final class LXSyncService: ObservableObject {
         )
         socket = nil
         activeSocketGeneration = nil
+        pendingSnapshotTask?.cancel()
+        pendingSnapshotTask = nil
+        migrationPublishTask?.cancel()
+        migrationPublishTask = nil
         isConnected = false
         statusMessage = "连接已断开"
         let handshakeError = Self.webSocketHandshakeError(
@@ -1151,6 +1273,10 @@ final class LXSyncService: ObservableObject {
         }
         handshakeTimeoutTask?.cancel()
         handshakeTimeoutTask = nil
+        pendingSnapshotTask?.cancel()
+        pendingSnapshotTask = nil
+        migrationPublishTask?.cancel()
+        migrationPublishTask = nil
         receiveTask?.cancel()
         receiveTask = nil
         socket?.cancel(with: .normalClosure, reason: nil)

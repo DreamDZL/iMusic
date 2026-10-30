@@ -48,6 +48,16 @@ final class LXSyncClientIntegrationTests: XCTestCase {
             revision: 2,
             tracks: [sampleTrack(id: 14, name: "QQ 本地歌曲")]
         )
+        let neteasePlaylist = fixture.store.upsertRemotePlaylist(
+            source: "netease",
+            remoteID: "netease-account-84",
+            name: "网易云账号副本",
+            coverURL: nil,
+            sourceName: "网易云音乐",
+            revision: 3,
+            tracks: [sampleTrack(id: 18, name: "网易云本地歌曲")],
+            enableProviderRefresh: true
+        )
         fixture.store.toggleFavorite(favoriteTrack)
         defer {
             service.disconnect()
@@ -81,7 +91,7 @@ final class LXSyncClientIntegrationTests: XCTestCase {
                     id: "old-provider-list",
                     name: "旧版服务端 QQ 收藏歌单",
                     source: "qq",
-                    sourceListId: "qq-public-42",
+                    sourceListId: "old-qq-public-42",
                     list: [LXSyncMusicInfo(track: sampleTrack(id: 15, name: "旧的远端 QQ 歌曲"))],
                     iMusicSourceName: "QQ 音乐"
                 ),
@@ -96,20 +106,27 @@ final class LXSyncClientIntegrationTests: XCTestCase {
                 ),
             ]
         )
-        try await finishHandshake(socket, initialData: initialMergedData)
+        let handshakeLocalSnapshot = try await finishHandshake(socket, initialData: initialMergedData)
+        XCTAssertTrue(handshakeLocalSnapshot.userList.contains(where: { $0.name == "已有本地歌单" }))
+        XCTAssertTrue(handshakeLocalSnapshot.loveList.contains(where: { $0.name == "本地收藏" }))
         try await connectionTask.value
+        let migratedSnapshot = try await waitForSnapshot(socket)
+        XCTAssertTrue(migratedSnapshot.userList.contains(where: { $0.name == "QQ 收藏的公开歌单" }))
 
         XCTAssertTrue(service.isConnected)
         XCTAssertEqual(service.statusMessage, "已同步")
         XCTAssertEqual(Set(fixture.store.playlists.map(\.name)), Set([
-            "远端歌单", "已有本地歌单", "QQ 收藏的公开歌单", "LX 导入的 QQ 歌单",
+            "远端歌单", "已有本地歌单", "QQ 收藏的公开歌单", "网易云账号副本",
+            "旧版服务端 QQ 收藏歌单", "LX 导入的 QQ 歌单",
         ]))
         XCTAssertEqual(fixture.store.playlists.first(where: { $0.name == "远端歌单" })?.tracks.first?.name, "远端歌曲")
         XCTAssertEqual(fixture.store.playlists.first(where: { $0.name == "已有本地歌单" })?.tracks.first?.name, "本地保留歌曲")
         XCTAssertEqual(fixture.store.playlists.first(where: { $0.id == qqPlaylist.id })?.name, "QQ 收藏的公开歌单")
         XCTAssertEqual(fixture.store.playlists.first(where: { $0.id == qqPlaylist.id })?.tracks.first?.name, "QQ 本地歌曲")
+        XCTAssertEqual(fixture.store.playlists.first(where: { $0.id == neteasePlaylist.id })?.tracks.first?.name, "网易云本地歌曲")
+        XCTAssertTrue(fixture.store.playlists.first(where: { $0.id == neteasePlaylist.id })?.providerSyncEnabled == true)
         XCTAssertEqual(fixture.store.playlists.first(where: { $0.lxSyncID == "lx-imported-qq-list" })?.tracks.first?.name, "LX 远端导入歌曲")
-        XCTAssertFalse(fixture.store.playlists.contains(where: { $0.name == "旧版服务端 QQ 收藏歌单" }))
+        XCTAssertTrue(fixture.store.playlists.contains(where: { $0.name == "旧版服务端 QQ 收藏歌单" }))
         XCTAssertEqual(fixture.store.favoriteTracks.map(\.name), ["本地收藏"])
 
         let providerCollision = LXSyncUserPlaylist(
@@ -117,7 +134,7 @@ final class LXSyncClientIntegrationTests: XCTestCase {
             name: "QQ 公共歌单",
             source: "qq",
             sourceListId: "42",
-            list: [LXSyncMusicInfo(track: sampleTrack(id: 32, name: "不应覆盖的 QQ 歌曲"))]
+            list: [LXSyncMusicInfo(track: sampleTrack(id: 32, name: "QQ 来源同步歌曲"))]
         )
         try socket.sendServerCall(
             id: "provider-collision-update",
@@ -125,18 +142,22 @@ final class LXSyncClientIntegrationTests: XCTestCase {
             arguments: [["action": "list_update", "data": try jsonObject([providerCollision])]]
         )
         try await waitForAcknowledgement("provider-collision-update", on: socket)
-        XCTAssertEqual(fixture.store.playlists.first(where: { $0.lxSyncID == "remote-list" })?.tracks.first?.name, "远端歌曲")
+        XCTAssertEqual(fixture.store.playlists.first(where: { $0.lxSyncID == "remote-list" })?.tracks.first?.name, "QQ 来源同步歌曲")
 
+        let messageCountBeforeCreate = socket.sentMessages.count
         let localID = try XCTUnwrap(fixture.store.create(
             name: "本地歌单",
             tracks: [sampleTrack(id: 42, name: "本地歌曲")]
         ))
         let initialSyncAt = service.lastSyncAt
-        let createSnapshot = try await waitForSnapshot(socket)
-        XCTAssertEqual(createSnapshot.userList.map(\.name), [
-            "本地歌单", "已有本地歌单", "远端歌单", "LX 导入的 QQ 歌单",
-        ])
-        XCTAssertFalse(createSnapshot.userList.contains(where: { $0.name.contains("QQ 收藏") }))
+        let createSnapshot = try await waitForSnapshot(socket, after: messageCountBeforeCreate)
+        XCTAssertEqual(Set(createSnapshot.userList.map(\.name)), Set([
+            "本地歌单", "已有本地歌单", "QQ 公共歌单", "网易云账号副本",
+            "旧版服务端 QQ 收藏歌单", "LX 导入的 QQ 歌单", "QQ 收藏的公开歌单",
+        ]))
+        XCTAssertTrue(createSnapshot.userList.contains(where: { $0.name == "QQ 收藏的公开歌单" }))
+        XCTAssertTrue(createSnapshot.userList.contains(where: { $0.source == "netease" && $0.sourceListId == "netease-account-84" }))
+        XCTAssertTrue(createSnapshot.userList.contains(where: { $0.id == qqPlaylist.id.uuidString }))
         XCTAssertEqual(createSnapshot.userList.first?.list.first?.name, "本地歌曲")
         try await waitUntil { service.lastSyncAt != initialSyncAt }
 
@@ -144,9 +165,10 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         let messageCountBeforeDelete = socket.sentMessages.count
         fixture.store.delete(id: localID)
         let deleteSnapshot = try await waitForSnapshot(socket, after: messageCountBeforeDelete)
-        XCTAssertEqual(deleteSnapshot.userList.map(\.name), [
-            "已有本地歌单", "远端歌单", "LX 导入的 QQ 歌单",
-        ])
+        XCTAssertEqual(Set(deleteSnapshot.userList.map(\.name)), Set([
+            "已有本地歌单", "QQ 公共歌单", "网易云账号副本", "旧版服务端 QQ 收藏歌单",
+            "LX 导入的 QQ 歌单", "QQ 收藏的公开歌单",
+        ]))
         try await waitUntil { service.lastSyncAt != afterCreateSyncAt }
 
         let addedRemotely = LXSyncUserPlaylist(
@@ -172,6 +194,124 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         )
         try await waitUntil { !fixture.store.playlists.contains(where: { $0.name == "服务端新增" }) }
 
+    }
+
+    func testFirstMergeRestoresLegacyExcludedPlaylistAndPublishesStableID() async throws {
+        let fixture = makeFixture()
+        let legacyID = try XCTUnwrap(fixture.store.create(
+            name: "升级前排除的 QQ 歌单",
+            tracks: [sampleTrack(id: 90, name: "不得丢失")],
+            remoteSource: "qq",
+            remotePlaylistID: "legacy-90"
+        ))
+        _ = fixture.store.preparePlaylistsForLXSync() // captures the immutable rollback backup
+        _ = fixture.store.upsertRemotePlaylist(
+            source: "qq",
+            remoteID: "legacy-90",
+            name: "Provider refreshed after backup",
+            coverURL: nil,
+            sourceName: "QQ 音乐",
+            revision: 2,
+            tracks: [sampleTrack(id: 91, name: "备份后更新的歌曲")]
+        )
+        let connectionTask = Task { try await fixture.service.connect() }
+        defer {
+            fixture.service.disconnect()
+            fixture.defaults.removePersistentDomain(forName: fixture.suiteName)
+        }
+        try await waitUntil { fixture.transport.socket != nil }
+        let socket = try XCTUnwrap(fixture.transport.socket)
+        let localSnapshot = try await finishHandshake(
+            socket,
+            initialData: LXSyncListData(),
+            beforeFinished: { socket in
+                XCTAssertFalse(socket.sentMessages.contains(where: Self.isListDataOverwrite))
+            }
+        )
+        XCTAssertTrue(localSnapshot.userList.contains(where: {
+            $0.id == legacyID.uuidString && $0.name == "Provider refreshed after backup"
+                && $0.list.first?.name == "备份后更新的歌曲"
+        }))
+        try await connectionTask.value
+
+        let restored = try XCTUnwrap(fixture.store.playlist(id: legacyID))
+        XCTAssertEqual(restored.lxSyncID, legacyID.uuidString)
+        XCTAssertEqual(restored.name, "Provider refreshed after backup")
+        XCTAssertEqual(restored.tracks.map(\.name), ["备份后更新的歌曲"])
+        let published = try await waitForSnapshot(socket)
+        XCTAssertTrue(published.userList.contains(where: {
+            $0.id == legacyID.uuidString && $0.source == "qq" && $0.sourceListId == "legacy-90"
+        }))
+        XCTAssertNotNil(fixture.defaults.data(
+            forKey: "moumusic.localPlaylists.v1.lxSyncLegacyAccountCopiesBackup.v1"
+        ))
+        try await waitUntil {
+            fixture.defaults.bool(forKey: "imusic.lxSync.legacyAccountPlaylistsMerged.v1")
+        }
+
+        try socket.sendServerCall(
+            id: "delete-migrated",
+            method: "onListSyncAction",
+            arguments: [["action": "list_remove", "data": [legacyID.uuidString]]]
+        )
+        try await waitUntil { fixture.store.playlist(id: legacyID) == nil }
+        try socket.sendServerCall(
+            id: "later-overwrite",
+            method: "onListSyncAction",
+            arguments: [["action": "list_data_overwrite", "data": try jsonObject(LXSyncListData())]]
+        )
+        try await waitForAcknowledgement("later-overwrite", on: socket)
+        try await waitUntil { fixture.store.playlist(id: legacyID) == nil }
+    }
+
+    func testPendingMigrationPublishCannotCrossSocketGeneration() async throws {
+        let fixture = makeFixture()
+        let playlistID = try XCTUnwrap(fixture.store.create(
+            name: "待迁移 QQ 歌单",
+            tracks: [sampleTrack(id: 92, name: "保留")],
+            remoteSource: "qq",
+            remotePlaylistID: "generation-92"
+        ))
+        defer {
+            fixture.service.disconnect()
+            fixture.defaults.removePersistentDomain(forName: fixture.suiteName)
+        }
+
+        let firstConnect = Task { try await fixture.service.connect() }
+        try await waitUntil { fixture.transport.socket != nil }
+        let oldSocket = try XCTUnwrap(fixture.transport.socket)
+        let _ = try await finishHandshake(
+            oldSocket,
+            initialData: LXSyncListData(),
+            beforeFinished: { $0.deferListOverwriteAcknowledgement = true }
+        )
+        try await firstConnect.value
+        _ = try await waitForSnapshot(oldSocket)
+        try oldSocket.sendServerCall(
+            id: "delete-during-pending-migration",
+            method: "onListSyncAction",
+            arguments: [["action": "list_remove", "data": [playlistID.uuidString]]]
+        )
+        try await waitForAcknowledgement("delete-during-pending-migration", on: oldSocket)
+        try await waitUntil { fixture.store.playlist(id: playlistID) == nil }
+
+        fixture.service.disconnect()
+        let secondConnect = Task { try await fixture.service.connect() }
+        try await waitUntil { fixture.transport.socket !== oldSocket }
+        let currentSocket = try XCTUnwrap(fixture.transport.socket)
+        _ = try await finishHandshake(currentSocket, initialData: LXSyncListData())
+        try await secondConnect.value
+
+        oldSocket.releaseDeferredListOverwriteAcknowledgement()
+        let currentSnapshot = try await waitForSnapshot(currentSocket)
+        XCTAssertFalse(currentSnapshot.userList.contains(where: { $0.id == playlistID.uuidString }))
+        XCTAssertNil(fixture.store.playlist(id: playlistID))
+        try await waitUntil {
+            fixture.defaults.bool(forKey: "imusic.lxSync.legacyAccountPlaylistsMerged.v1")
+        }
+        XCTAssertFalse(currentSocket.sentMessages.contains(where: { message in
+            message.contains("__onListSyncAction__") && message.contains("generation-92")
+        }))
     }
 
     func testAuthenticationFailureDoesNotOpenSocketOrReportConnected() async {
@@ -254,7 +394,11 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         )
     }
 
-    private func finishHandshake(_ socket: FakeSocket, initialData: LXSyncListData) async throws {
+    private func finishHandshake(
+        _ socket: FakeSocket,
+        initialData: LXSyncListData,
+        beforeFinished: (@MainActor (FakeSocket) -> Void)? = nil
+    ) async throws -> LXSyncListData {
         try socket.sendServerCall(id: "features", method: "getEnabledFeatures")
         try await waitForAcknowledgement("features", on: socket)
 
@@ -263,10 +407,6 @@ final class LXSyncClientIntegrationTests: XCTestCase {
 
         try socket.sendServerCall(id: "local-data", method: "list_sync_get_list_data")
         let localSnapshot = try await waitForSnapshotResponse("local-data", on: socket)
-        XCTAssertTrue(localSnapshot.userList.contains(where: { $0.name == "已有本地歌单" }))
-        XCTAssertFalse(localSnapshot.userList.contains(where: { $0.source == "qq" || $0.source == "tx" }))
-        XCTAssertTrue(localSnapshot.loveList.contains(where: { $0.name == "本地收藏" }))
-
         try socket.sendServerCall(
             id: "initial-data",
             method: "list_sync_set_list_data",
@@ -277,8 +417,17 @@ final class LXSyncClientIntegrationTests: XCTestCase {
         try socket.sendServerCall(id: "sync-finished", method: "list_sync_finished")
         try await waitForAcknowledgement("sync-finished", on: socket)
 
+        beforeFinished?(socket)
         try socket.sendServerCall(id: "finished", method: "finished")
         try await waitForAcknowledgement("finished", on: socket)
+        return localSnapshot
+    }
+
+    private static func isListDataOverwrite(_ message: String) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any],
+              let arguments = object["data"] as? [[String: Any]],
+              let action = arguments.first else { return false }
+        return action["action"] as? String == "list_data_overwrite"
     }
 
     private func waitForAcknowledgement(_ id: String, on socket: FakeSocket) async throws {
@@ -426,7 +575,9 @@ private final class FakeTransport: LXSyncTransport {
 @MainActor
 private final class FakeSocket: LXSyncSocket {
     private(set) var sentMessages: [String] = []
+    var deferListOverwriteAcknowledgement = false
     private var incoming: [URLSessionWebSocketTask.Message] = []
+    private var deferredListOverwriteAcknowledgements: [String] = []
     private var receiver: CheckedContinuation<URLSessionWebSocketTask.Message, Error>?
     var response: URLResponse? {
         HTTPURLResponse(url: URL(string: "wss://sync.example.test/socket")!, statusCode: 101, httpVersion: "HTTP/1.1", headerFields: nil)
@@ -445,8 +596,15 @@ private final class FakeSocket: LXSyncSocket {
         let decoded = try LXSyncWireCodec.decode(frame)
         sentMessages.append(decoded)
         guard let object = try? JSONSerialization.jsonObject(with: Data(decoded.utf8)) as? [String: Any],
-              object["path"] is [String],
+              let path = object["path"] as? [String],
               let id = object["name"] as? String else { return }
+        if deferListOverwriteAcknowledgement,
+           path.last == "onListSyncAction",
+           let arguments = object["data"] as? [[String: Any]],
+           arguments.first?["action"] as? String == "list_data_overwrite" {
+            deferredListOverwriteAcknowledgements.append(id)
+            return
+        }
         try sendFrame(["name": id, "error": NSNull(), "data": NSNull()])
     }
 
@@ -462,6 +620,13 @@ private final class FakeSocket: LXSyncSocket {
             "path": [method],
             "data": arguments,
         ])
+    }
+
+    func releaseDeferredListOverwriteAcknowledgement() {
+        for id in deferredListOverwriteAcknowledgements {
+            try? sendFrame(["name": id, "error": NSNull(), "data": NSNull()])
+        }
+        deferredListOverwriteAcknowledgements.removeAll()
     }
 
     private func sendFrame(_ value: Any) throws {

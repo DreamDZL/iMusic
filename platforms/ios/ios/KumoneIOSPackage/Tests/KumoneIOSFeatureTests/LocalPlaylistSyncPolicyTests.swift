@@ -2,22 +2,22 @@ import XCTest
 @testable import KumoneCore
 
 final class LocalPlaylistSyncPolicyTests: XCTestCase {
-    func testLXSyncExcludesQQAndNeteaseAccountPlaylistCopies() {
-        XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(LocalPlaylist(
+    func testLXSyncIncludesEveryProviderPlaylistAndPreservesIdentityAliases() {
+        XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(LocalPlaylist(
             name: "QQ 收藏歌单", remoteSource: "qq", remotePlaylistID: "42"
         )))
-        XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(LocalPlaylist(
+        XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(LocalPlaylist(
             name: "网易云歌单", remoteSource: "netease", remotePlaylistID: "84"
         )))
         XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(source: "tx"))
         XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(source: "wy"))
-        XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(LXSyncUserPlaylist(
+        XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(LXSyncUserPlaylist(
             id: "old-qq-copy",
             name: "旧 QQ 收藏歌单",
             source: "qq",
             iMusicSourceName: "QQ 音乐"
         )))
-        XCTAssertFalse(LocalPlaylistSyncPolicy.shouldSyncToLX(LXSyncUserPlaylist(
+        XCTAssertTrue(LocalPlaylistSyncPolicy.shouldSyncToLX(LXSyncUserPlaylist(
             id: "old-netease-copy",
             name: "旧网易云歌单",
             source: "netease",
@@ -49,6 +49,34 @@ final class LocalPlaylistSyncPolicyTests: XCTestCase {
             source: "kw",
             iMusicSourceName: "酷我"
         )))
+    }
+
+    @MainActor
+    func testLegacyExcludedAccountPlaylistsAreBackedUpOnceBeforeSyncIDsAreAssigned() throws {
+        let suiteName = "LocalPlaylistLegacyLXBackupTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let legacy = LocalPlaylist(
+            name: "升级前 QQ 副本",
+            remoteSource: "qq",
+            remotePlaylistID: "playlist-7",
+            tracks: [track(id: 7, name: "保留歌曲")]
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        defaults.set(try encoder.encode([legacy]), forKey: "moumusic.localPlaylists.v1")
+
+        let store = LocalPlaylistStore(defaults: defaults)
+        let eligible = store.preparePlaylistsForLXSync()
+        let backup = store.legacyLXSyncPlaylistBackup()
+        _ = store.preparePlaylistsForLXSync()
+
+        XCTAssertEqual(eligible.count, 1)
+        XCTAssertEqual(eligible[0].lxSyncID, legacy.id.uuidString)
+        XCTAssertEqual(backup.map(\.id), [legacy.id])
+        XCTAssertEqual(backup.first?.remoteSource, "qq")
+        XCTAssertEqual(backup.first?.tracks.map(\.name), ["保留歌曲"])
+        XCTAssertNotNil(defaults.data(forKey: "moumusic.localPlaylists.v1.lxSyncLegacyAccountCopiesBackup.v1"))
     }
 
     @MainActor
@@ -122,6 +150,30 @@ final class LocalPlaylistSyncPolicyTests: XCTestCase {
 
         XCTAssertFalse(LocalPlaylistSyncPolicy.isProviderRefreshEnabled(legacyImport))
         XCTAssertTrue(LocalPlaylistSyncPolicy.isProviderRefreshEnabled(selectedImport))
+    }
+
+    func testProviderRefreshPermissionIsLocalAndIsNotGrantedByAnotherDeviceSnapshot() {
+        let optedInLocally = LocalPlaylist(
+            name: "本机已授权",
+            remoteSource: "qq",
+            remotePlaylistID: "42",
+            providerSyncEnabled: true
+        )
+        let remote = LXSyncUserPlaylist(
+            id: "stable-id",
+            name: "远端副本",
+            source: "qq",
+            sourceListId: "42"
+        )
+
+        let samePlaylist = LocalPlaylistSyncPolicy.merge(remote, with: optedInLocally)
+        let otherDevice = LocalPlaylistSyncPolicy.merge(remote, with: nil)
+
+        XCTAssertTrue(LocalPlaylistSyncPolicy.isProviderRefreshEnabled(samePlaylist))
+        XCTAssertNil(otherDevice.providerSyncEnabled)
+        XCTAssertFalse(LocalPlaylistSyncPolicy.isProviderRefreshEnabled(otherDevice))
+        XCTAssertEqual(samePlaylist.remoteSource, "qq")
+        XCTAssertEqual(samePlaylist.remotePlaylistID, "42")
     }
 
     func testNewOptionalProviderFlagDecodesLegacyPlaylistData() throws {

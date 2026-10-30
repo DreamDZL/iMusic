@@ -46,23 +46,15 @@ struct LocalPlaylist: Codable, Hashable, Identifiable {
 }
 
 enum LocalPlaylistSyncPolicy {
-    /// LX Sync owns LX/local playlists. Account mirrors from QQ Music and
-    /// NetEase stay on this device as provider imports and never enter the LX
-    /// server's `userList` collection. LX's `tx`/`wy` identifiers also describe
-    /// ordinary imported lists, so they must not be treated as account mirrors.
+    /// Every playlist in the user's library participates in LX Sync. Provider
+    /// identity remains part of the playlist metadata; provider refresh consent
+    /// is deliberately stored locally and is not part of the wire model.
     static func shouldSyncToLX(_ playlist: LocalPlaylist) -> Bool {
         shouldSyncToLX(source: playlist.remoteSource)
     }
 
     static func shouldSyncToLX(source: String?) -> Bool {
-        let normalizedSource = source?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased() ?? ""
-        let accountSources: Set<String> = [
-            "qq", "qqmusic", "qq-music",
-            "netease", "neteasecloudmusic", "netease-cloud-music", "cloudmusic", "163",
-        ]
-        return !accountSources.contains(normalizedSource)
+        true
     }
 
     static func shouldSyncToLX(_ playlist: LXSyncUserPlaylist) -> Bool {
@@ -312,6 +304,9 @@ final class LocalPlaylistStore: ObservableObject {
     private let key = "moumusic.localPlaylists.v1"
     private let favoritesKey = "imusic.localFavorites.v1"
     private let recentTracksKey = "imusic.recentTracks.v1"
+    /// Retained even after the one-time account-playlist migration completes,
+    /// so users can recover the pre-sync copies or roll back the app version.
+    private let lxSyncLegacyPlaylistBackupKey = "moumusic.localPlaylists.v1.lxSyncLegacyAccountCopiesBackup.v1"
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -402,6 +397,7 @@ final class LocalPlaylistStore: ObservableObject {
     /// Assign stable LX list identifiers once so local lists remain addressable
     /// after another device merges them through the sync server.
     func preparePlaylistsForLXSync() -> [LocalPlaylist] {
+        preserveLegacyLXSyncExcludedPlaylists()
         var changed = false
         for index in playlists.indices
         where LocalPlaylistSyncPolicy.shouldSyncToLX(playlists[index])
@@ -413,16 +409,46 @@ final class LocalPlaylistStore: ObservableObject {
         return playlists.filter(LocalPlaylistSyncPolicy.shouldSyncToLX)
     }
 
+    func legacyLXSyncPlaylistBackup() -> [LocalPlaylist] {
+        guard let data = defaults.data(forKey: lxSyncLegacyPlaylistBackupKey) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode([LocalPlaylist].self, from: data))
+            ?? (try? JSONDecoder().decode([LocalPlaylist].self, from: data))
+            ?? []
+    }
+
+    /// Returns the current account-copy rows eligible for the one-time legacy
+    /// merge. Unlike the immutable recovery backup, these rows reflect provider
+    /// refreshes and local edits made since the backup was captured.
+    func currentLegacyLXSyncMigrationCandidates() -> [LocalPlaylist] {
+        preparePlaylistsForLXSync().filter { Self.wasExcludedByLegacyLXPolicy($0.remoteSource) }
+    }
+
+    private static func wasExcludedByLegacyLXPolicy(_ rawSource: String?) -> Bool {
+        let source = rawSource?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return ["qq", "qqmusic", "qq-music", "netease", "neteasecloudmusic",
+                "netease-cloud-music", "cloudmusic", "163"].contains(source)
+    }
+
+    private func preserveLegacyLXSyncExcludedPlaylists() {
+        guard defaults.data(forKey: lxSyncLegacyPlaylistBackupKey) == nil else { return }
+        // These are exactly the source aliases excluded by the previous policy.
+        // Save the original rows before assigning sync IDs or applying a remote
+        // snapshot; the backup is intentionally immutable and retained.
+        let legacyCopies = playlists.filter { Self.wasExcludedByLegacyLXPolicy($0.remoteSource) }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(legacyCopies) else { return }
+        defaults.set(data, forKey: lxSyncLegacyPlaylistBackupKey)
+    }
+
     func replaceFromLXSync(playlists syncedPlaylists: [LXSyncUserPlaylist], favorites: [Track]) {
-        let lxLists = syncedPlaylists.filter {
-            LocalPlaylistSyncPolicy.shouldSyncToLX($0)
-        }
-        let localAccountCopies = playlists.filter { !LocalPlaylistSyncPolicy.shouldSyncToLX($0) }
         let synchronizedLists = LocalPlaylistSyncPolicy.mergeAll(
-            lxLists,
-            currentPlaylists: playlists.filter(LocalPlaylistSyncPolicy.shouldSyncToLX)
+            syncedPlaylists.filter(LocalPlaylistSyncPolicy.shouldSyncToLX),
+            currentPlaylists: playlists
         )
-        playlists = synchronizedLists + localAccountCopies
+        playlists = synchronizedLists
         favoriteTracks = favorites.map { $0.normalizedForLXPlayback() }
         persist(notifySync: false)
         persistFavorites(notifySync: false)

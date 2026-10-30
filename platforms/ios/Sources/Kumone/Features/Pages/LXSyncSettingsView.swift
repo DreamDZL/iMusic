@@ -20,7 +20,7 @@ struct LXSyncSettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         } else {
-                            Text("连接后会同步收藏与兼容歌单")
+                            Text("连接后会同步我喜欢的音乐与全部播放列表")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -91,7 +91,7 @@ struct LXSyncSettingsView: View {
 
             Section {
                 Label("我喜欢的音乐", systemImage: "heart.fill")
-                Label("本地歌单、导入歌单及歌单内歌曲", systemImage: "music.note.list")
+                Label("全部播放列表、收藏歌单及歌单内歌曲", systemImage: "music.note.list")
                 Label("歌单名称、曲目顺序与来源标记", systemImage: "arrow.up.arrow.down")
                 Text("QQ 音乐和网易云歌单导入后是本地副本；iMusic 的增删改只同步到 LX Sync，不会写回平台账号。LX Sync 不同步音源脚本，音源需要在每台设备分别导入。")
                     .font(.footnote)
