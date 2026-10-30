@@ -58,9 +58,9 @@ final class LocalPlaylistSyncPolicyTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let legacy = LocalPlaylist(
             name: "升级前 QQ 副本",
+            tracks: [track(id: 7, name: "保留歌曲")],
             remoteSource: "qq",
-            remotePlaylistID: "playlist-7",
-            tracks: [track(id: 7, name: "保留歌曲")]
+            remotePlaylistID: "playlist-7"
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
