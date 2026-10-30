@@ -1,6 +1,24 @@
 import XCTest
 
 final class KumoneIOSUITests: XCTestCase {
+    @MainActor
+    private func assertEventually(
+        _ query: XCUIElementQuery,
+        count expectedCount: Int,
+        timeout: TimeInterval,
+        message: String
+    ) {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in query.count == expectedCount },
+            object: nil
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [expectation], timeout: timeout),
+            .completed,
+            message
+        )
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
@@ -138,6 +156,9 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(lyricsScroll.waitForExistence(timeout: 10))
         let transportControls = app.descendants(matching: .any)["lyricsTransportControls"]
         let volumeControl = app.descendants(matching: .any)["lyricsVolumeControl"]
+        let initialVisibleControls = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier IN %@", ["lyricsTransportControls", "lyricsVolumeControl"])
+        )
         let songTransportControls = app.descendants(matching: .any)["nowPlayingTransportControls"]
         // Wait for the initial auto-hide before tapping the reveal footprint.
         // Otherwise a fast simulator could tap the still-visible play button.
@@ -152,8 +173,12 @@ final class KumoneIOSUITests: XCTestCase {
         // The lyrics page animates its control reveal after the navigation
         // transition. Assert eventual visibility rather than sampling the
         // first frame after the tap, which is flaky on slower CI simulators.
-        XCTAssertTrue(transportControls.waitForExistence(timeout: 5))
-        XCTAssertTrue(volumeControl.waitForExistence(timeout: 5))
+        assertEventually(
+            initialVisibleControls,
+            count: 2,
+            timeout: 5,
+            message: "Lyrics transport and volume controls must be visible together after reveal"
+        )
         XCTAssertTrue(accessoryControls.exists, "The accessory row must stay visible on both player pages")
         XCTAssertEqual(accessoryControls.frame.midY, songAccessoryMidY, accuracy: 1.0,
                        "The accessory row must not jump when switching to lyrics")
@@ -174,11 +199,23 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(lyricsPage.exists, "Vertical lyric scrolling must not navigate away from lyrics")
         XCTAssertFalse(transportControls.exists, "Transport controls must remain hidden until the playback deck is tapped")
         bottomControls.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
-        XCTAssertTrue(transportControls.waitForExistence(timeout: 2),
-                      "Tapping the playback deck must reveal lyrics transport controls")
+        let revealedPlaybackState = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier IN %@ OR (elementType == %@ AND label == %@) OR (elementType == %@ AND label == %@)",
+                ["lyricsTransportControls", "lyricsVolumeControl"],
+                NSNumber(value: XCUIElement.ElementType.staticText.rawValue), "0:14",
+                NSNumber(value: XCUIElement.ElementType.button.rawValue), "选择播放音质，当前为请求 320 kbps"
+            )
+        )
+        assertEventually(
+            revealedPlaybackState,
+            count: 4,
+            timeout: 2,
+            message: "Revealed playback state must simultaneously contain transport, volume, 0:14, and the current quality button"
+        )
         XCTAssertTrue(app.buttons["showSynchronizedLyrics"].exists, "Lyrics need the same bottom toolbar")
-        XCTAssertTrue(app.staticTexts["0:14"].exists, "Scrolling and revealing controls must not seek")
-        XCTAssertTrue(app.buttons["选择播放音质，当前为请求 320 kbps"].exists)
+        // Time and quality were checked in the same snapshot above; querying
+        // them again serially could run past the real three-second auto-hide.
         app.buttons["showSynchronizedLyrics"].tap()
         XCTAssertTrue(songTransportControls.waitForExistence(timeout: 5))
         XCTAssertTrue(songPage.exists)
