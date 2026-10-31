@@ -632,6 +632,14 @@ final class LocalPlaylistStore: ObservableObject {
         ToastCenter.shared.show("已添加到「\(playlists[index].name)」")
     }
 
+    /// True when every given track is already in the playlist, using the same
+    /// source-aware key as `add`. False for an empty group or unknown list.
+    func containsAll(_ tracks: [Track], in playlistID: UUID) -> Bool {
+        guard !tracks.isEmpty, let playlist = playlist(id: playlistID) else { return false }
+        let keys = Set(playlist.tracks.map(trackKey))
+        return tracks.allSatisfy { keys.contains(trackKey($0)) }
+    }
+
     /// Adds a group of tracks while preserving the order supplied by the caller.
     /// Local playlists are source-agnostic, so duplicates are skipped using the
     /// same source-aware key as the single-track API.

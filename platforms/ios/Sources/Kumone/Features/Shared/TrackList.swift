@@ -675,6 +675,10 @@ struct TrackListView: View {
 
 // MARK: - Add to playlist
 
+/// The system "add to playlist" sheet pattern: a full-height navigation sheet
+/// showing what is being saved, then a New Playlist row and the library's
+/// playlists with their artwork. Lists that already hold the selection carry
+/// a checkmark; a search field filters them by name.
 struct AddToPlaylistSheet: View {
     let tracks: [Track]
 
@@ -688,102 +692,238 @@ struct AddToPlaylistSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var localStore = LocalPlaylistStore.shared
+    @State private var query = ""
+    @State private var showCreate = false
     @State private var newName = ""
+    /// Name of the playlist that already holds the selection, while its
+    /// notice is shown.
+    @State private var alreadySavedName: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("收藏到歌单")
-                .font(.headline)
-                .padding(16)
-            Divider().opacity(0.4)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
-                    Text("本地歌单")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 10)
-                        .padding(.top, 8)
-                    if localStore.playlists.isEmpty {
-                        Text("还没有本地歌单，可在下方新建")
-                            .font(.footnote)
-                            .foregroundStyle(.tertiary)
-                            .padding(10)
-                    } else {
-                        ForEach(localStore.playlists) { playlist in
-                            Button {
-                                add(to: playlist)
-                            } label: {
-                                playlistRow(
-                                    name: playlist.name,
-                                    count: playlist.tracks.count,
-                                    coverURL: playlist.coverURL
-                                )
-                            }
-                            .buttonStyle(.interactiveRow)
+        NavigationStack {
+            List {
+                if query.isEmpty {
+                    Section {
+                        selectionSummary
+                    }
+                }
+
+                Section {
+                    Button {
+                        newName = ""
+                        showCreate = true
+                    } label: {
+                        newPlaylistRow
+                    }
+                    .accessibilityIdentifier("addToPlaylistNewPlaylist")
+
+                    ForEach(filteredPlaylists) { playlist in
+                        let saved = isSaved(in: playlist)
+                        Button {
+                            add(to: playlist, alreadySaved: saved)
+                        } label: {
+                            playlistRow(playlist, saved: saved)
                         }
+                        .accessibilityValue(saved ? Text("已在此歌单中") : Text(""))
                     }
 
+                    if !query.isEmpty && filteredPlaylists.isEmpty {
+                        Text("没有找到“\(query)”")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .listRowSeparator(.hidden)
+                    }
+                } footer: {
+                    if localStore.playlists.isEmpty {
+                        Text(tracks.count == 1
+                             ? "还没有歌单。新建一个，这首歌会直接存进去。"
+                             : "还没有歌单。新建一个，这些歌曲会直接存进去。")
+                    }
                 }
-                .padding(8)
+                // Nothing to save (an empty playlist with no selection).
+                .disabled(tracks.isEmpty)
             }
-            .frame(height: 300)
-            Divider().opacity(0.4)
-            HStack {
-                TextField("新建本地歌单", text: $newName)
-                    .textFieldStyle(.roundedBorder)
-                Button("创建") {
-                    createLocalAndAdd()
+            .listStyle(.plain)
+            .navigationTitle("收藏到歌单")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(
+                text: $query,
+                placement: .navigationBarDrawer(displayMode: .automatic),
+                prompt: "搜索歌单"
+            )
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                        .accessibilityIdentifier("addToPlaylistCancel")
                 }
-                .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            .padding(12)
+            .alert("新建歌单", isPresented: $showCreate) {
+                TextField("歌单名称", text: $newName)
+                Button("创建") { createAndAdd() }
+                    .disabled(trimmedNewName.isEmpty)
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text(tracks.count == 1 ? "这首歌会添加到新歌单。" : "这些歌曲会添加到新歌单。")
+            }
+            // Shown in the sheet: the app's toast overlay sits beneath it.
+            .alert(
+                "已在歌单中",
+                isPresented: Binding(
+                    get: { alreadySavedName != nil },
+                    set: { if !$0 { alreadySavedName = nil } }
+                )
+            ) {
+                Button("好", role: .cancel) {}
+            } message: {
+                Text(tracks.count == 1
+                     ? "「\(alreadySavedName ?? "")」里已经有这首歌。"
+                     : "「\(alreadySavedName ?? "")」里已经有这些歌曲。")
+            }
         }
-        .frame(width: 340)
+        #if os(iOS)
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        #else
+        .frame(width: 380, height: 520)
+        #endif
     }
 
-    private func playlistRow(name: String, count: Int, coverURL: String?) -> some View {
-        HStack(spacing: 10) {
-            CachedAsyncImage(url: coverURL?.resizedImageURL(80), animated: false)
-                .frame(width: 36, height: 36)
-                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay {
-                    if coverURL == nil {
-                        Image(systemName: "music.note.list")
-                            .font(.caption)
-                            .foregroundStyle(Theme.accent)
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    // MARK: Rows
+
+    /// What is being saved: the song's cover, title and artist, or the
+    /// number of songs for a multi-selection.
+    private var selectionSummary: some View {
+        HStack(spacing: 12) {
+            artwork(url: tracks.first?.album.picUrl, size: 48, placeholder: "music.note")
             VStack(alignment: .leading, spacing: 2) {
-                Text(name)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text("\(count) 首")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                if tracks.count == 1, let track = tracks.first {
+                    Text(track.name)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+                    Text(track.artistNames)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else {
+                    Text("\(tracks.count) 首歌曲")
+                        .font(.body.weight(.semibold))
+                    Text("将一起添加")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("addToPlaylistSelection")
+    }
+
+    private var newPlaylistRow: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
+                .fill(Theme.ColorToken.controlFill)
+                .frame(width: 56, height: 56)
+                .overlay {
+                    Image(systemName: "plus")
+                        .font(.title2.weight(.medium))
+                        .foregroundStyle(Theme.accent)
+                }
+            Text("新建歌单…")
+                .font(.body)
+                .foregroundStyle(Theme.accent)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
         .contentShape(Rectangle())
     }
 
-    private func add(to playlist: LocalPlaylist) {
+    private func playlistRow(_ playlist: LocalPlaylist, saved: Bool) -> some View {
+        HStack(spacing: 12) {
+            artwork(url: playlist.coverURL, size: 56, placeholder: "music.note.list")
+            VStack(alignment: .leading, spacing: 3) {
+                Text(playlist.name)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text("\(playlist.tracks.count) 首")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            if saved {
+                Image(systemName: "checkmark")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+    }
+
+    private func artwork(url: String?, size: CGFloat, placeholder: String) -> some View {
+        CachedAsyncImage(url: url?.resizedImageURL(Int(size * 3)), animated: false)
+            .frame(width: size, height: size)
+            .background(
+                Theme.ColorToken.controlFill,
+                in: RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
+            )
+            .overlay {
+                if url == nil {
+                    Image(systemName: placeholder)
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
+                    .strokeBorder(Theme.ColorToken.subtleBorder, lineWidth: 0.5)
+            }
+            .accessibilityHidden(true)
+    }
+
+    // MARK: Data
+
+    private var filteredPlaylists: [LocalPlaylist] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return localStore.playlists }
+        return localStore.playlists.filter { $0.name.localizedCaseInsensitiveContains(needle) }
+    }
+
+    private var trimmedNewName: String {
+        newName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func isSaved(in playlist: LocalPlaylist) -> Bool {
+        localStore.containsAll(tracks, in: playlist.id)
+    }
+
+    /// Already-saved lists keep the sheet open with a notice instead of
+    /// closing as if something had been added.
+    private func add(to playlist: LocalPlaylist, alreadySaved: Bool) {
+        guard !alreadySaved else {
+            alreadySavedName = playlist.name
+            return
+        }
         let added = localStore.add(tracks, to: playlist.id)
         if added > 0 {
-            ToastCenter.shared.show("已添加 \(added) 首歌曲")
+            ToastCenter.shared.show(tracks.count == 1
+                ? "已添加到「\(playlist.name)」"
+                : "已添加 \(added) 首歌曲到「\(playlist.name)」")
         }
         dismiss()
     }
 
-    private func createLocalAndAdd() {
-        let name = newName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
-        _ = localStore.create(name: name, tracks: tracks)
+    private func createAndAdd() {
+        let name = trimmedNewName
+        guard !name.isEmpty, localStore.create(name: name, tracks: tracks) != nil else { return }
         ToastCenter.shared.show("已收藏到「\(name)」")
         dismiss()
     }
-
 }

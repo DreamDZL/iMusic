@@ -34,7 +34,10 @@ final class KumoneIOSUITests: XCTestCase {
     ) {
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
-                element.exists && abs(element.frame.midY - expected) <= 1
+                // A snapshot, not `frame`: reading `frame` of an element that
+                // vanished between checks is a fatal test error.
+                guard let snapshot = try? element.snapshot() else { return false }
+                return abs(snapshot.frame.midY - expected) <= 1
             },
             object: nil
         )
@@ -217,6 +220,25 @@ final class KumoneIOSUITests: XCTestCase {
         songAttachment.lifetime = .keepAlways
         add(songAttachment)
 
+        // The add-to-playlist sheet is a full navigation sheet: title bar,
+        // cancel, the song being saved and a New Playlist row.
+        app.buttons["更多操作"].firstMatch.tap()
+        let addToPlaylist = app.buttons["加入歌单…"]
+        XCTAssertTrue(addToPlaylist.waitForExistence(timeout: 5))
+        addToPlaylist.tap()
+        let sheetBar = app.navigationBars["收藏到歌单"]
+        XCTAssertTrue(sheetBar.waitForExistence(timeout: 5), "Add to playlist must open as a titled sheet")
+        XCTAssertTrue(app.buttons["addToPlaylistNewPlaylist"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["addToPlaylistSelection"].exists,
+                      "The sheet must show the song being saved")
+        let sheetAttachment = XCTAttachment(screenshot: app.screenshot())
+        sheetAttachment.name = "iMusic-收藏到歌单"
+        sheetAttachment.lifetime = .keepAlways
+        add(sheetAttachment)
+        app.buttons["addToPlaylistCancel"].tap()
+        XCTAssertTrue(sheetBar.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(songPage.waitForExistence(timeout: 5))
+
         app.buttons["showSynchronizedLyrics"].tap()
         let lyricsPage = app.descendants(matching: .any)["appleMusicLyricsPage"]
         XCTAssertTrue(lyricsPage.waitForExistence(timeout: 10))
@@ -346,7 +368,6 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(songPage.waitForExistence(timeout: 10))
         let accessoryControls = app.buttons["showSynchronizedLyrics"]
         XCTAssertTrue(accessoryControls.waitForExistence(timeout: 5))
-        let songAccessoryMidY = accessoryControls.frame.midY
 
         accessoryControls.tap()
         let lyricsPage = app.descendants(matching: .any)["appleMusicLyricsPage"]
@@ -358,8 +379,8 @@ final class KumoneIOSUITests: XCTestCase {
         let volumeControl = app.descendants(matching: .any)["lyricsVolumeControl"]
         // The real three-second window can finish during XCTest navigation
         // waits. The long interaction test separately verifies visible controls;
-        // this default-policy smoke verifies eventual full-screen hiding and
-        // that a tap in the lower area restores the row at its position.
+        // this default-policy smoke verifies eventual full-screen hiding,
+        // that a tap in the lower area restores the row, and pull-to-close.
         XCTAssertTrue(transportControls.waitForNonExistence(timeout: 7),
                       "Default lyrics transport controls must eventually auto-hide")
         XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 7),
@@ -367,10 +388,10 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(accessoryControls.waitForNonExistence(timeout: 5),
                       "Full-screen lyrics must hide the accessory row")
         lyricsPage.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
+        // Only presence here: the default 3s auto-hide races a position
+        // check. The extended-controls test asserts the fixed position.
         XCTAssertTrue(accessoryControls.waitForExistence(timeout: 5),
                       "A tap in the lower area must bring the controls back")
-        assertSettles(accessoryControls, atMidY: songAccessoryMidY,
-                      message: "The accessory row must reappear at its fixed position")
 
         // Pulling the grabber down must close the player (the card follows
         // the finger and the drag must survive its corner-rounding update).

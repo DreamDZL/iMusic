@@ -317,3 +317,12 @@
 "不循环" = "Off";
 "列表循环" = "Repeat All";
 "单曲循环" = "Repeat One";
+
+/* Add to playlist sheet */
+"新建歌单…" = "New Playlist…";
+"搜索歌单" = "Search Playlists";
+"已在此歌单中" = "Already in this playlist";
+"还没有歌单。新建一个，这首歌会直接存进去。" = "No playlists yet. Create one and this song goes straight in.";
+"将一起添加" = "Will be added together";
+"%lld 首歌曲" = "%lld songs";
+"没有找到“%@”" = "No results for “%@”";
