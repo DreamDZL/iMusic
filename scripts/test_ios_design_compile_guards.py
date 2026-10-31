@@ -77,9 +77,12 @@ class IOSDesignCompileGuards(unittest.TestCase):
         presentation = (ROOT / "Features/Player/NowPlayingPresentation.swift").read_text(encoding="utf-8")
         player = (ROOT / "Features/Player/NowPlayingView.swift").read_text(encoding="utf-8")
         window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")
-        self.assertNotIn(".modifier(NowPlayingDismissDrag(", presentation)
-        self.assertNotIn(".modifier(NowPlayingDismissDrag(", player)
-        self.assertIn("usesSystemInteractiveDismissal: zooms", window)
+        self.assertIn("NativeNowPlayingCover(", window)
+        self.assertIn(".modifier(NativeNowPlayingDismissRequest())", presentation)
+        self.assertIn(".modifier(NativeNowPlayingDismissRequest())", player)
+        wrapper = presentation[presentation.index("struct NativeNowPlayingDismissRequest:"):]
+        for custom_motion in (".scaleEffect(", ".offset(", "withAnimation(", ".animation("):
+            self.assertNotIn(custom_motion, wrapper)
 
     def test_volume_bar_is_not_a_restyled_system_slider(self):
         # Two translucent track images overlapped under the system slider's
@@ -92,25 +95,21 @@ class IOSDesignCompileGuards(unittest.TestCase):
     def test_phone_opening_has_no_opaque_underlay(self):
         window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")
         self.assertNotIn("NowPlayingOpeningUnderlay", window)
-        self.assertIn(".navigationTransition(", window)
-        root = window[window.index("private var presentationRoot"):window.index("private var systemNowPlayingRoot")]
-        self.assertIn("zoomNowPlayingRoot", root)
+        self.assertNotIn("legacyPresentationRoot", window)
+        cover = (ROOT / "Features/Player/NativeNowPlayingCover.swift").read_text(encoding="utf-8")
+        self.assertIn("host.modalTransitionStyle = .crossDissolve", cover)
+        self.assertIn("host.preferredTransition = nil", cover)
+        self.assertIn("host.preferredTransition = .zoom", cover)
+        self.assertLess(cover.index("presenter.present(host, animated: true)"),
+                        cover.index("host.preferredTransition = .zoom"))
+        self.assertNotIn("UIViewControllerAnimatedTransitioning", cover)
+        self.assertNotIn("UIPercentDrivenInteractiveTransition", cover)
+        self.assertNotIn("UIView.animate", cover)
 
-    def test_native_zoom_diagnostics_are_nonpersistent_and_debug_only(self):
+    def test_temporary_native_zoom_diagnostics_are_retired(self):
         window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")
-        diagnostic = window[window.index("enum NowPlayingNativeDiagnostics {"):]
-        diagnostic = diagnostic[:diagnostic.index("@available(iOS 26.0, *)")]
-        self.assertIn("#if DEBUG", diagnostic)
-        self.assertIn('arguments.contains("-imusic-ui-testing")', diagnostic)
-        self.assertIn("#else\n        return false", diagnostic)
-        self.assertNotIn("UserDefaults", diagnostic)
-        player = (ROOT / "Features/Player/NowPlayingView.swift").read_text(encoding="utf-8")
-        self.assertIn("including: gestureMask", player)
-        probe = (ROOT / "Features/Player/NativeZoomRuntimeProbe.swift").read_text(encoding="utf-8")
-        self.assertTrue(probe.startswith("#if os(iOS) && DEBUG\n"))
-        self.assertIn("interactiveDismissShouldBegin", probe)
-        self.assertNotIn("value(forKey:", probe)
-        self.assertNotIn("UIPanGestureRecognizer", probe)
+        self.assertNotIn("NowPlayingNativeDiagnostics", window)
+        self.assertFalse((ROOT / "Features/Player/NativeZoomRuntimeProbe.swift").exists())
 
     def test_tertiary_token_is_a_concrete_color(self):
         source = (ROOT / "DesignSystem/Theme.swift").read_text(encoding="utf-8")

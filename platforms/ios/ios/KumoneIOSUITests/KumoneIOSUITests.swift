@@ -594,137 +594,75 @@ final class KumoneIOSUITests: XCTestCase {
     }
 
     @MainActor
-    private func assertIsolatedNativeDismissal(
-        arguments: [String], minimal: Bool = false, stableSource: Bool = false,
-        artwork: Bool = false
-    ) {
+    func testSongPageArtworkDismissesIndependently() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
-        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture"] + arguments
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture"]
         app.launch()
-        let opener = app.buttons[stableSource ? "nativeZoomStableSource" : "miniPlayerOpenNowPlaying"]
-        XCTAssertTrue(opener.waitForExistence(timeout: 15))
-        opener.tap()
-        let destination = app.descendants(matching: .any)[
-            minimal ? "nativeZoomProbeDestination" : "appleMusicSongPage"
-        ]
-        XCTAssertTrue(destination.waitForExistence(timeout: 10))
-        let start: XCUICoordinate
-        if artwork {
-            let cover = app.descendants(matching: .any)["nowPlayingArtworkImage"]
-            XCTAssertTrue(cover.waitForExistence(timeout: 5))
-            start = cover.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
-        } else {
-            // Same absolute start as the real 180×82 grabber target on the
-            // current simulator, without placing a control in the minimal view.
-            let grabber = app.descendants(matching: .any)["nowPlayingDismissIndicator"]
-            if minimal {
-                start = app.coordinate(withNormalizedOffset: .zero).withOffset(
-                    CGVector(dx: app.frame.width * 0.5, dy: 86.6)
-                )
-            } else {
-                XCTAssertTrue(grabber.waitForExistence(timeout: 5))
-                start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
-            }
-        }
-        print("NATIVE-PROBE arguments=\(arguments) artwork=\(artwork) start=\(start.screenPoint)")
+        let miniPlayer = app.buttons["miniPlayerOpenNowPlaying"]
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 15))
+        miniPlayer.tap()
+        let songPage = app.descendants(matching: .any)["appleMusicSongPage"]
+        XCTAssertTrue(songPage.waitForExistence(timeout: 10))
+        let artwork = app.descendants(matching: .any)["nowPlayingArtworkImage"]
+        XCTAssertTrue(artwork.waitForExistence(timeout: 5))
+        let start = artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
         start.press(
             forDuration: 0.05,
-            thenDragTo: start.withOffset(CGVector(dx: 0, dy: artwork ? 260 : 560)),
+            thenDragTo: start.withOffset(CGVector(dx: 0, dy: 260)),
             withVelocity: XCUIGestureVelocity(2400),
             thenHoldForDuration: 0
         )
-        XCTAssertTrue(destination.waitForNonExistence(timeout: 8),
-                      "Native probe must dismiss without fallback: \(arguments), artwork=\(artwork)")
-        XCTAssertTrue(opener.waitForExistence(timeout: 5))
+        XCTAssertTrue(songPage.waitForNonExistence(timeout: 8),
+                      "Artwork must close the native player independently, without a tap fallback")
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 5))
     }
 
     @MainActor
-    func testNativeZoomGestureFreeDestinationFromAccessory() {
-        assertIsolatedNativeDismissal(arguments: ["-imusic-ui-native-zoom-minimal"], minimal: true)
-    }
-
-    @MainActor
-    func testNativeZoomGestureFreeDestinationFromStableSource() {
-        assertIsolatedNativeDismissal(
-            arguments: ["-imusic-ui-native-zoom-minimal", "-imusic-ui-native-zoom-stable-source"],
-            minimal: true, stableSource: true
-        )
-    }
-
-    @MainActor
-    func testSongPageGrabberWithoutPageSwipe() {
-        assertIsolatedNativeDismissal(arguments: ["-imusic-ui-native-zoom-no-page-swipe"])
-    }
-
-    @MainActor
-    func testSongPageArtworkDismissesIndependently() {
-        assertIsolatedNativeDismissal(arguments: [], artwork: true)
-    }
-
-    @MainActor
-    func testSongPageArtworkWithoutPageSwipe() {
-        assertIsolatedNativeDismissal(arguments: ["-imusic-ui-native-zoom-no-page-swipe"], artwork: true)
-    }
-
-    @MainActor
-    func testNativeZoomMinimalDestinationWithSystemSwipe() {
-        let app = XCUIApplication()
-        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture", "-imusic-ui-native-zoom-minimal"]
-        app.launch()
-        let opener = app.buttons["miniPlayerOpenNowPlaying"]
-        XCTAssertTrue(opener.waitForExistence(timeout: 15))
-        opener.tap()
-        let destination = app.descendants(matching: .any)["nativeZoomProbeDestination"]
-        XCTAssertTrue(destination.waitForExistence(timeout: 10))
-        destination.swipeDown(velocity: XCUIGestureVelocity(2400))
-        XCTAssertTrue(destination.waitForNonExistence(timeout: 8),
-                      "A direct system swipe must dismiss the gesture-free native zoom destination")
-    }
-
-    @MainActor
-    private func assertOwnedUIKitDismissal(sheet: Bool) {
+    func testSongPageSubthresholdPullKeepsPlayerOpenThenFullPullDismisses() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
-        app.launchArguments = [
-            "-imusic-ui-testing", "-imusic-ui-player-fixture",
-            sheet ? "-imusic-ui-native-uikit-sheet" : "-imusic-ui-native-uikit-zoom"
-        ]
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture"]
         app.launch()
-        let opener = app.buttons["nativeUIKitProbeOpen"]
-        XCTAssertTrue(opener.waitForExistence(timeout: 15))
-        opener.tap()
-        let destination = app.descendants(matching: .any)["nativeUIKitProbeDestination"]
-        XCTAssertTrue(destination.waitForExistence(timeout: 10))
-        let ready = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value CONTAINS %@", "ready=true"), object: destination
+        let miniPlayer = app.buttons["miniPlayerOpenNowPlaying"]
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 15))
+        miniPlayer.tap()
+        let songPage = app.descendants(matching: .any)["appleMusicSongPage"]
+        XCTAssertTrue(songPage.waitForExistence(timeout: 10))
+        let grabber = app.descendants(matching: .any)["nowPlayingDismissIndicator"]
+        XCTAssertTrue(grabber.waitForExistence(timeout: 5))
+        let originalMidY = grabber.frame.midY
+        let shortStart = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        // This is cancellation of the dismissal request, not an app-owned
+        // interactive shrink. A short, normal-speed pull must keep the page.
+        shortStart.press(
+            forDuration: 0.05,
+            thenDragTo: shortStart.withOffset(CGVector(dx: 0, dy: 25)),
+            withVelocity: .default,
+            thenHoldForDuration: 0
         )
-        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed)
-        let start = app.coordinate(withNormalizedOffset: .zero).withOffset(
-            CGVector(dx: app.frame.width * 0.5, dy: 86.6)
+        let unexpectedDismissal = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: songPage
         )
-        print("NATIVE-UIKIT sheet=\(sheet) before=\(String(describing: destination.value)) frame=\(destination.frame)")
+        unexpectedDismissal.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [unexpectedDismissal], timeout: 1), .completed,
+                       "A subthreshold pull must leave the song page visible")
+        assertSettles(grabber, atMidY: originalMidY,
+                      message: "The grabber must remain at its resting position after cancellation")
+        XCTAssertTrue(songPage.exists)
+        XCTAssertTrue(grabber.isHittable, "The cancelled pull must leave the player interactive")
+
+        // Use the same page, without relaunching, reopening, or tapping close.
+        let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
         start.press(
             forDuration: 0.05,
             thenDragTo: start.withOffset(CGVector(dx: 0, dy: 560)),
             withVelocity: XCUIGestureVelocity(2400),
             thenHoldForDuration: 0
         )
-        let dismissed = destination.waitForNonExistence(timeout: 8)
-        if !dismissed {
-            print("NATIVE-UIKIT sheet=\(sheet) after=\(String(describing: destination.value))")
-        }
-        XCTAssertTrue(dismissed, "Owned UIKit \(sheet ? "sheet" : "zoom") must dismiss with the same direct drag")
-    }
-
-    @MainActor
-    func testOwnedUIKitZoomDismissal() {
-        assertOwnedUIKitDismissal(sheet: false)
-    }
-
-    @MainActor
-    func testOwnedUIKitSheetDismissalControl() {
-        assertOwnedUIKitDismissal(sheet: true)
+        XCTAssertTrue(songPage.waitForNonExistence(timeout: 8),
+                      "A full pull after cancellation must close the native player without a tap fallback")
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 5))
     }
 
     @MainActor

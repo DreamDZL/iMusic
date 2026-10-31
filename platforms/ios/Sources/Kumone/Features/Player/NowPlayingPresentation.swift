@@ -243,104 +243,67 @@ struct PlayerCardClip: ViewModifier {
     }
 }
 
-/// Owns presentation mechanics for Now Playing. The compact player draws one
-/// accessible drag indicator because full-screen covers do not consistently
-/// display the system sheet indicator.
+enum NativeNowPlayingDismissPolicy {
+    static func shouldRequestDismiss(translation: CGSize, predicted: CGSize) -> Bool {
+        guard translation.width.isFinite, translation.height.isFinite,
+              predicted.width.isFinite, predicted.height.isFinite,
+              translation.height >= 44,
+              translation.height > abs(translation.width) * 1.25 else { return false }
+        return translation.height > NowPlayingPresentationMetrics.dismissDistance
+            || (predicted.height > NowPlayingPresentationMetrics.dismissPrediction
+                && predicted.height > abs(predicted.width) * 1.25)
+    }
+}
+
+/// A downward pull only requests dismissal. UIKit alone animates the cover;
+/// this modifier never changes a view's position, scale, opacity or timing.
+struct NativeNowPlayingDismissRequest: ViewModifier {
+    @Environment(\.dismissNowPlayingAction) private var dismiss
+
+    func body(content: Content) -> some View {
+        content.simultaneousGesture(
+            DragGesture(minimumDistance: 14)
+                .onEnded { value in
+                    guard NativeNowPlayingDismissPolicy.shouldRequestDismiss(
+                        translation: value.translation, predicted: value.predictedEndTranslation
+                    ) else { return }
+                    dismiss?()
+                }
+        )
+    }
+}
+
+/// Player content and one accessible close target, without a custom animator.
 struct IOSNowPlayingPresentation<Content: View>: View {
-    private let usesSystemInteractiveDismissal: Bool
-    private let dismissAnimation: Animation?
     private let content: Content
 
     @Binding private var isPresented: Bool
-    @State private var dragOffset: CGFloat = 0
 
     init(
         isPresented: Binding<Bool>,
-        usesSystemInteractiveDismissal: Bool = false,
-        dismissAnimation: Animation? = NowPlayingPresentationMetrics.presentationAnimation,
         @ViewBuilder content: () -> Content
     ) {
         _isPresented = isPresented
-        self.usesSystemInteractiveDismissal = usesSystemInteractiveDismissal
-        self.dismissAnimation = dismissAnimation
         self.content = content()
     }
 
     var body: some View {
-        Group {
-            if usesSystemInteractiveDismissal && UIDevice.current.userInterfaceIdiom == .phone {
-                // The native destination needs no geometry wrapper or custom
-                // transform. Its artwork root fills the presentation, while
-                // NowPlayingView measures the safe area for its controls.
-                playerSurface(isInteractive: true, progress: 0, usesCustomDrag: false)
-            } else {
-                compatibilityPresentation
-            }
+        ZStack(alignment: .top) {
+            content
+            dragIndicator
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .environment(\.dismissNowPlayingAction, dismiss)
         .accessibilityAction(.escape, dismiss)
     }
 
-    private var compatibilityPresentation: some View {
-        GeometryReader { proxy in
-            let isPhone = UIDevice.current.userInterfaceIdiom == .phone
-            let isInteractive = isPhone || proxy.size.width < 720
-            let usesCustomDrag = isInteractive && !usesSystemInteractiveDismissal
-
-            let progress = usesCustomDrag
-                ? NowPlayingPresentationMetrics.dismissProgress(
-                    dragOffset: dragOffset, height: proxy.size.height)
-                : 0
-            if usesSystemInteractiveDismissal {
-                // The system alone transforms the zoom destination. Do not
-                // attach even an identity custom scale/offset to this host.
-                playerSurface(isInteractive: isInteractive, progress: 0, usesCustomDrag: false)
-            } else {
-                playerSurface(isInteractive: isInteractive, progress: progress, usesCustomDrag: usesCustomDrag)
-                    .scaleEffect(1 - 0.06 * progress, anchor: .top)
-                    .offset(y: usesCustomDrag ? dragOffset : 0)
-            }
-        }
-    }
-
-    private func playerSurface(isInteractive: Bool, progress: CGFloat, usesCustomDrag: Bool) -> some View {
-        ZStack(alignment: .top) {
-            content
-                .environment(\.dismissNowPlayingAction, dismiss)
-                .environment(
-                    \.dismissNowPlayingDragAction,
-                    usesCustomDrag ? dismissDragAction : nil
-                )
-                .environment(
-                    \.playerCardCornerRadius,
-                    NowPlayingPresentationMetrics.dismissCornerRadius(progress: progress)
-                )
-
-            if isInteractive {
-                dragIndicator
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    @ViewBuilder
     private var dragIndicator: some View {
-        if usesSystemInteractiveDismissal {
-            // One non-scrolling hit target, with no custom drag recognizer.
-            // A simultaneous tap leaves the native zoom pan free to recognize
-            // a pull anywhere in the target, not just over the painted capsule.
-            dragIndicatorSurface
-                .contentShape(Rectangle())
-                .simultaneousGesture(TapGesture().onEnded { dismiss() })
-                .accessibilityLabel("下拉关闭播放页")
-                .accessibilityAction(named: Text("关闭播放页"), dismiss)
-        } else {
-            dragIndicatorSurface
-                .contentShape(Rectangle())
-                .gesture(tabletDismissGesture)
-                .simultaneousGesture(TapGesture().onEnded { dismiss() })
-                .accessibilityLabel("下拉关闭播放页")
-                .accessibilityAction(named: Text("关闭播放页"), dismiss)
-        }
+        dragIndicatorSurface
+            .contentShape(Rectangle())
+            .modifier(NativeNowPlayingDismissRequest())
+            .simultaneousGesture(TapGesture().onEnded { dismiss() })
+            .accessibilityLabel("下拉关闭播放页")
+            .accessibilityAction(named: Text("关闭播放页"), dismiss)
     }
 
     private var dragIndicatorSurface: some View {
@@ -363,57 +326,8 @@ struct IOSNowPlayingPresentation<Content: View>: View {
         .accessibilityIdentifier("nowPlayingDismissIndicator")
     }
 
-    /// Preserve the existing compact iPad cover interaction.
-    private var tabletDismissGesture: some Gesture {
-        DragGesture(minimumDistance: 3, coordinateSpace: .global)
-            .onChanged { value in
-                updateDismissDrag(value.translation.height)
-            }
-            .onEnded { value in
-                finishDismissDrag(value.translation.height, value.predictedEndTranslation.height)
-            }
-    }
-
-    private var dismissDragAction: NowPlayingDismissDragAction {
-        NowPlayingDismissDragAction(
-            onChanged: { translation in
-                updateDismissDrag(translation)
-            },
-            onEnded: { translation, predicted in
-                finishDismissDrag(translation, predicted)
-            }
-        )
-    }
-
-    private func updateDismissDrag(_ translation: CGFloat) {
-        dragOffset = max(translation, 0)
-    }
-
-    private func finishDismissDrag(_ translation: CGFloat, _ predictedTranslation: CGFloat) {
-        if NowPlayingPresentationMetrics.shouldDismiss(
-            translation: translation,
-            predictedTranslation: predictedTranslation
-        ) {
-            dismiss()
-        } else {
-            resetDismissDrag()
-        }
-    }
-
-    private func resetDismissDrag() {
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-            dragOffset = 0
-        }
-    }
-
     private func dismiss() {
-        if let dismissAnimation {
-            withAnimation(dismissAnimation) {
-                isPresented = false
-            }
-        } else {
-            isPresented = false
-        }
+        isPresented = false
     }
 }
 #endif

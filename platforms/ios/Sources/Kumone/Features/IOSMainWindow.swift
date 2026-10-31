@@ -11,7 +11,7 @@ public struct IOSMainWindow: View {
     @StateObject private var updater = IOSUpdater.shared
     @StateObject private var updateLog = IOSUpdateLogStore.shared
     private let startup = IOSStartupCoordinator.shared
-    @Namespace private var nowPlayingTransition
+    @StateObject private var nowPlayingSource = NativeNowPlayingSource()
     @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -117,107 +117,29 @@ public struct IOSMainWindow: View {
             .animation(.spring(duration: 0.3), value: toasts.current)
     }
 
-    @ViewBuilder
     private var presentationRoot: some View {
-        #if DEBUG
-        if NowPlayingNativeDiagnostics.usesUIKitRuntimeProbe {
-            NativeZoomRuntimeProbe(usesZoom: !NowPlayingNativeDiagnostics.usesUIKitSheetProbe)
-        } else {
-            nativePresentationRoot
-        }
-        #else
-        nativePresentationRoot
-        #endif
-    }
-
-    @ViewBuilder
-    private var nativePresentationRoot: some View {
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            if #available(iOS 18.0, *) {
-                zoomNowPlayingRoot
-            } else {
-                legacyPresentationRoot
-            }
-        } else {
-            systemNowPlayingRoot
-        }
-    }
-
-    private var systemNowPlayingRoot: some View {
         appContent
-            .fullScreenCover(isPresented: $player.showNowPlaying) {
-                systemNowPlayingPresentation(zooms: false)
-            }
-    }
-
-    @available(iOS 18.0, *)
-    private var zoomNowPlayingRoot: some View {
-        appContent
-            .overlay {
-                if NowPlayingNativeDiagnostics.usesStableSource {
-                    Button("Native zoom probe") { player.showNowPlaying = true }
-                        .accessibilityIdentifier("nativeZoomStableSource")
-                        .matchedTransitionSource(id: NowPlayingTransitionID.surface, in: nowPlayingTransition)
-                }
-            }
-            .fullScreenCover(isPresented: $player.showNowPlaying) {
-                Group {
-                    if NowPlayingNativeDiagnostics.usesMinimalDestination {
-                        // Diagnostic destination, not a backing mask: no app
-                        // gestures, scroll views, player wrapper or controls.
-                        Color.teal.ignoresSafeArea()
-                            .accessibilityElement(children: .ignore)
-                            .accessibilityLabel("Native zoom probe")
-                            .accessibilityIdentifier("nativeZoomProbeDestination")
-                    } else {
-                        systemNowPlayingPresentation(zooms: true)
+            .background {
+                NativeNowPlayingCover(
+                    isPresented: $player.showNowPlaying,
+                    source: nowPlayingSource
+                ) {
+                    IOSNowPlayingPresentation(isPresented: $player.showNowPlaying) {
+                        NowPlayingView()
                     }
+                    // A separately hosted root needs explicit dependencies;
+                    // they must not rely on SwiftUI cover environment copying.
+                    .environmentObject(player)
+                    .environmentObject(account)
+                    .environmentObject(settings)
+                    .environmentObject(qqMusic)
+                    .environmentObject(kugou)
+                    .environmentObject(toasts)
+                    .tint(Theme.accent)
+                    .preferredColorScheme(settings.appearance.colorScheme)
                 }
-                    .navigationTransition(
-                        .zoom(sourceID: NowPlayingTransitionID.surface, in: nowPlayingTransition)
-                    )
+                .frame(width: 0, height: 0)
             }
-    }
-
-    @ViewBuilder
-    private func systemNowPlayingPresentation(zooms: Bool) -> some View {
-        if #available(iOS 16.4, *) {
-            nowPlayingPresentation(
-                usesSystemInteractiveDismissal: zooms,
-                dismissAnimation: nil
-            )
-            // fullScreenCover does not reliably expose the sheet grabber. Use
-            // the player's single accessible grabber and suppress any system
-            // indicator if this presentation adapts to a sheet.
-            .presentationDragIndicator(.hidden)
-            .presentationBackground(Color.clear)
-        } else {
-            nowPlayingPresentation(
-                usesSystemInteractiveDismissal: true,
-                dismissAnimation: nil
-            )
-        }
-    }
-
-    private var legacyPresentationRoot: some View {
-        ZStack {
-            appContent
-                .allowsHitTesting(!player.showNowPlaying)
-                .accessibilityHidden(player.showNowPlaying)
-
-            if player.showNowPlaying {
-                // Keep the real app behind the moving card, without a system
-                // cover's rounded opening surface or an opaque underlay.
-                nowPlayingPresentation(
-                    usesSystemInteractiveDismissal: false,
-                    dismissAnimation: NowPlayingPresentationMetrics.presentationAnimation
-                )
-                .accessibilityAddTraits(.isModal)
-                .transition(.move(edge: .bottom))
-                .zIndex(1)
-            }
-        }
-        .animation(NowPlayingPresentationMetrics.presentationAnimation, value: player.showNowPlaying)
     }
 
     @ViewBuilder
@@ -230,22 +152,6 @@ public struct IOSMainWindow: View {
                 .ignoresSafeArea()
             tabInterface
                 .background(Color.clear)
-        }
-    }
-
-    private func nowPlayingPresentation(
-        usesSystemInteractiveDismissal: Bool,
-        dismissAnimation: Animation?
-    ) -> some View {
-        IOSNowPlayingPresentation(
-            isPresented: $player.showNowPlaying,
-            usesSystemInteractiveDismissal: usesSystemInteractiveDismissal,
-            dismissAnimation: dismissAnimation
-        ) {
-            NowPlayingView()
-                .environmentObject(player)
-                .environmentObject(account)
-                .environmentObject(settings)
         }
     }
 
@@ -272,7 +178,7 @@ public struct IOSMainWindow: View {
             // Keep one TabView identity while the accessory appears/disappears.
             .modifier(MiniPlayerAccessoryModifier(
                 isActive: player.hasCurrentTrack,
-                transitionNamespace: nowPlayingTransition,
+                transitionSource: nowPlayingSource,
                 colorScheme: resolvedColorScheme
             ))
             .animation(AppAnimation.standard, value: player.hasCurrentTrack)
@@ -318,7 +224,7 @@ public struct IOSMainWindow: View {
             VStack(spacing: 8) {
                 if player.hasCurrentTrack {
                     IOSMiniPlayerBar(presentation: .legacyOverlay)
-                        .nowPlayingTransitionSource(in: nowPlayingTransition)
+                        .background(NativeNowPlayingSourceAnchor(source: nowPlayingSource))
                         .padding(.horizontal, 12)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -418,41 +324,17 @@ extension IOSMainWindow {
 
 // MARK: - Mini player bar for iOS
 
-private enum NowPlayingTransitionID {
-    static let surface = "now-playing-surface"
-}
-
-/// Nonpersistent A/B probes, disabled in release and without the UI-test flag.
-enum NowPlayingNativeDiagnostics {
-    private static func enabled(_ argument: String) -> Bool {
-        #if DEBUG
-        let arguments = ProcessInfo.processInfo.arguments
-        return arguments.contains("-imusic-ui-testing") && arguments.contains(argument)
-        #else
-        return false
-        #endif
-    }
-
-    static var usesMinimalDestination: Bool { enabled("-imusic-ui-native-zoom-minimal") }
-    static var usesStableSource: Bool { enabled("-imusic-ui-native-zoom-stable-source") }
-    static var skipsPageSwipe: Bool { enabled("-imusic-ui-native-zoom-no-page-swipe") }
-    static var usesUIKitRuntimeProbe: Bool {
-        enabled("-imusic-ui-native-uikit-zoom") || usesUIKitSheetProbe
-    }
-    static var usesUIKitSheetProbe: Bool { enabled("-imusic-ui-native-uikit-sheet") }
-}
-
 @available(iOS 26.0, *)
 private struct MiniPlayerAccessoryModifier: ViewModifier {
     let isActive: Bool
-    let transitionNamespace: Namespace.ID
+    let transitionSource: NativeNowPlayingSource
     let colorScheme: ColorScheme
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if isActive {
             content.tabViewBottomAccessory {
-                IOSMiniPlayerAccessory(transitionNamespace: transitionNamespace)
+                IOSMiniPlayerAccessory(transitionSource: transitionSource)
                     .environment(\.colorScheme, colorScheme)
             }
         } else {
@@ -464,11 +346,11 @@ private struct MiniPlayerAccessoryModifier: ViewModifier {
 @available(iOS 26.0, *)
 private struct IOSMiniPlayerAccessory: View {
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
-    let transitionNamespace: Namespace.ID
+    let transitionSource: NativeNowPlayingSource
 
     var body: some View {
         IOSMiniPlayerBar(presentation: presentation)
-            .nowPlayingTransitionSource(in: transitionNamespace)
+            .background(NativeNowPlayingSourceAnchor(source: transitionSource))
     }
 
     private var presentation: IOSMiniPlayerBar.Presentation {
@@ -476,17 +358,6 @@ private struct IOSMiniPlayerAccessory: View {
         return NowPlayingPresentationMetrics.shouldUseInlineMiniPlayerLayout(
             placementIsInline: placementIsInline
         ) ? .inlineAccessory : .bottomAccessory
-    }
-}
-
-private extension View {
-    @ViewBuilder
-    func nowPlayingTransitionSource(in namespace: Namespace.ID) -> some View {
-        if #available(iOS 18.0, *), !NowPlayingNativeDiagnostics.usesStableSource {
-            matchedTransitionSource(id: NowPlayingTransitionID.surface, in: namespace)
-        } else {
-            self
-        }
     }
 }
 

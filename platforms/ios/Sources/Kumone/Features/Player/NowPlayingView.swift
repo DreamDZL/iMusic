@@ -192,9 +192,7 @@ struct NowPlayingView: View {
         if let dismissNowPlayingAction {
             dismissNowPlayingAction()
         } else {
-            withAnimation(NowPlayingPresentationMetrics.presentationAnimation) {
-                player.showNowPlaying = false
-            }
+            player.showNowPlaying = false
         }
         #else
         player.showNowPlaying = false
@@ -1253,6 +1251,9 @@ struct NowPlayingView: View {
         .frame(width: size, height: size)
         .accessibilityLabel("专辑封面")
         .accessibilityIdentifier(identifier)
+        #if os(iOS)
+        .modifier(NativeNowPlayingDismissRequest())
+        #endif
     }
 
 #if os(iOS)
@@ -1752,14 +1753,6 @@ private struct PlayerPageSwipe: ViewModifier {
     /// reset by then).
     @State private var lockedHorizontal = false
 
-    private var gestureMask: GestureMask {
-        #if os(iOS)
-        NowPlayingNativeDiagnostics.skipsPageSwipe ? .none : .all
-        #else
-        .all
-        #endif
-    }
-
     func body(content: Content) -> some View {
         content
             .contentShape(Rectangle())
@@ -1808,8 +1801,7 @@ private struct PlayerPageSwipe: ViewModifier {
                         reset.disablesAnimations = true
                         withTransaction(reset) { offset = 0 }
                         onCommit(target)
-                    },
-                including: gestureMask
+                    }
             )
             // A cancelled drag never reaches onEnded; settle the page anyway.
             .onChange(of: axis) { _, newValue in
