@@ -561,6 +561,32 @@ final class KumoneIOSUITests: XCTestCase {
     }
 
     @MainActor
+    func testSongPageGrabberDismissesWithoutLyricsScroll() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture"]
+        app.launch()
+        let miniPlayer = app.buttons["miniPlayerOpenNowPlaying"]
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 15))
+        miniPlayer.tap()
+        let songPage = app.descendants(matching: .any)["appleMusicSongPage"]
+        XCTAssertTrue(songPage.waitForExistence(timeout: 10))
+        let grabber = app.descendants(matching: .any)["nowPlayingDismissIndicator"]
+        XCTAssertTrue(grabber.waitForExistence(timeout: 5))
+        print("NATIVE-DISMISS song grabber=\(grabber.frame) page=\(songPage.frame)")
+        let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        start.press(
+            forDuration: 0.05,
+            thenDragTo: start.withOffset(CGVector(dx: 0, dy: 560)),
+            withVelocity: XCUIGestureVelocity(2400),
+            thenHoldForDuration: 0
+        )
+        XCTAssertTrue(songPage.waitForNonExistence(timeout: 8),
+                      "The song-page grabber must close the native player without a tap fallback")
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testLyricsControlsAutoHideWithDefaultTiming() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
@@ -607,6 +633,7 @@ final class KumoneIOSUITests: XCTestCase {
         // `.fast` is only 750 px/s; a real flick is several times that.
         let flick = XCUIGestureVelocity(2400)
         let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        print("NATIVE-DISMISS lyrics grabber=\(grabber.frame) page=\(lyricsPage.frame) scroll=\(lyricsScroll.frame)")
         start.press(
             forDuration: 0.05,
             thenDragTo: start.withOffset(CGVector(dx: 0, dy: 560)),

@@ -69,10 +69,22 @@ jobs:
           xcrun simctl install "$SIMULATOR_ID" smoke-build/Build/Products/Debug-iphonesimulator/iMusic.app
           xcrun simctl launch "$SIMULATOR_ID" com.jiajia2222.imusic.ios
 
+      - name: Export UI test attachments for visual diagnosis
+        if: always()
+        working-directory: platforms/ios/ios
+        run: |
+          if [ -d smoke-tests.xcresult ]; then
+            xcrun xcresulttool export attachments \
+              --path smoke-tests.xcresult \
+              --output-path smoke-attachments
+          fi
+
       - name: Upload simulator test results and screenshots
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: ios-simulator-test-results
-          path: platforms/ios/ios/smoke-tests.xcresult
+          path: |
+            platforms/ios/ios/smoke-tests.xcresult
+            platforms/ios/ios/smoke-attachments
           if-no-files-found: warn
