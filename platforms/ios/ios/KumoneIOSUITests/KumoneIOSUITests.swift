@@ -9,15 +9,27 @@ final class KumoneIOSUITests: XCTestCase {
         timeout: TimeInterval,
         message: String
     ) {
+        var lastCount = -1
         let expectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in query.count == expectedCount },
+            predicate: NSPredicate { _, _ in
+                lastCount = query.count
+                return lastCount == expectedCount
+            },
             object: nil
         )
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [expectation], timeout: timeout),
-            .completed,
-            message
-        )
+        let result = XCTWaiter.wait(for: [expectation], timeout: timeout)
+        if result != .completed {
+            // Record what was there, so a CI failure shows the actual state.
+            let matched = query.allElementsBoundByIndex
+                .map { "\($0.elementType.rawValue):\($0.identifier):\($0.label)" }
+                .joined(separator: " | ")
+            let attachment = XCTAttachment(string: "count \(lastCount): \(matched)")
+            attachment.name = "assertEventually-mismatch"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            print("ASSERT-EVENTUALLY count \(lastCount) of \(expectedCount): \(matched)")
+        }
+        XCTAssertEqual(result, .completed, "\(message) (last count \(lastCount))")
     }
 
     override func setUpWithError() throws {
@@ -363,7 +375,9 @@ final class KumoneIOSUITests: XCTestCase {
         assertEventually(
             revealedPlaybackState,
             count: 4,
-            timeout: 2,
+            // 2s was too tight on a slow CI simulator (a swipe there took
+            // ~10s to settle); the deck itself reveals in well under 1s.
+            timeout: 5,
             message: "Revealed playback state must simultaneously contain transport, volume, 0:14, and the current quality button"
         )
         XCTAssertTrue(app.buttons["showSynchronizedLyrics"].exists, "Revealed lyrics need the same bottom toolbar")
