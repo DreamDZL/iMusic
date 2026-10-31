@@ -66,6 +66,10 @@ public struct IOSMainWindow: View {
                 if IOSUITestMode.hasPlayerFixture {
                     player.installUITestFixture()
                 }
+                if IOSUITestMode.autoOpensPlayer {
+                    try? await Task.sleep(for: .seconds(6))
+                    player.showNowPlaying = true
+                }
                 if !IOSUITestMode.isEnabled {
                     await LXSyncService.shared.reconnectIfConfigured()
                     updateLog.presentIfNeeded()

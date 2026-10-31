@@ -411,6 +411,70 @@ final class KumoneIOSUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
+    /// Diagnostic for a light rim reported on device for ~2s after the player
+    /// opens. The player opens by itself (no tap, so XCUITest never waits for
+    /// idle) while the screen is sampled continuously in light appearance.
+    /// Each frame logs corner and edge luminance as `EDGE-TIMELINE` lines;
+    /// frames around the opening are attached. Log-only for now.
+    @MainActor
+    func testPlayerOpeningEdgeTimeline() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-imusic-ui-testing",
+            "-imusic-ui-player-fixture",
+            "-imusic-ui-auto-open-player",
+            "-settings.appearance", "light"
+        ]
+        app.launch()
+
+        let first = XCUIScreen.main.screenshot().image
+        let size = first.size
+        print("EDGE-TIMELINE screen \(Int(size.width))x\(Int(size.height))pt scale \(first.scale)")
+        let points: [(String, CGPoint)] = [
+            ("cornerTL", CGPoint(x: 6, y: 6)),
+            ("cornerTR", CGPoint(x: size.width - 6, y: 6)),
+            ("cornerBL", CGPoint(x: 6, y: size.height - 6)),
+            ("cornerBR", CGPoint(x: size.width - 6, y: size.height - 6)),
+            ("top", CGPoint(x: size.width * 0.25, y: 3)),
+            ("left", CGPoint(x: 2, y: size.height * 0.5)),
+            ("right", CGPoint(x: size.width - 2, y: size.height * 0.5)),
+            ("bottom", CGPoint(x: size.width * 0.25, y: size.height - 2)),
+            ("center", CGPoint(x: size.width * 0.5, y: size.height * 0.62))
+        ]
+
+        let start = Date()
+        var openedAt: TimeInterval?
+        var attachedMarks = Set<Int>()
+        while Date().timeIntervalSince(start) < 16 {
+            let shot = XCUIScreen.main.screenshot()
+            let elapsed = Date().timeIntervalSince(start)
+            guard let image = shot.image.cgImage else { continue }
+            let scale = CGFloat(image.width) / shot.image.size.width
+            let values = points.map { name, point -> (String, CGFloat) in
+                (name, Self.luminance(of: image, x: Int(point.x * scale), y: Int(point.y * scale)))
+            }
+            let line = values.map { "\($0.0)=\(String(format: "%.2f", $0.1))" }.joined(separator: " ")
+            let center = values.last?.1 ?? 1
+            if openedAt == nil && center < 0.5 { openedAt = elapsed }
+            let sinceOpen = openedAt.map { elapsed - $0 }
+            print("EDGE-TIMELINE t=\(String(format: "%.2f", elapsed)) open=\(sinceOpen.map { String(format: "%.2f", $0) } ?? "-") \(line)")
+
+            // Attach the opening frame and roughly every 0.5s for 3s after.
+            if let sinceOpen {
+                let mark = Int((sinceOpen / 0.5).rounded(.down))
+                if mark <= 6 && attachedMarks.insert(mark).inserted {
+                    let attachment = XCTAttachment(screenshot: shot)
+                    attachment.name = "player-open+\(String(format: "%.1f", sinceOpen))s"
+                    attachment.lifetime = .keepAlways
+                    add(attachment)
+                }
+                if sinceOpen > 5 { break }
+            }
+        }
+        print("EDGE-TIMELINE openedAt=\(openedAt.map { String(format: "%.2f", $0) } ?? "never")")
+    }
+
     @MainActor
     func testLyricsControlsAutoHideWithDefaultTiming() throws {
         XCUIDevice.shared.orientation = .portrait

@@ -4,6 +4,10 @@ enum IOSUITestMode {
     private static var arguments: [String] { ProcessInfo.processInfo.arguments }
     static let isEnabled = arguments.contains("-imusic-ui-testing")
     static let hasPlayerFixture = isEnabled && arguments.contains("-imusic-ui-player-fixture")
+    /// Opens the player by itself a few seconds after launch, so a UI test
+    /// can sample the screen continuously through the opening transition
+    /// (an XCUITest tap waits for the app to go idle, i.e. until it is over).
+    static let autoOpensPlayer = hasPlayerFixture && arguments.contains("-imusic-ui-auto-open-player")
 }
 
 #if os(iOS)
