@@ -325,13 +325,12 @@ struct IOSNowPlayingPresentation<Content: View>: View {
     @ViewBuilder
     private var dragIndicator: some View {
         if usesSystemInteractiveDismissal {
-            // Use a standard control instead of installing a SwiftUI gesture
-            // over the native transition's pan area. UIKit owns all dragging.
-            Button(action: dismiss) {
-                dragIndicatorSurface
-                    .contentShape(Rectangle())
-            }
-                .buttonStyle(.plain)
+            // One non-scrolling hit target, with no custom drag recognizer.
+            // A simultaneous tap leaves the native zoom pan free to recognize
+            // a pull anywhere in the target, not just over the painted capsule.
+            dragIndicatorSurface
+                .contentShape(Rectangle())
+                .simultaneousGesture(TapGesture().onEnded { dismiss() })
                 .accessibilityLabel("下拉关闭播放页")
                 .accessibilityAction(named: Text("关闭播放页"), dismiss)
         } else {
