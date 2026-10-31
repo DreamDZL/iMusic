@@ -18,7 +18,7 @@ struct NowPlayingView: View {
     #endif
 
     @State private var artworkImage: PlatformImage?
-    @State private var artworkPalette = ArtworkPaletteTransition()
+    @State private var artworkPalette: ArtworkPaletteTransition
     @State private var activeIndex: Int?
     @State private var lyricLineFrames = LyricLineFrameStore()
     /// Lyric scroll viewport, in the "lyricsPage" coordinate space.
@@ -33,10 +33,44 @@ struct NowPlayingView: View {
     @State private var showComments = false
     @State private var showAddToPlaylist = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Lyric size: 34pt at the default text size, following Dynamic Type.
+    @ScaledMetric(relativeTo: .largeTitle) private var lyricFontSize: CGFloat = 34
+    /// Shared space for the cover moving between song page and lyric header.
+    @Namespace private var playerPageNamespace
+    private static let artworkGeometryID = "nowPlayingArtwork"
+    /// Tap counters that drive the transport animations and haptics, so
+    /// remote commands and track ends never buzz the phone.
+    @State private var skipForwardTrigger = 0
+    @State private var skipBackTrigger = 0
+    @State private var playPauseTrigger = 0
     #if os(iOS)
     @State private var showQueueOnMobile = false
     @State private var showQueueSheet = false
     #endif
+
+    /// Seed artwork and palette synchronously from memory so the very first
+    /// frame of the open animation already shows the real cover and colour,
+    /// instead of a grey placeholder that fades in.
+    init() {
+        let player = PlayerService.shared
+        var seededImage: PlatformImage?
+        var seededColors: ArtworkColors?
+        if let picURL = player.currentTrack?.album.picUrl,
+           let url = picURL.resizedImageURL(768),
+           let image = ImageCache.shared.cachedImage(for: url) {
+            seededImage = image
+            seededColors = ArtworkPalette.extract(from: image, cacheKey: picURL)
+        }
+        #if os(iOS)
+        let tint = NowPlayingTint.shared
+        if seededColors == nil, tint.playbackKey != nil,
+           tint.playbackKey == player.currentTrack?.playbackKey {
+            seededColors = tint.colors
+        }
+        #endif
+        _artworkImage = State(initialValue: seededImage)
+        _artworkPalette = State(initialValue: ArtworkPaletteTransition(colors: seededColors ?? .fallback))
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -171,6 +205,8 @@ struct NowPlayingView: View {
 
     /// The sung line rests about a fifth of the way down the lyric viewport.
     private static let lyricReadingAnchor = UnitPoint(x: 0.5, y: 0.18)
+    /// Subtle emphasis on the sung line; larger values clip long lines.
+    static let activeLyricScale: CGFloat = 1.06
 
     /// Move the sung line into reading position. The short spring settles in
     /// well under a line's length, so the view never trails the audio; the
@@ -179,7 +215,7 @@ struct NowPlayingView: View {
         if reduceMotion {
             proxy.scrollTo(index, anchor: Self.lyricReadingAnchor)
         } else {
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.9)) {
+            withAnimation(NowPlayingMotion.lyricScroll) {
                 proxy.scrollTo(index, anchor: Self.lyricReadingAnchor)
             }
         }
@@ -281,10 +317,23 @@ struct NowPlayingView: View {
             at: ProcessInfo.processInfo.systemUptime,
             allowsAnimation: allowsAnimation
         )
+        #if os(iOS)
+        NowPlayingTint.shared.update(next, for: player.currentTrack?.playbackKey)
+        #endif
     }
 
     private func loadArtwork() async {
         guard !Task.isCancelled else { return }
+        // Keep the artwork seeded by `init` when it already belongs to this
+        // track; clearing it first flashed the placeholder on every open.
+        if let seeded = artworkImage,
+           let url = player.currentTrack?.album.picUrl?.resizedImageURL(768),
+           ImageCache.shared.cachedImage(for: url) === seeded {
+            #if os(iOS)
+            NowPlayingTint.shared.update(artworkPalette.colors, for: player.currentTrack?.playbackKey)
+            #endif
+            return
+        }
         artworkImage = nil
         guard let track = player.currentTrack else {
             transitionArtworkPalette(to: .fallback)
@@ -427,12 +476,17 @@ struct NowPlayingView: View {
                         VStack(spacing: 0) {
                             Spacer(minLength: isShortScreen ? 12 : 20)
 
-                            artworkView(size: artworkSize)
+                            artworkView(size: artworkSize, matched: true)
+                                // The cover glides into the lyric header
+                                // thumbnail when switching pages.
                                 // Paused artwork recedes slightly, like the
                                 // system player; reduce motion skips the scale.
                                 .scaleEffect(player.isPlaying || reduceMotion ? 1 : 0.8)
+                                // Grows back with a slight overshoot, recedes
+                                // without one, as the system player does.
                                 .animation(
-                                    reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.78),
+                                    reduceMotion ? nil
+                                        : (player.isPlaying ? NowPlayingMotion.artworkPlay : NowPlayingMotion.artworkPause),
                                     value: player.isPlaying
                                 )
                                 .padding(.bottom, isShortScreen ? 22 : 34)
@@ -459,11 +513,18 @@ struct NowPlayingView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if deckVisible {
+                // A short rise with a fade (not a full slide from the screen
+                // edge), so the deck appears to surface from below the lyrics.
                 appleMusicPlaybackControls(height: controlsHeight)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(
+                        .asymmetric(
+                            insertion: .offset(y: 28).combined(with: .opacity),
+                            removal: .offset(y: 18).combined(with: .opacity)
+                        )
+                    )
             }
         }
-        .animation(.easeInOut(duration: 0.22), value: showLyricsOnMobile)
+        .animation(reduceMotion ? .easeInOut(duration: 0.2) : NowPlayingMotion.page, value: showLyricsOnMobile)
     }
 
     private static let deckAccessoryHeight: CGFloat = 44
@@ -545,7 +606,9 @@ struct NowPlayingView: View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    artworkView(size: 56)
+                    // Distinct identifier: during the page change both covers
+                    // briefly coexist, and UI tests address the hero cover.
+                    artworkView(size: 56, matched: true, identifier: "lyricsHeaderArtwork")
                         .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
                     trackMeta(compact: true)
                 }
@@ -589,12 +652,12 @@ struct NowPlayingView: View {
                     if lyricsControlsVisible { scheduleLyricsControlsAutoHide() }
                 })
         }
-        .animation(.easeInOut(duration: 0.28), value: lyricsControlsVisible)
+        .animation(reduceMotion ? .easeInOut(duration: 0.2) : NowPlayingMotion.page, value: lyricsControlsVisible)
     }
 
     private func revealLyricsControls() {
         guard showLyricsOnMobile else { return }
-        withAnimation(.easeInOut(duration: 0.24)) {
+        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : NowPlayingMotion.page) {
             lyricsControlsVisible = true
         }
         scheduleLyricsControlsAutoHide()
@@ -614,7 +677,9 @@ struct NowPlayingView: View {
             // it visible for them.
             guard !UIAccessibility.isVoiceOverRunning else { return }
             #endif
-            withAnimation(.easeInOut(duration: 0.28)) {
+            // Hiding is slower and calmer than revealing.
+            withAnimation(reduceMotion ? .easeInOut(duration: 0.25)
+                          : .spring(response: 0.7, dampingFraction: 0.95)) {
                 lyricsControlsVisible = false
             }
         }
@@ -623,7 +688,7 @@ struct NowPlayingView: View {
     private var songPageAccessoryControls: some View {
         HStack(spacing: 0) {
             Button {
-                withAnimation(AppAnimation.standard) {
+                withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : NowPlayingMotion.page) {
                     showLyricsOnMobile.toggle()
                     isUserScrolling = false
                     resumeTask?.cancel()
@@ -693,10 +758,17 @@ struct NowPlayingView: View {
         HStack(spacing: 0) {
             // Music uses the double-triangle skip glyphs; the bar-ended
             // `.end` variants read as "jump to start/end" instead.
-            Button(action: player.isFMMode ? player.fmTrash : player.previous) {
+            Button {
+                skipBackTrigger += 1
+                if player.isFMMode { player.fmTrash() } else { player.previous() }
+            } label: {
                 Image(systemName: player.isFMMode ? "hand.thumbsdown.fill" : "backward.fill")
                     .font(.system(size: player.isFMMode ? 26 : 32, weight: .regular))
-                    .frame(maxWidth: .infinity, minHeight: 64)
+                    .modifier(SkipNudge(trigger: skipBackTrigger, direction: -1, enabled: !reduceMotion))
+                    .frame(width: 72, height: 64)
+                    // Highlight is drawn around the glyph; the tap area still
+                    // spans the whole third of the row.
+                    .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel(player.isFMMode ? "不喜欢" : "上一首")
@@ -704,18 +776,25 @@ struct NowPlayingView: View {
             playPauseButton
                 .frame(maxWidth: .infinity)
 
-            Button(action: player.next) {
+            Button {
+                skipForwardTrigger += 1
+                player.next()
+            } label: {
                 Image(systemName: "forward.fill")
                     .font(.system(size: 32, weight: .regular))
-                    .frame(maxWidth: .infinity, minHeight: 64)
+                    .modifier(SkipNudge(trigger: skipForwardTrigger, direction: 1, enabled: !reduceMotion))
+                    .frame(width: 72, height: 64)
+                    .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("下一首")
         }
         .foregroundStyle(.white)
-        .buttonStyle(.pressable)
+        .buttonStyle(.playerTransport)
         .frame(maxWidth: 360)
         .frame(maxWidth: .infinity)
+        .sensoryFeedback(.impact(weight: .light), trigger: skipForwardTrigger)
+        .sensoryFeedback(.impact(weight: .light), trigger: skipBackTrigger)
     }
 
 
@@ -1068,29 +1147,46 @@ struct NowPlayingView: View {
         #endif
     }
 
-    private func artworkView(size: CGFloat) -> some View {
-        Group {
-            if let artworkImage {
-                Image(platformImage: artworkImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                Rectangle()
-                    .fill(.white.opacity(0.06))
-                    .overlay(
-                        Image(systemName: "music.note")
-                            .font(.system(size: min(48, size * 0.42), weight: .light))
-                            .foregroundStyle(.white.opacity(0.3))
-                    )
+    /// - Parameter matched: tie this cover to the other page's cover, so it
+    ///   glides and resizes between song page and lyric header.
+    private func artworkView(
+        size: CGFloat,
+        matched: Bool = false,
+        identifier: String = "nowPlayingArtworkImage"
+    ) -> some View {
+        // A flexible square canvas with the image as an overlay: the fill
+        // image is cropped to the canvas, so non-square covers never spill
+        // past the rounded clip while the frame animates.
+        Color.clear
+            .overlay {
+                if let artworkImage {
+                    Image(platformImage: artworkImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    Rectangle()
+                        .fill(.white.opacity(0.06))
+                        .overlay(
+                            Image(systemName: "music.note")
+                                .font(.system(size: min(48, size * 0.42), weight: .light))
+                                .foregroundStyle(.white.opacity(0.3))
+                        )
+                }
             }
-        }
-        .frame(width: size, height: size)
+            .clipped()
         // Radius and shadow scale with the artwork, so the 56pt lyric header
         // thumbnail does not get the same 18pt corners as the hero artwork.
+        // Clip before the geometry match so the clip follows the moving frame.
         .clipShape(RoundedRectangle(cornerRadius: min(14, max(6, size * 0.045)), style: .continuous))
+        .modifier(MatchedArtwork(
+            enabled: matched,
+            id: Self.artworkGeometryID,
+            namespace: playerPageNamespace
+        ))
+        .frame(width: size, height: size)
         .shadow(color: .black.opacity(size > 120 ? 0.32 : 0.2), radius: size > 120 ? 22 : 6, y: size > 120 ? 12 : 3)
         .accessibilityLabel("专辑封面")
-        .accessibilityIdentifier("nowPlayingArtworkImage")
+        .accessibilityIdentifier(identifier)
     }
 
 #if os(iOS)
@@ -1154,6 +1250,9 @@ struct NowPlayingView: View {
                     Image(systemName: liked ? "star.fill" : "star")
                         .font(.system(size: compact ? 15 : 17, weight: .semibold))
                         .foregroundStyle(.white.opacity(liked ? 1 : 0.9))
+                        // Fill/unfill morphs and the star bounces once.
+                        .contentTransition(.symbolEffect(.replace))
+                        .symbolEffect(.bounce, value: liked)
                         .frame(width: compact ? 30 : 34, height: compact ? 30 : 34)
                         .background { playerControlCircle }
                         .frame(width: 44, height: 44)
@@ -1356,16 +1455,21 @@ struct NowPlayingView: View {
 
     private var playPauseButton: some View {
         Button {
+            playPauseTrigger += 1
             player.togglePlayPause()
         } label: {
+            // Symbol replace swaps pause ⇄ play with a scale-and-fade, and it
+            // also animates when playback state changes from elsewhere.
             Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                 .font(.system(size: 44, weight: .regular))
                 .foregroundStyle(.white)
-                .contentTransition(.opacity)
+                .contentTransition(.symbolEffect(.replace))
+                .animation(reduceMotion ? nil : PressMotion.release, value: player.isPlaying)
                 .frame(width: 72, height: 72)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.pressable)
+        .buttonStyle(PlayerTransportButtonStyle(highlightDiameter: 84))
+        .sensoryFeedback(.impact(weight: .light), trigger: playPauseTrigger)
         .accessibilityLabel(player.isPlaying ? "暂停" : "播放")
     }
 
@@ -1398,8 +1502,9 @@ struct NowPlayingView: View {
                             Color.clear.frame(height: geometry.size.height * 0.78)
                         }
                         // The lyrics page already applies the shared side
-                        // margin; leave a little trailing room for wrapping.
-                        .padding(.trailing, 12)
+                        // margin. The trailing room absorbs the sung line's
+                        // 6% scale so long lines are not clipped.
+                        .padding(.trailing, 24)
                     }
                     .coordinateSpace(name: "synchronizedLyrics")
                     .accessibilityIdentifier("synchronizedLyricsScrollView")
@@ -1517,11 +1622,13 @@ struct NowPlayingView: View {
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.white.opacity(isActive ? 0.9 : 0.34))
             }
+            // Apple Music sets lyrics large (~34pt bold) and scales with
+            // Dynamic Type; `lyricFontSize` tracks the user's text size.
             LyricMainText(
                 line: line, isActive: isActive,
-                font: .system(.title, design: .default, weight: .bold),
-                inactiveOpacity: isUserScrolling ? 0.5 : 0.34,
-                rubySize: 28,
+                font: .system(size: lyricFontSize, weight: .bold),
+                inactiveOpacity: isUserScrolling ? 0.5 : 0.32,
+                rubySize: lyricFontSize * 0.86,
                 uniformWeight: true,
                 inactiveScale: 1,
                 inactiveBlur: 0
@@ -1530,11 +1637,15 @@ struct NowPlayingView: View {
             // player's secondary lyric line; inactive ones stay muted.
             if settings.showLyricsTranslation, let translation = line.translation {
                 Text(translation)
-                    .font(.title3.weight(.semibold))
+                    .font(.system(size: lyricFontSize * 0.62, weight: .semibold))
                     .foregroundStyle(.white.opacity(isActive ? 0.9 : 0.3))
             }
         }
         .multilineTextAlignment(.leading)
+        // The sung line grows slightly from its leading edge. scaleEffect is
+        // a render transform: neighbours never reflow, so the list stays still
+        // while the emphasis moves.
+        .scaleEffect(isActive ? Self.activeLyricScale : 1, anchor: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         // Frames go into a reference box, not @State: they change on every
@@ -1545,12 +1656,47 @@ struct NowPlayingView: View {
             lyricLineFrames.frames[line.id] = frame
         }
         .onDisappear { lyricLineFrames.frames[line.id] = nil }
-        // One blur for the whole line (main text, romaji and translation).
-        // Reduce Motion, Low Power / thermal budgets and lines far from the
-        // sung one (already faded) skip the blur pass.
+        // One depth blur for the whole line (main text, romaji, translation).
         .blur(radius: lyricBlurRadius(for: line.id, isActive: isActive))
-        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isActive)
-        .animation(.easeOut(duration: 0.2), value: isUserScrolling)
+        // Soft spring with a touch of overshoot: the new line swells in while
+        // the previous one relaxes, instead of a linear fade.
+        .animation(reduceMotion ? .easeOut(duration: 0.2) : NowPlayingMotion.lyricEmphasis, value: isActive)
+        .animation(.easeOut(duration: 0.25), value: isUserScrolling)
+    }
+}
+
+private struct MatchedArtwork: ViewModifier {
+    let enabled: Bool
+    let id: String
+    let namespace: Namespace.ID
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.matchedGeometryEffect(id: id, in: namespace)
+        } else {
+            content
+        }
+    }
+}
+
+/// Skip glyph nudge: on each tap the arrows push ~10pt in their direction and
+/// spring back, like the system player's forward/back buttons.
+private struct SkipNudge: ViewModifier {
+    let trigger: Int
+    let direction: CGFloat
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.keyframeAnimator(initialValue: CGFloat(0), trigger: trigger) { view, offset in
+                view.offset(x: offset)
+            } keyframes: { _ in
+                SpringKeyframe(10 * direction, duration: 0.12, spring: .snappy)
+                SpringKeyframe(0, duration: 0.42, spring: .bouncy)
+            }
+        } else {
+            content
+        }
     }
 }
 

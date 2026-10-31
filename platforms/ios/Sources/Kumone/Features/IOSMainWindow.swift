@@ -158,7 +158,10 @@ public struct IOSMainWindow: View {
             // the player's single accessible grabber and suppress any system
             // indicator if this presentation adapts to a sheet.
             .presentationDragIndicator(.hidden)
-            .presentationBackground(Color(uiColor: .systemBackground))
+            // Artwork colour, not systemBackground: the cover's own layer is
+            // visible at the edges during the zoom-in and the drag-down, which
+            // showed as a white block in light mode.
+            .modifier(NowPlayingTintedBackground())
         } else {
             nowPlayingPresentation(
                 usesSystemInteractiveDismissal: true,
@@ -385,6 +388,17 @@ extension IOSMainWindow {
         .init(tab: .library, title: "资料库", icon: "square.stack"),
         .init(tab: .search, title: "搜索", icon: "magnifyingglass"),
     ]
+}
+
+/// Observes the player tint on its own, so a palette change re-renders only
+/// the presentation background rather than the whole window.
+@available(iOS 16.4, *)
+private struct NowPlayingTintedBackground: ViewModifier {
+    @ObservedObject private var tint = NowPlayingTint.shared
+
+    func body(content: Content) -> some View {
+        content.presentationBackground(tint.presentationColor)
+    }
 }
 
 private enum NowPlayingTransitionID {

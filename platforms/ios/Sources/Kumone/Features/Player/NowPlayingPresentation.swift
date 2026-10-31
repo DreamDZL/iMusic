@@ -1,5 +1,20 @@
 import SwiftUI
 
+/// Motion vocabulary for the player. Springs, not eases: the system player
+/// moves with a soft settle, and one shared set keeps every part in step.
+enum NowPlayingMotion {
+    /// Song ↔ lyrics page change, deck show/hide, artwork move.
+    static let page = Animation.spring(response: 0.5, dampingFraction: 0.86)
+    /// Sung lyric line swelling in while the previous one relaxes.
+    static let lyricEmphasis = Animation.spring(response: 0.55, dampingFraction: 0.78)
+    /// Artwork growing back when playback resumes (slight overshoot).
+    static let artworkPlay = Animation.spring(response: 0.55, dampingFraction: 0.66)
+    /// Artwork receding when paused (no overshoot).
+    static let artworkPause = Animation.spring(response: 0.5, dampingFraction: 0.9)
+    /// Lyric auto-scroll to the sung line.
+    static let lyricScroll = Animation.spring(response: 0.6, dampingFraction: 0.9)
+}
+
 #if os(iOS)
 enum MiniPlayerSwipePolicy {
     /// Require real horizontal travel before accepting velocity prediction.
@@ -12,6 +27,26 @@ enum MiniPlayerSwipePolicy {
         guard abs(distance) >= 52 || (abs(predicted) >= 100 && distance * predicted > 0) else { return nil }
         return distance < 0 ? -1 : 1
     }
+}
+
+/// Last artwork palette shown by the player, keyed by the track it belongs
+/// to. The full-screen cover paints this colour behind its content, and the
+/// next open starts from it, so opening the player never flashes the white
+/// system background or fades in from grey.
+@MainActor
+final class NowPlayingTint: ObservableObject {
+    static let shared = NowPlayingTint()
+
+    @Published private(set) var colors: ArtworkColors = .fallback
+    private(set) var playbackKey: String?
+
+    func update(_ colors: ArtworkColors, for playbackKey: String?) {
+        self.playbackKey = playbackKey
+        if self.colors != colors { self.colors = colors }
+    }
+
+    /// Colour that fills the presentation behind the player's content.
+    var presentationColor: Color { colors.secondary }
 }
 
 /// Shared geometry and interaction constants for the iPhone Now Playing

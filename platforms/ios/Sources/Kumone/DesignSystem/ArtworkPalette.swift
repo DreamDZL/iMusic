@@ -20,10 +20,15 @@ struct ArtworkColors: Equatable {
 struct ArtworkPaletteTransition {
     static let duration: TimeInterval = 0.8
 
-    private(set) var colors: ArtworkColors = .fallback
+    private(set) var colors: ArtworkColors
     private var startingColors: ArtworkColors?
     private(set) var startedAt: TimeInterval?
     private(set) var revision = 0
+
+    /// Start from an already-known palette (no fade on first frame).
+    init(colors: ArtworkColors = .fallback) {
+        self.colors = colors
+    }
 
     var isTransitioning: Bool { startedAt != nil }
 
