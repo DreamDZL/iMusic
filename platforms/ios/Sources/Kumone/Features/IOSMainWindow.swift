@@ -11,7 +11,6 @@ public struct IOSMainWindow: View {
     @StateObject private var updater = IOSUpdater.shared
     @StateObject private var updateLog = IOSUpdateLogStore.shared
     private let startup = IOSStartupCoordinator.shared
-    @Namespace private var nowPlayingTransition
     @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -120,11 +119,7 @@ public struct IOSMainWindow: View {
     @ViewBuilder
     private var presentationRoot: some View {
         if UIDevice.current.userInterfaceIdiom == .phone {
-            if #available(iOS 18.0, *) {
-                zoomNowPlayingRoot
-            } else {
-                legacyPresentationRoot
-            }
+            legacyPresentationRoot
         } else {
             systemNowPlayingRoot
         }
@@ -133,42 +128,22 @@ public struct IOSMainWindow: View {
     private var systemNowPlayingRoot: some View {
         appContent
             .fullScreenCover(isPresented: $player.showNowPlaying) {
-                systemNowPlayingPresentation(zooms: false)
+                systemNowPlayingPresentation
             }
     }
 
-    @available(iOS 18.0, *)
-    private var zoomNowPlayingRoot: some View {
-        appContent
-            .overlay { NowPlayingOpeningUnderlay(player: player) }
-            .fullScreenCover(isPresented: $player.showNowPlaying) {
-                systemNowPlayingPresentation(zooms: true)
-                    .navigationTransition(
-                        .zoom(
-                            sourceID: NowPlayingTransitionID.surface,
-                            in: nowPlayingTransition
-                        )
-                    )
-            }
-    }
-
-    /// `zooms`: the iPhone cover with the zoom transition. Its system
-    /// interactive dismissal shrinks the whole card back into the mini player
-    /// from a drag anywhere, the grabber included, so the grabber has no drag
-    /// of its own and both pulls look the same. Without the zoom the player
-    /// keeps its own drag (follow the finger as a rounded card).
     @ViewBuilder
-    private func systemNowPlayingPresentation(zooms: Bool) -> some View {
+    private var systemNowPlayingPresentation: some View {
         if #available(iOS 16.4, *) {
             nowPlayingPresentation(
-                usesSystemInteractiveDismissal: zooms,
+                usesSystemInteractiveDismissal: false,
                 dismissAnimation: nil
             )
             // fullScreenCover does not reliably expose the sheet grabber. Use
             // the player's single accessible grabber and suppress any system
             // indicator if this presentation adapts to a sheet.
             .presentationDragIndicator(.hidden)
-            .modifier(NowPlayingTintedBackground(isClear: !zooms))
+            .presentationBackground(Color.clear)
         } else {
             nowPlayingPresentation(
                 usesSystemInteractiveDismissal: true,
@@ -180,19 +155,17 @@ public struct IOSMainWindow: View {
     private var legacyPresentationRoot: some View {
         ZStack {
             appContent
+                .allowsHitTesting(!player.showNowPlaying)
+                .accessibilityHidden(player.showNowPlaying)
 
             if player.showNowPlaying {
-                // Present full-screen with a bottom slide-up. A previous version
-                // used `matchedGeometryEffect(.frame, isSource: false)` here to
-                // zoom out of the mini player, but that copies the *source*
-                // (mini-bar) frame onto this view — shrinking the whole
-                // now-playing page to bar size, so on iOS 16/17 nothing
-                // full-screen appeared (#28). The slide-up matches the
-                // pull-down-to-dismiss gesture; iOS 18+ still gets the zoom.
+                // Keep the real app behind the moving card, without a system
+                // cover's rounded opening surface or an opaque underlay.
                 nowPlayingPresentation(
                     usesSystemInteractiveDismissal: false,
                     dismissAnimation: NowPlayingPresentationMetrics.presentationAnimation
                 )
+                .accessibilityAddTraits(.isModal)
                 .transition(.move(edge: .bottom))
                 .zIndex(1)
             }
@@ -250,10 +223,8 @@ public struct IOSMainWindow: View {
         iOS26TabView
             .tabBarMinimizeBehavior(.onScrollDown)
             // Keep one TabView identity while the accessory appears/disappears.
-            // This preserves the iOS 26 matched-transition zoom anchor.
             .modifier(MiniPlayerAccessoryModifier(
                 isActive: player.hasCurrentTrack,
-                transitionNamespace: nowPlayingTransition,
                 colorScheme: resolvedColorScheme
             ))
             .animation(AppAnimation.standard, value: player.hasCurrentTrack)
@@ -299,7 +270,6 @@ public struct IOSMainWindow: View {
             VStack(spacing: 8) {
                 if player.hasCurrentTrack {
                     IOSMiniPlayerBar(presentation: .legacyOverlay)
-                        .nowPlayingTransitionSource(in: nowPlayingTransition)
                         .padding(.horizontal, 12)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -397,83 +367,18 @@ extension IOSMainWindow {
     ]
 }
 
-/// Black behind the player while it opens. The zoom keeps the card rounded
-/// and slightly inset until its spring settles (about 1.3s on the simulator,
-/// about 2s on an iPhone 17), and the light app showed around it as a white
-/// rim. Black reads as the screen's own edge. It leaves once the card has
-/// settled, so a later pull-down still shows the app behind the card, and it
-/// fades out with an early close.
-private struct NowPlayingOpeningUnderlay: View {
-    @ObservedObject var player: PlayerService
-    @State private var isShown = false
-    @State private var hideTask: Task<Void, Never>?
-
-    /// Longer than the slowest observed settle, short enough that a
-    /// pull-down rarely starts while it is still up.
-    static let holdDuration: Duration = .milliseconds(2600)
-
-    var body: some View {
-        Color.black
-            .ignoresSafeArea()
-            .opacity(isShown ? 1 : 0)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-            .onChange(of: player.showNowPlaying) { _, isPresented in
-                hideTask?.cancel()
-                guard isPresented else {
-                    withAnimation(.easeOut(duration: 0.25)) { isShown = false }
-                    return
-                }
-                withAnimation(.easeIn(duration: 0.12)) { isShown = true }
-                hideTask = Task {
-                    try? await Task.sleep(for: Self.holdDuration)
-                    guard !Task.isCancelled else { return }
-                    // Hidden behind the settled card, so no animation needed.
-                    isShown = false
-                }
-            }
-    }
-}
-
-/// Background of the cover's own layer.
-/// - Zoom (iPhone): the artwork tint. The zoom draws the card with rounded
-///   corners while it opens and closes; a clear layer let the light app show
-///   as a white rim around them. The system dismissal moves this layer with
-///   the card, so it never shows as a block.
-/// - Custom drag: clear, so the card the player draws while it follows the
-///   finger shows the app behind it.
-/// Observes the tint on its own so a palette change re-renders only this.
-@available(iOS 16.4, *)
-private struct NowPlayingTintedBackground: ViewModifier {
-    private let isClear: Bool
-    @ObservedObject private var tint = NowPlayingTint.shared
-
-    init(isClear: Bool) {
-        self.isClear = isClear
-    }
-
-    func body(content: Content) -> some View {
-        content.presentationBackground(isClear ? Color.clear : tint.presentationColor)
-    }
-}
-
-private enum NowPlayingTransitionID {
-    static let surface = "now-playing-surface"
-}
-
 // MARK: - Mini player bar for iOS
 
 @available(iOS 26.0, *)
 private struct MiniPlayerAccessoryModifier: ViewModifier {
     let isActive: Bool
-    let transitionNamespace: Namespace.ID
     let colorScheme: ColorScheme
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if isActive {
             content.tabViewBottomAccessory {
-                IOSMiniPlayerAccessory(transitionNamespace: transitionNamespace)
+                IOSMiniPlayerAccessory()
                     .environment(\.colorScheme, colorScheme)
             }
         } else {
@@ -485,12 +390,9 @@ private struct MiniPlayerAccessoryModifier: ViewModifier {
 @available(iOS 26.0, *)
 private struct IOSMiniPlayerAccessory: View {
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
-    let transitionNamespace: Namespace.ID
 
     var body: some View {
         IOSMiniPlayerBar(presentation: presentation)
-            // Match the complete system accessory, never only its artwork.
-            .nowPlayingTransitionSource(in: transitionNamespace)
     }
 
     private var presentation: IOSMiniPlayerBar.Presentation {
@@ -498,22 +400,6 @@ private struct IOSMiniPlayerAccessory: View {
         return NowPlayingPresentationMetrics.shouldUseInlineMiniPlayerLayout(
             placementIsInline: placementIsInline
         ) ? .inlineAccessory : .bottomAccessory
-    }
-}
-
-private extension View {
-    @ViewBuilder
-    func nowPlayingTransitionSource(in namespace: Namespace.ID) -> some View {
-        if #available(iOS 18.0, *) {
-            matchedTransitionSource(
-                id: NowPlayingTransitionID.surface,
-                in: namespace
-            )
-        } else {
-            // Pre-18 presents full-screen with a slide transition (see
-            // legacyPresentationRoot); no matched-geometry pairing needed.
-            self
-        }
     }
 }
 
@@ -690,13 +576,7 @@ struct IOSMiniPlayerBar: View {
     }
 
     private func showNowPlaying() {
-        if #available(iOS 18.0, *) {
-            player.showNowPlaying = true
-        } else {
-            withAnimation(NowPlayingPresentationMetrics.presentationAnimation) {
-                player.showNowPlaying = true
-            }
-        }
+        player.showNowPlaying = true
     }
 }
 

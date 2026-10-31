@@ -508,6 +508,58 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertNotNil(openedAt, "The player must open by itself in this test")
     }
 
+    /// Check status-bar rendering over the in-window player (light appearance).
+    /// Logs the darkest and brightest pixel in the clock area as
+    /// `STATUSBAR-EXPERIMENT`; light text over the dark player means max ≫ min
+    /// with a dark background. Log-only.
+    @MainActor
+    func testStatusBarOverPlayerExperiment() throws {
+        XCUIDevice.shared.orientation = .portrait
+        for name in ["inWindow"] {
+            let app = XCUIApplication()
+            app.launchArguments = [
+                "-imusic-ui-testing",
+                "-imusic-ui-player-fixture",
+                "-settings.appearance", "light"
+            ]
+            app.launch()
+            let miniPlayer = app.buttons["miniPlayerOpenNowPlaying"]
+            guard miniPlayer.waitForExistence(timeout: 15) else {
+                print("STATUSBAR-EXPERIMENT \(name) no mini player")
+                continue
+            }
+            Self.logClock(name: "\(name)-library")
+            miniPlayer.tap()
+            _ = app.descendants(matching: .any)["appleMusicSongPage"].waitForExistence(timeout: 10)
+            _ = XCTWaiter.wait(for: [XCTestExpectation(description: "settle")], timeout: 3)
+            Self.logClock(name: "\(name)-player")
+            let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            attachment.name = "statusbar-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            app.terminate()
+        }
+    }
+
+    private static func logClock(name: String) {
+        let shot = XCUIScreen.main.screenshot().image
+        guard let image = shot.cgImage else { return }
+        let scale = CGFloat(image.width) / shot.size.width
+        // Clock: left of the Dynamic Island, about 30-110pt across, 14-36pt down.
+        var low: CGFloat = 1, high: CGFloat = 0
+        var y: CGFloat = 14
+        while y <= 36 {
+            var x: CGFloat = 30
+            while x <= 110 {
+                let value = luminance(of: image, x: Int(x * scale), y: Int(y * scale))
+                low = min(low, value); high = max(high, value)
+                x += 2
+            }
+            y += 2
+        }
+        print("STATUSBAR-EXPERIMENT \(name) min=\(String(format: "%.2f", low)) max=\(String(format: "%.2f", high))")
+    }
+
     @MainActor
     func testLyricsControlsAutoHideWithDefaultTiming() throws {
         XCUIDevice.shared.orientation = .portrait
@@ -548,9 +600,8 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(accessoryControls.waitForExistence(timeout: 5),
                       "A tap in the lower area must bring the controls back")
 
-        // Pulling the grabber down must close the player. On iPhone this is
-        // the system zoom dismissal (the same shrink as a pull on the cover),
-        // so the pull is a quick fling like a real one.
+        // The grabber and artwork now drive the same owned card interaction.
+        // A tap fallback must not hide a broken drag.
         let grabber = app.descendants(matching: .any)["nowPlayingDismissIndicator"]
         XCTAssertTrue(grabber.waitForExistence(timeout: 5))
         // `.fast` is only 750 px/s; a real flick is several times that.
@@ -562,15 +613,22 @@ final class KumoneIOSUITests: XCTestCase {
             withVelocity: flick,
             thenHoldForDuration: 0
         )
-        if !lyricsPage.waitForNonExistence(timeout: 4), grabber.exists {
-            // The pull is the system's own zoom dismissal, and synthesised
-            // flicks only sometimes trigger it on the simulator (two of four
-            // CI runs). The grabber's tap-to-close is ours: it must close.
-            grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.045)).tap()
-        }
         XCTAssertTrue(lyricsPage.waitForNonExistence(timeout: 8),
                       "The grabber must close the player")
         XCTAssertTrue(miniPlayer.waitForExistence(timeout: 5),
                       "The mini player must be back after dismissing")
+        miniPlayer.tap()
+        XCTAssertTrue(songPage.waitForExistence(timeout: 8))
+        let artwork = app.descendants(matching: .any)["nowPlayingArtworkImage"]
+        XCTAssertTrue(artwork.waitForExistence(timeout: 5))
+        let artworkStart = artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+        artworkStart.press(
+            forDuration: 0.05,
+            thenDragTo: artworkStart.withOffset(CGVector(dx: 0, dy: 260)),
+            withVelocity: flick,
+            thenHoldForDuration: 0
+        )
+        XCTAssertTrue(songPage.waitForNonExistence(timeout: 8),
+                      "Artwork must dismiss using the same drag as the grabber")
     }
 }

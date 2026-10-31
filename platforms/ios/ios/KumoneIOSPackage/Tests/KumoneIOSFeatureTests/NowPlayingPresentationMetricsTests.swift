@@ -54,6 +54,11 @@ final class NowPlayingPresentationMetricsTests: XCTestCase {
 
     /// The pulled-down player is a rounded card; at rest it is square.
     func testDismissCardShape() {
+        XCTAssertEqual(NowPlayingPresentationMetrics.dismissScale(progress: -1), 1)
+        XCTAssertEqual(NowPlayingPresentationMetrics.dismissScale(progress: 0), 1)
+        XCTAssertEqual(NowPlayingPresentationMetrics.dismissScale(progress: 0.5), 0.9, accuracy: 0.001)
+        XCTAssertEqual(NowPlayingPresentationMetrics.dismissScale(progress: 1), 0.8, accuracy: 0.001)
+        XCTAssertEqual(NowPlayingPresentationMetrics.dismissScale(progress: 2), 0.8, accuracy: 0.001)
         XCTAssertEqual(NowPlayingPresentationMetrics.dismissCornerRadius(progress: 0), 0)
         XCTAssertEqual(NowPlayingPresentationMetrics.dismissCornerRadius(progress: 1), 40)
         XCTAssertEqual(NowPlayingPresentationMetrics.dismissProgress(dragOffset: 0, height: 900), 0)

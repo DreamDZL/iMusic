@@ -426,6 +426,9 @@ struct NowPlayingView: View {
                     let artworkSize = max(0, min(size.height - 124, 240))
                     HStack(spacing: 28) {
                         artworkView(size: artworkSize)
+                            #if os(iOS)
+                            .modifier(NowPlayingDismissDrag(action: dismissNowPlayingDragAction))
+                            #endif
 
                         VStack(spacing: 8) {
                             Spacer(minLength: 0)
@@ -526,6 +529,12 @@ struct NowPlayingView: View {
                                         : (player.isPlaying ? NowPlayingMotion.artworkPlay : NowPlayingMotion.artworkPause),
                                     value: player.isPlaying
                                 )
+                                #if os(iOS)
+                                .modifier(NowPlayingDismissDrag(
+                                    action: UIDevice.current.userInterfaceIdiom == .phone
+                                        ? dismissNowPlayingDragAction : nil
+                                ))
+                                #endif
                                 .padding(.bottom, isShortScreen ? 22 : 34)
 
                             trackMetaView

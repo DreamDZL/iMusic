@@ -30,9 +30,7 @@ enum MiniPlayerSwipePolicy {
 }
 
 /// Last artwork palette shown by the player, keyed by the track it belongs
-/// to. The full-screen cover paints this colour behind its content, and the
-/// next open starts from it, so opening the player never flashes the white
-/// system background or fades in from grey.
+/// to, so the next open can start from the same palette without a grey flash.
 @MainActor
 final class NowPlayingTint: ObservableObject {
     static let shared = NowPlayingTint()
@@ -44,9 +42,6 @@ final class NowPlayingTint: ObservableObject {
         self.playbackKey = playbackKey
         if self.colors != colors { self.colors = colors }
     }
-
-    /// Colour that fills the presentation behind the player's content.
-    var presentationColor: Color { colors.secondary }
 }
 
 /// Shared geometry and interaction constants for the iPhone Now Playing
@@ -133,11 +128,8 @@ enum NowPlayingPresentationMetrics {
     static let dismissPrediction: CGFloat = 190
     static let miniPlayerExpandDistance: CGFloat = 28
     static let miniPlayerExpandPrediction: CGFloat = 72
-    static let presentationAnimation = Animation.spring(
-        response: 0.52,
-        dampingFraction: 0.9,
-        blendDuration: 0.1
-    )
+    /// A finite bottom slide, with no system zoom surface to settle afterward.
+    static let presentationAnimation = Animation.easeInOut(duration: 0.35)
 
     static var immersiveHeaderTopInset: CGFloat {
         indicatorTopSpacing + indicatorHeight + indicatorToHeaderSpacing
@@ -157,6 +149,10 @@ enum NowPlayingPresentationMetrics {
     /// a display-like 40pt almost immediately so the edge reads as a card.
     static func dismissCornerRadius(progress: CGFloat) -> CGFloat {
         progress <= 0 ? 0 : min(40, 12 + progress * 120)
+    }
+
+    static func dismissScale(progress: CGFloat) -> CGFloat {
+        1 - 0.2 * min(max(progress, 0), 1)
     }
 
     static func shouldDismiss(
@@ -208,6 +204,50 @@ private struct DismissNowPlayingActionKey: EnvironmentKey {
 struct NowPlayingDismissDragAction {
     let onChanged: (CGFloat) -> Void
     let onEnded: (CGFloat, CGFloat) -> Void
+    let onCancelled: () -> Void
+}
+
+/// Shared by the grabber and song artwork only. Lock the first recognized
+/// axis so a horizontal page swipe cannot become a dismissal halfway through.
+struct NowPlayingDismissDrag: ViewModifier {
+    let action: NowPlayingDismissDragAction?
+    @GestureState private var isDragging = false
+    @State private var axis: Axis?
+
+    private enum Axis { case vertical, other }
+
+    func body(content: Content) -> some View {
+        content
+            .simultaneousGesture(gesture, including: action == nil ? .none : .all)
+            .onChange(of: isDragging) { _, active in
+                guard !active, let axis else { return }
+                self.axis = nil
+                // onEnded clears the axis. A reset with an axis still set is
+                // cancellation (e.g. interruption), not a completed dismissal.
+                if axis == .vertical { action?.onCancelled() }
+            }
+    }
+
+    private var gesture: some Gesture {
+        // The card moves and scales; local coordinates would feed that motion
+        // back into the translation and make the card oscillate.
+        DragGesture(minimumDistance: 8, coordinateSpace: .global)
+            .updating($isDragging) { _, active, _ in active = true }
+            .onChanged { value in
+                if axis == nil {
+                    axis = abs(value.translation.height) > abs(value.translation.width) * 1.25
+                        ? .vertical : .other
+                }
+                guard axis == .vertical else { return }
+                action?.onChanged(value.translation.height)
+            }
+            .onEnded { value in
+                let completedAxis = axis
+                axis = nil
+                guard completedAxis == .vertical else { return }
+                action?.onEnded(value.translation.height, value.predictedEndTranslation.height)
+            }
+    }
 }
 
 private struct DismissNowPlayingDragActionKey: EnvironmentKey {
@@ -276,7 +316,8 @@ struct IOSNowPlayingPresentation<Content: View>: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let isInteractive = proxy.size.width < 720
+            let isPhone = UIDevice.current.userInterfaceIdiom == .phone
+            let isInteractive = isPhone || proxy.size.width < 720
             let usesCustomDrag = isInteractive && !usesSystemInteractiveDismissal
 
             let progress = usesCustomDrag
@@ -301,29 +342,38 @@ struct IOSNowPlayingPresentation<Content: View>: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // While pulled down the player becomes a card: rounded corners
-            // (on the backdrop, see PlayerCardClip), a slight shrink, and the
-            // app visible behind it (the presentation background is clear),
+            // (on the backdrop, see PlayerCardClip), progressive shrink, and the
+            // actual app visible behind it,
             // instead of a flat block of colour filling the gap.
-            .scaleEffect(1 - 0.06 * progress, anchor: .top)
+            .scaleEffect(
+                isPhone ? NowPlayingPresentationMetrics.dismissScale(progress: progress) : 1 - 0.06 * progress,
+                anchor: .top
+            )
             .offset(y: usesCustomDrag ? dragOffset : 0)
         }
+        .accessibilityAction(.escape, dismiss)
     }
 
     @ViewBuilder
     private var dragIndicator: some View {
         if usesSystemInteractiveDismissal {
-            // No drag of its own: a pull starting here reaches the system's
-            // interactive dismissal, the same shrink as a pull on the cover.
+            // No drag of its own when the system owns dismissal.
             // The surface stays hit-testable so the touch begins on a
             // non-scrolling view rather than on the lyrics below it.
             dragIndicatorSurface
                 .contentShape(Rectangle())
                 .accessibilityLabel("下拉关闭播放页")
                 .accessibilityAction(named: Text("关闭播放页"), dismiss)
+        } else if UIDevice.current.userInterfaceIdiom == .phone {
+            dragIndicatorSurface
+                .contentShape(Rectangle())
+                .modifier(NowPlayingDismissDrag(action: dismissDragAction(usesCustomDrag: true)))
+                .accessibilityLabel("下拉关闭播放页")
+                .accessibilityAction(named: Text("关闭播放页"), dismiss)
         } else {
             dragIndicatorSurface
                 .contentShape(Rectangle())
-                .gesture(dismissGesture)
+                .gesture(tabletDismissGesture)
                 .accessibilityLabel("下拉关闭播放页")
                 .accessibilityAction(named: Text("关闭播放页"), dismiss)
         }
@@ -350,19 +400,14 @@ struct IOSNowPlayingPresentation<Content: View>: View {
         .accessibilityIdentifier("nowPlayingDismissIndicator")
     }
 
-    private var dismissGesture: some Gesture {
-        // The surface itself moves during the drag. Measuring in global
-        // coordinates keeps the gesture origin fixed and prevents feedback
-        // oscillation between the finger and the moving hit target.
+    /// Preserve the existing compact iPad cover interaction.
+    private var tabletDismissGesture: some Gesture {
         DragGesture(minimumDistance: 3, coordinateSpace: .global)
             .onChanged { value in
                 updateDismissDrag(value.translation.height)
             }
             .onEnded { value in
-                finishDismissDrag(
-                    value.translation.height,
-                    value.predictedEndTranslation.height
-                )
+                finishDismissDrag(value.translation.height, value.predictedEndTranslation.height)
             }
     }
 
@@ -377,6 +422,10 @@ struct IOSNowPlayingPresentation<Content: View>: View {
                 // closing here as well would race its own animation.
                 guard usesCustomDrag else { return }
                 finishDismissDrag(translation, predicted)
+            },
+            onCancelled: {
+                guard usesCustomDrag, isPresented else { return }
+                resetDismissDrag()
             }
         )
     }
@@ -392,9 +441,13 @@ struct IOSNowPlayingPresentation<Content: View>: View {
         ) {
             dismiss()
         } else {
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                dragOffset = 0
-            }
+            resetDismissDrag()
+        }
+    }
+
+    private func resetDismissDrag() {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+            dragOffset = 0
         }
     }
 
