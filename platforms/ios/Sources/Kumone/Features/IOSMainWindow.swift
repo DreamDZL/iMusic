@@ -11,6 +11,7 @@ public struct IOSMainWindow: View {
     @StateObject private var updater = IOSUpdater.shared
     @StateObject private var updateLog = IOSUpdateLogStore.shared
     private let startup = IOSStartupCoordinator.shared
+    @Namespace private var nowPlayingTransition
     @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -119,7 +120,11 @@ public struct IOSMainWindow: View {
     @ViewBuilder
     private var presentationRoot: some View {
         if UIDevice.current.userInterfaceIdiom == .phone {
-            legacyPresentationRoot
+            if #available(iOS 18.0, *) {
+                zoomNowPlayingRoot
+            } else {
+                legacyPresentationRoot
+            }
         } else {
             systemNowPlayingRoot
         }
@@ -128,15 +133,26 @@ public struct IOSMainWindow: View {
     private var systemNowPlayingRoot: some View {
         appContent
             .fullScreenCover(isPresented: $player.showNowPlaying) {
-                systemNowPlayingPresentation
+                systemNowPlayingPresentation(zooms: false)
+            }
+    }
+
+    @available(iOS 18.0, *)
+    private var zoomNowPlayingRoot: some View {
+        appContent
+            .fullScreenCover(isPresented: $player.showNowPlaying) {
+                systemNowPlayingPresentation(zooms: true)
+                    .navigationTransition(
+                        .zoom(sourceID: NowPlayingTransitionID.surface, in: nowPlayingTransition)
+                    )
             }
     }
 
     @ViewBuilder
-    private var systemNowPlayingPresentation: some View {
+    private func systemNowPlayingPresentation(zooms: Bool) -> some View {
         if #available(iOS 16.4, *) {
             nowPlayingPresentation(
-                usesSystemInteractiveDismissal: false,
+                usesSystemInteractiveDismissal: zooms,
                 dismissAnimation: nil
             )
             // fullScreenCover does not reliably expose the sheet grabber. Use
@@ -225,6 +241,7 @@ public struct IOSMainWindow: View {
             // Keep one TabView identity while the accessory appears/disappears.
             .modifier(MiniPlayerAccessoryModifier(
                 isActive: player.hasCurrentTrack,
+                transitionNamespace: nowPlayingTransition,
                 colorScheme: resolvedColorScheme
             ))
             .animation(AppAnimation.standard, value: player.hasCurrentTrack)
@@ -270,6 +287,7 @@ public struct IOSMainWindow: View {
             VStack(spacing: 8) {
                 if player.hasCurrentTrack {
                     IOSMiniPlayerBar(presentation: .legacyOverlay)
+                        .nowPlayingTransitionSource(in: nowPlayingTransition)
                         .padding(.horizontal, 12)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -369,16 +387,21 @@ extension IOSMainWindow {
 
 // MARK: - Mini player bar for iOS
 
+private enum NowPlayingTransitionID {
+    static let surface = "now-playing-surface"
+}
+
 @available(iOS 26.0, *)
 private struct MiniPlayerAccessoryModifier: ViewModifier {
     let isActive: Bool
+    let transitionNamespace: Namespace.ID
     let colorScheme: ColorScheme
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if isActive {
             content.tabViewBottomAccessory {
-                IOSMiniPlayerAccessory()
+                IOSMiniPlayerAccessory(transitionNamespace: transitionNamespace)
                     .environment(\.colorScheme, colorScheme)
             }
         } else {
@@ -390,9 +413,11 @@ private struct MiniPlayerAccessoryModifier: ViewModifier {
 @available(iOS 26.0, *)
 private struct IOSMiniPlayerAccessory: View {
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+    let transitionNamespace: Namespace.ID
 
     var body: some View {
         IOSMiniPlayerBar(presentation: presentation)
+            .nowPlayingTransitionSource(in: transitionNamespace)
     }
 
     private var presentation: IOSMiniPlayerBar.Presentation {
@@ -400,6 +425,17 @@ private struct IOSMiniPlayerAccessory: View {
         return NowPlayingPresentationMetrics.shouldUseInlineMiniPlayerLayout(
             placementIsInline: placementIsInline
         ) ? .inlineAccessory : .bottomAccessory
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func nowPlayingTransitionSource(in namespace: Namespace.ID) -> some View {
+        if #available(iOS 18.0, *) {
+            matchedTransitionSource(id: NowPlayingTransitionID.surface, in: namespace)
+        } else {
+            self
+        }
     }
 }
 

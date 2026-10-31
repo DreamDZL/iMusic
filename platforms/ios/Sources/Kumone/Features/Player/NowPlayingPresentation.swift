@@ -128,7 +128,7 @@ enum NowPlayingPresentationMetrics {
     static let dismissPrediction: CGFloat = 190
     static let miniPlayerExpandDistance: CGFloat = 28
     static let miniPlayerExpandPrediction: CGFloat = 72
-    /// A finite bottom slide, with no system zoom surface to settle afterward.
+    /// Compatibility presentation only; native zoom owns iPhone cover motion.
     static let presentationAnimation = Animation.easeInOut(duration: 0.35)
 
     static var immersiveHeaderTopInset: CGFloat {
@@ -149,10 +149,6 @@ enum NowPlayingPresentationMetrics {
     /// a display-like 40pt almost immediately so the edge reads as a card.
     static func dismissCornerRadius(progress: CGFloat) -> CGFloat {
         progress <= 0 ? 0 : min(40, 12 + progress * 120)
-    }
-
-    static func dismissScale(progress: CGFloat) -> CGFloat {
-        1 - 0.2 * min(max(progress, 0), 1)
     }
 
     static func shouldDismiss(
@@ -204,50 +200,6 @@ private struct DismissNowPlayingActionKey: EnvironmentKey {
 struct NowPlayingDismissDragAction {
     let onChanged: (CGFloat) -> Void
     let onEnded: (CGFloat, CGFloat) -> Void
-    let onCancelled: () -> Void
-}
-
-/// Shared by the grabber and song artwork only. Lock the first recognized
-/// axis so a horizontal page swipe cannot become a dismissal halfway through.
-struct NowPlayingDismissDrag: ViewModifier {
-    let action: NowPlayingDismissDragAction?
-    @GestureState private var isDragging = false
-    @State private var axis: Axis?
-
-    private enum Axis { case vertical, other }
-
-    func body(content: Content) -> some View {
-        content
-            .simultaneousGesture(gesture, including: action == nil ? .none : .all)
-            .onChange(of: isDragging) { _, active in
-                guard !active, let axis else { return }
-                self.axis = nil
-                // onEnded clears the axis. A reset with an axis still set is
-                // cancellation (e.g. interruption), not a completed dismissal.
-                if axis == .vertical { action?.onCancelled() }
-            }
-    }
-
-    private var gesture: some Gesture {
-        // The card moves and scales; local coordinates would feed that motion
-        // back into the translation and make the card oscillate.
-        DragGesture(minimumDistance: 8, coordinateSpace: .global)
-            .updating($isDragging) { _, active, _ in active = true }
-            .onChanged { value in
-                if axis == nil {
-                    axis = abs(value.translation.height) > abs(value.translation.width) * 1.25
-                        ? .vertical : .other
-                }
-                guard axis == .vertical else { return }
-                action?.onChanged(value.translation.height)
-            }
-            .onEnded { value in
-                let completedAxis = axis
-                axis = nil
-                guard completedAxis == .vertical else { return }
-                action?.onEnded(value.translation.height, value.predictedEndTranslation.height)
-            }
-    }
 }
 
 private struct DismissNowPlayingDragActionKey: EnvironmentKey {
@@ -324,34 +276,37 @@ struct IOSNowPlayingPresentation<Content: View>: View {
                 ? NowPlayingPresentationMetrics.dismissProgress(
                     dragOffset: dragOffset, height: proxy.size.height)
                 : 0
-            ZStack(alignment: .top) {
-                content
-                    .environment(\.dismissNowPlayingAction, dismiss)
-                    .environment(
-                        \.dismissNowPlayingDragAction,
-                        dismissDragAction(usesCustomDrag: usesCustomDrag)
-                    )
-                    .environment(
-                        \.playerCardCornerRadius,
-                        NowPlayingPresentationMetrics.dismissCornerRadius(progress: progress)
-                    )
-
-                if isInteractive {
-                    dragIndicator
-                }
+            if usesSystemInteractiveDismissal {
+                // The system alone transforms the zoom destination. Do not
+                // attach even an identity custom scale/offset to this host.
+                playerSurface(isInteractive: isInteractive, progress: 0, usesCustomDrag: false)
+            } else {
+                playerSurface(isInteractive: isInteractive, progress: progress, usesCustomDrag: usesCustomDrag)
+                    .scaleEffect(1 - 0.06 * progress, anchor: .top)
+                    .offset(y: usesCustomDrag ? dragOffset : 0)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // While pulled down the player becomes a card: rounded corners
-            // (on the backdrop, see PlayerCardClip), progressive shrink, and the
-            // actual app visible behind it,
-            // instead of a flat block of colour filling the gap.
-            .scaleEffect(
-                isPhone ? NowPlayingPresentationMetrics.dismissScale(progress: progress) : 1 - 0.06 * progress,
-                anchor: .top
-            )
-            .offset(y: usesCustomDrag ? dragOffset : 0)
         }
         .accessibilityAction(.escape, dismiss)
+    }
+
+    private func playerSurface(isInteractive: Bool, progress: CGFloat, usesCustomDrag: Bool) -> some View {
+        ZStack(alignment: .top) {
+            content
+                .environment(\.dismissNowPlayingAction, dismiss)
+                .environment(
+                    \.dismissNowPlayingDragAction,
+                    usesCustomDrag ? dismissDragAction : nil
+                )
+                .environment(
+                    \.playerCardCornerRadius,
+                    NowPlayingPresentationMetrics.dismissCornerRadius(progress: progress)
+                )
+
+            if isInteractive {
+                dragIndicator
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
@@ -362,12 +317,6 @@ struct IOSNowPlayingPresentation<Content: View>: View {
             // non-scrolling view rather than on the lyrics below it.
             dragIndicatorSurface
                 .contentShape(Rectangle())
-                .accessibilityLabel("下拉关闭播放页")
-                .accessibilityAction(named: Text("关闭播放页"), dismiss)
-        } else if UIDevice.current.userInterfaceIdiom == .phone {
-            dragIndicatorSurface
-                .contentShape(Rectangle())
-                .modifier(NowPlayingDismissDrag(action: dismissDragAction(usesCustomDrag: true)))
                 .accessibilityLabel("下拉关闭播放页")
                 .accessibilityAction(named: Text("关闭播放页"), dismiss)
         } else {
@@ -411,21 +360,13 @@ struct IOSNowPlayingPresentation<Content: View>: View {
             }
     }
 
-    private func dismissDragAction(usesCustomDrag: Bool) -> NowPlayingDismissDragAction {
+    private var dismissDragAction: NowPlayingDismissDragAction {
         NowPlayingDismissDragAction(
             onChanged: { translation in
-                guard usesCustomDrag else { return }
                 updateDismissDrag(translation)
             },
             onEnded: { translation, predicted in
-                // With the system dismissal the pull is the system's alone;
-                // closing here as well would race its own animation.
-                guard usesCustomDrag else { return }
                 finishDismissDrag(translation, predicted)
-            },
-            onCancelled: {
-                guard usesCustomDrag, isPresented else { return }
-                resetDismissDrag()
             }
         )
     }

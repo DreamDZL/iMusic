@@ -508,14 +508,14 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertNotNil(openedAt, "The player must open by itself in this test")
     }
 
-    /// Check status-bar rendering over the in-window player (light appearance).
+    /// Check status-bar rendering over the native player cover (light appearance).
     /// Logs the darkest and brightest pixel in the clock area as
     /// `STATUSBAR-EXPERIMENT`; light text over the dark player means max ≫ min
     /// with a dark background. Log-only.
     @MainActor
     func testStatusBarOverPlayerExperiment() throws {
         XCUIDevice.shared.orientation = .portrait
-        for name in ["inWindow"] {
+        for name in ["nativeCover"] {
             let app = XCUIApplication()
             app.launchArguments = [
                 "-imusic-ui-testing",
@@ -600,7 +600,7 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(accessoryControls.waitForExistence(timeout: 5),
                       "A tap in the lower area must bring the controls back")
 
-        // The grabber and artwork now drive the same owned card interaction.
+        // The grabber and artwork should both reach native dismissal.
         // A tap fallback must not hide a broken drag.
         let grabber = app.descendants(matching: .any)["nowPlayingDismissIndicator"]
         XCTAssertTrue(grabber.waitForExistence(timeout: 5))

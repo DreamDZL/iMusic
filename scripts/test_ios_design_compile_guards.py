@@ -73,11 +73,13 @@ class IOSDesignCompileGuards(unittest.TestCase):
         store = (ROOT / "Core/Storage/LocalPlaylistStore.swift").read_text(encoding="utf-8")
         self.assertNotIn("tracks.append(track)", store, "saved songs go to the top of a playlist")
 
-    def test_grabber_and_artwork_share_dismissal(self):
+    def test_phone_uses_native_dismissal(self):
         presentation = (ROOT / "Features/Player/NowPlayingPresentation.swift").read_text(encoding="utf-8")
         player = (ROOT / "Features/Player/NowPlayingView.swift").read_text(encoding="utf-8")
-        self.assertIn(".modifier(NowPlayingDismissDrag(", presentation)
-        self.assertIn(".modifier(NowPlayingDismissDrag(", player)
+        window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")
+        self.assertNotIn(".modifier(NowPlayingDismissDrag(", presentation)
+        self.assertNotIn(".modifier(NowPlayingDismissDrag(", player)
+        self.assertIn("usesSystemInteractiveDismissal: zooms", window)
 
     def test_volume_bar_is_not_a_restyled_system_slider(self):
         # Two translucent track images overlapped under the system slider's
@@ -90,9 +92,9 @@ class IOSDesignCompileGuards(unittest.TestCase):
     def test_phone_opening_has_no_opaque_underlay(self):
         window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")
         self.assertNotIn("NowPlayingOpeningUnderlay", window)
-        self.assertNotIn(".navigationTransition(", window)
+        self.assertIn(".navigationTransition(", window)
         root = window[window.index("private var presentationRoot"):window.index("private var systemNowPlayingRoot")]
-        self.assertIn("legacyPresentationRoot", root)
+        self.assertIn("zoomNowPlayingRoot", root)
 
     def test_tertiary_token_is_a_concrete_color(self):
         source = (ROOT / "DesignSystem/Theme.swift").read_text(encoding="utf-8")
