@@ -152,6 +152,8 @@ jobs:
 
       - name: Package unsigned IPA
         working-directory: platforms/ios/ios
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.marketing_version }}
         run: |
           mkdir -p dist/Payload
           cp -R build/Build/Products/Release-iphoneos/iMusic.app dist/Payload/iMusic.app
@@ -159,14 +161,16 @@ jobs:
             echo "The iMusic IPA must not contain a custom Live Activity or widget extension" >&2
             exit 1
           fi
-          ditto -c -k --sequesterRsrc --keepParent dist/Payload dist/iMusic-unsigned.ipa
+          ditto -c -k --sequesterRsrc --keepParent dist/Payload "dist/imusic_ios_${RELEASE_VERSION}.ipa"
 
       - name: Inspect IPA contents
         working-directory: platforms/ios/ios
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.marketing_version }}
         run: |
           set -euo pipefail
-          unzip -l dist/iMusic-unsigned.ipa | grep -F 'Payload/iMusic.app/' >/dev/null
-          if unzip -l dist/iMusic-unsigned.ipa | grep -E '\.appex/' >/dev/null; then
+          unzip -l "dist/imusic_ios_${RELEASE_VERSION}.ipa" | grep -F 'Payload/iMusic.app/' >/dev/null
+          if unzip -l "dist/imusic_ios_${RELEASE_VERSION}.ipa" | grep -E '\.appex/' >/dev/null; then
             echo 'Unexpected app extension in IPA' >&2
             exit 1
           fi
@@ -175,11 +179,11 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: iMusic-ios-unsigned
-          path: platforms/ios/ios/dist/iMusic-unsigned.ipa
+          path: platforms/ios/ios/dist/imusic_ios_${{ steps.version.outputs.marketing_version }}.ipa
           if-no-files-found: error
 
       - name: Attach IPA to GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: platforms/ios/ios/dist/iMusic-unsigned.ipa
+          files: platforms/ios/ios/dist/imusic_ios_${{ steps.version.outputs.marketing_version }}.ipa

@@ -79,23 +79,28 @@ struct NowPlayingView: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let isCompact = geo.size.width < 720
-            let phoneLandscape = isPhoneLandscape(size: geo.size)
-            ZStack {
-                backdrop
+        ZStack {
+            // Make the full-bleed artwork part of the destination's root,
+            // rather than overflow drawn by a safe-area-sized geometry reader.
+            // Only the controls measure the safe area below.
+            backdrop
 
-                if phoneLandscape {
-                    phoneLandscapeLayout(size: geo.size)
-                } else if isCompact {
-                    compactLayout(size: geo.size)
-                } else {
-                    regularLayout(size: geo.size)
+            GeometryReader { geo in
+                let isCompact = geo.size.width < 720
+                let phoneLandscape = isPhoneLandscape(size: geo.size)
+                Group {
+                    if phoneLandscape {
+                        phoneLandscapeLayout(size: geo.size)
+                    } else if isCompact {
+                        compactLayout(size: geo.size)
+                    } else {
+                        regularLayout(size: geo.size)
+                    }
                 }
+                // An intrinsically-wide child must not stretch the controls
+                // and push them off-screen.
+                .frame(width: geo.size.width, height: geo.size.height)
             }
-            // Pin to the screen width so an intrinsically-wide child can never
-            // stretch the ZStack and push content off-screen.
-            .frame(width: geo.size.width)
         }
         #if os(macOS)
         // The window toolbar is hidden while this page is up, but SwiftUI keeps

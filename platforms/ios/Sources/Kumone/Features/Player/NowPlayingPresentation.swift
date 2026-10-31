@@ -267,6 +267,20 @@ struct IOSNowPlayingPresentation<Content: View>: View {
     }
 
     var body: some View {
+        Group {
+            if usesSystemInteractiveDismissal && UIDevice.current.userInterfaceIdiom == .phone {
+                // The native destination needs no geometry wrapper or custom
+                // transform. Its artwork root fills the presentation, while
+                // NowPlayingView measures the safe area for its controls.
+                playerSurface(isInteractive: true, progress: 0, usesCustomDrag: false)
+            } else {
+                compatibilityPresentation
+            }
+        }
+        .accessibilityAction(.escape, dismiss)
+    }
+
+    private var compatibilityPresentation: some View {
         GeometryReader { proxy in
             let isPhone = UIDevice.current.userInterfaceIdiom == .phone
             let isInteractive = isPhone || proxy.size.width < 720
@@ -286,7 +300,6 @@ struct IOSNowPlayingPresentation<Content: View>: View {
                     .offset(y: usesCustomDrag ? dragOffset : 0)
             }
         }
-        .accessibilityAction(.escape, dismiss)
     }
 
     private func playerSurface(isInteractive: Bool, progress: CGFloat, usesCustomDrag: Bool) -> some View {
@@ -312,17 +325,19 @@ struct IOSNowPlayingPresentation<Content: View>: View {
     @ViewBuilder
     private var dragIndicator: some View {
         if usesSystemInteractiveDismissal {
-            // No drag of its own when the system owns dismissal.
-            // The surface stays hit-testable so the touch begins on a
-            // non-scrolling view rather than on the lyrics below it.
+            // One non-scrolling hit target, with no custom drag recognizer.
+            // A simultaneous tap leaves the native zoom pan free to recognize
+            // a pull anywhere in the target, not just over the painted capsule.
             dragIndicatorSurface
                 .contentShape(Rectangle())
+                .simultaneousGesture(TapGesture().onEnded { dismiss() })
                 .accessibilityLabel("下拉关闭播放页")
                 .accessibilityAction(named: Text("关闭播放页"), dismiss)
         } else {
             dragIndicatorSurface
                 .contentShape(Rectangle())
                 .gesture(tabletDismissGesture)
+                .simultaneousGesture(TapGesture().onEnded { dismiss() })
                 .accessibilityLabel("下拉关闭播放页")
                 .accessibilityAction(named: Text("关闭播放页"), dismiss)
         }
@@ -338,8 +353,7 @@ struct IOSNowPlayingPresentation<Content: View>: View {
                     width: NowPlayingPresentationMetrics.indicatorWidth,
                     height: NowPlayingPresentationMetrics.indicatorHeight
                 )
-                .contentShape(Rectangle())
-                .onTapGesture(perform: dismiss)
+                .allowsHitTesting(false)
                 .padding(.top, NowPlayingPresentationMetrics.indicatorTopSpacing)
         }
         .frame(

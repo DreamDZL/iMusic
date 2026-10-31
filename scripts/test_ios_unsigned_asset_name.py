@@ -1,0 +1,25 @@
+"""Keep the v2.0 asset name consistent through packaging and publication."""
+import unittest
+from pathlib import Path
+
+import yaml
+
+
+class UnsignedAssetNameTests(unittest.TestCase):
+    def test_all_asset_steps_use_the_resolved_version(self):
+        root = Path(__file__).resolve().parents[1]
+        path = root / '.github/workflows/ios-release.yml'
+        text = path.read_text(encoding='utf-8')
+        steps = {s['name']: s for s in yaml.safe_load(text)['jobs']['build']['steps']}
+        for name in ('Package unsigned IPA', 'Inspect IPA contents'):
+            self.assertIn('imusic_ios_${RELEASE_VERSION}.ipa', steps[name]['run'])
+            self.assertEqual(steps[name]['env']['RELEASE_VERSION'], '${{ steps.version.outputs.marketing_version }}')
+        self.assertTrue(steps['Upload IPA']['with']['path'].endswith('imusic_ios_${{ steps.version.outputs.marketing_version }}.ipa'))
+        self.assertEqual(steps['Attach IPA to GitHub release']['with']['files'], steps['Upload IPA']['with']['path'])
+        self.assertNotIn('iMusic-unsigned.ipa', text)
+        config = (root / 'platforms/ios/ios/Config/Shared.xcconfig').read_text(encoding='utf-8')
+        self.assertIn('MARKETING_VERSION = 2.0\n', config)
+
+
+if __name__ == '__main__':
+    unittest.main()
