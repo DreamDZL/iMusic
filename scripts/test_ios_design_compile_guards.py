@@ -55,6 +55,24 @@ class IOSDesignCompileGuards(unittest.TestCase):
         plist = (ROOT.parents[1] / "ios/Config/Info.plist").read_text(encoding="utf-8")
         self.assertIn("CADisableMinimumFrameDurationOnPhone", plist)
 
+    def test_player_backdrop_clip_precedes_safe_area_expansion(self):
+        # A clip applied after ignoresSafeArea keeps the safe-area frame and
+        # cut the backdrop off under the status bar and above the home
+        # indicator, showing the app behind the player.
+        player = (ROOT / "Features/Player/NowPlayingView.swift").read_text(encoding="utf-8")
+        backdrop = player[player.index("private var backdrop: some View"):]
+        backdrop = backdrop[:backdrop.index("#else")]
+        self.assertLess(backdrop.index(".modifier(PlayerCardClip())"),
+                        backdrop.index(".ignoresSafeArea()"))
+
+    def test_add_to_playlist_toggles_without_song_row(self):
+        sheet = (ROOT / "Features/Shared/TrackList.swift").read_text(encoding="utf-8")
+        sheet = sheet[sheet.index("struct AddToPlaylistSheet"):]
+        self.assertNotIn("selectionSummary", sheet)
+        self.assertIn("localStore.remove(tracks, from: playlist.id)", sheet)
+        store = (ROOT / "Core/Storage/LocalPlaylistStore.swift").read_text(encoding="utf-8")
+        self.assertNotIn("tracks.append(track)", store, "saved songs go to the top of a playlist")
+
     def test_tertiary_token_is_a_concrete_color(self):
         source = (ROOT / "DesignSystem/Theme.swift").read_text(encoding="utf-8")
         self.assertNotIn("= Color.tertiary", source)

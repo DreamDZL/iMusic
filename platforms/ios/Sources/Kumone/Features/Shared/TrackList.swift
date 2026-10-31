@@ -676,18 +676,26 @@ struct TrackListView: View {
 // MARK: - Add to playlist
 
 /// The system "add to playlist" sheet pattern: a full-height navigation sheet
-/// showing what is being saved, then a New Playlist row and the library's
-/// playlists with their artwork. Lists that already hold the selection carry
-/// a checkmark; a search field filters them by name.
+/// with a New Playlist row and the library's playlists with their artwork.
+/// Each row toggles: a tap saves the selection to that list (at the top) and
+/// shows a checkmark, a second tap takes it out again. The sheet stays open so
+/// several lists can be changed; a search field filters them by name.
 struct AddToPlaylistSheet: View {
-    let tracks: [Track]
+    /// Pinned when the sheet opens: toggling must not change what is being
+    /// saved, even if the presenter's selection changes underneath it.
+    @State private var tracks: [Track]
+    /// The playlist the songs come from. It is left out, so a tap can never
+    /// strip songs from the list being copied.
+    private let excludedPlaylistID: UUID?
 
     init(track: Track) {
-        tracks = [track]
+        _tracks = State(initialValue: [track])
+        excludedPlaylistID = nil
     }
 
-    init(tracks: [Track]) {
-        self.tracks = tracks
+    init(tracks: [Track], excludingPlaylist excludedPlaylistID: UUID? = nil) {
+        _tracks = State(initialValue: tracks)
+        self.excludedPlaylistID = excludedPlaylistID
     }
 
     @Environment(\.dismiss) private var dismiss
@@ -695,19 +703,12 @@ struct AddToPlaylistSheet: View {
     @State private var query = ""
     @State private var showCreate = false
     @State private var newName = ""
-    /// Name of the playlist that already holds the selection, while its
-    /// notice is shown.
-    @State private var alreadySavedName: String?
+    /// Bumped on every row toggle, for the selection haptic.
+    @State private var toggleCount = 0
 
     var body: some View {
         NavigationStack {
             List {
-                if query.isEmpty {
-                    Section {
-                        selectionSummary
-                    }
-                }
-
                 Section {
                     Button {
                         newName = ""
@@ -720,11 +721,12 @@ struct AddToPlaylistSheet: View {
                     ForEach(filteredPlaylists) { playlist in
                         let saved = isSaved(in: playlist)
                         Button {
-                            add(to: playlist, alreadySaved: saved)
+                            toggle(playlist, saved: saved)
                         } label: {
                             playlistRow(playlist, saved: saved)
                         }
-                        .accessibilityValue(saved ? Text("已在此歌单中") : Text(""))
+                        .accessibilityAddTraits(saved ? .isSelected : [])
+                        .accessibilityHint(saved ? Text("从此歌单移除") : Text("添加到此歌单"))
                     }
 
                     if !query.isEmpty && filteredPlaylists.isEmpty {
@@ -736,7 +738,7 @@ struct AddToPlaylistSheet: View {
                             .listRowSeparator(.hidden)
                     }
                 } footer: {
-                    if localStore.playlists.isEmpty {
+                    if query.isEmpty && filteredPlaylists.isEmpty {
                         Text(tracks.count == 1
                              ? "还没有歌单。新建一个，这首歌会直接存进去。"
                              : "还没有歌单。新建一个，这些歌曲会直接存进去。")
@@ -756,11 +758,13 @@ struct AddToPlaylistSheet: View {
             )
             #endif
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
-                        .accessibilityIdentifier("addToPlaylistCancel")
+                // Changes apply as rows are tapped, so this only closes.
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                        .accessibilityIdentifier("addToPlaylistDone")
                 }
             }
+            .sensoryFeedback(.selection, trigger: toggleCount)
             .alert("新建歌单", isPresented: $showCreate) {
                 TextField("歌单名称", text: $newName)
                 Button("创建") { createAndAdd() }
@@ -768,20 +772,6 @@ struct AddToPlaylistSheet: View {
                 Button("取消", role: .cancel) {}
             } message: {
                 Text(tracks.count == 1 ? "这首歌会添加到新歌单。" : "这些歌曲会添加到新歌单。")
-            }
-            // Shown in the sheet: the app's toast overlay sits beneath it.
-            .alert(
-                "已在歌单中",
-                isPresented: Binding(
-                    get: { alreadySavedName != nil },
-                    set: { if !$0 { alreadySavedName = nil } }
-                )
-            ) {
-                Button("好", role: .cancel) {}
-            } message: {
-                Text(tracks.count == 1
-                     ? "「\(alreadySavedName ?? "")」里已经有这首歌。"
-                     : "「\(alreadySavedName ?? "")」里已经有这些歌曲。")
             }
         }
         #if os(iOS)
@@ -793,35 +783,6 @@ struct AddToPlaylistSheet: View {
     }
 
     // MARK: Rows
-
-    /// What is being saved: the song's cover, title and artist, or the
-    /// number of songs for a multi-selection.
-    private var selectionSummary: some View {
-        HStack(spacing: 12) {
-            artwork(url: tracks.first?.album.picUrl, size: 48, placeholder: "music.note")
-            VStack(alignment: .leading, spacing: 2) {
-                if tracks.count == 1, let track = tracks.first {
-                    Text(track.name)
-                        .font(.body.weight(.semibold))
-                        .lineLimit(1)
-                    Text(track.artistNames)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                } else {
-                    Text("\(tracks.count) 首歌曲")
-                        .font(.body.weight(.semibold))
-                    Text("将一起添加")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("addToPlaylistSelection")
-    }
 
     private var newPlaylistRow: some View {
         HStack(spacing: 12) {
@@ -892,8 +853,10 @@ struct AddToPlaylistSheet: View {
 
     private var filteredPlaylists: [LocalPlaylist] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return localStore.playlists }
-        return localStore.playlists.filter { $0.name.localizedCaseInsensitiveContains(needle) }
+        return localStore.playlists.filter { playlist in
+            playlist.id != excludedPlaylistID
+                && (needle.isEmpty || playlist.name.localizedCaseInsensitiveContains(needle))
+        }
     }
 
     private var trimmedNewName: String {
@@ -904,20 +867,16 @@ struct AddToPlaylistSheet: View {
         localStore.containsAll(tracks, in: playlist.id)
     }
 
-    /// Already-saved lists keep the sheet open with a notice instead of
-    /// closing as if something had been added.
-    private func add(to playlist: LocalPlaylist, alreadySaved: Bool) {
-        guard !alreadySaved else {
-            alreadySavedName = playlist.name
-            return
+    /// First tap saves (to the top of the list), second tap removes. The
+    /// checkmark is the feedback; the sheet stays open. A partly saved
+    /// multi-selection counts as not saved, so a tap completes it.
+    private func toggle(_ playlist: LocalPlaylist, saved: Bool) {
+        if saved {
+            localStore.remove(tracks, from: playlist.id)
+        } else {
+            localStore.add(tracks, to: playlist.id)
         }
-        let added = localStore.add(tracks, to: playlist.id)
-        if added > 0 {
-            ToastCenter.shared.show(tracks.count == 1
-                ? "已添加到「\(playlist.name)」"
-                : "已添加 \(added) 首歌曲到「\(playlist.name)」")
-        }
-        dismiss()
+        toggleCount += 1
     }
 
     private func createAndAdd() {

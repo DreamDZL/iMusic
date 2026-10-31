@@ -239,7 +239,8 @@ extension EnvironmentValues {
 }
 
 /// Rounds the player's full-bleed backdrop while it is pulled down. Applied
-/// to the backdrop after `ignoresSafeArea`, so it clips at the screen edge.
+/// to the backdrop *before* `ignoresSafeArea`, so it clips at the screen
+/// edge; after it, the clip would cut the backdrop at the safe area.
 /// The structure never changes (radius 0 at rest), so a drag in progress is
 /// never torn down, and only this modifier re-renders per drag frame.
 struct PlayerCardClip: ViewModifier {

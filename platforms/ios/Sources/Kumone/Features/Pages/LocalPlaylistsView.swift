@@ -857,7 +857,10 @@ struct LocalPlaylistDetailView: View {
         .sheet(isPresented: $showAddTracks) {
             if let playlist = store.playlist(id: playlistID) {
                 let tracks = selectedTracks(from: playlist)
-                AddToPlaylistSheet(tracks: tracks.isEmpty ? playlist.tracks : tracks)
+                AddToPlaylistSheet(
+                    tracks: tracks.isEmpty ? playlist.tracks : tracks,
+                    excludingPlaylist: playlistID
+                )
             }
         }
         .sheet(isPresented: $showReorderTracks) {

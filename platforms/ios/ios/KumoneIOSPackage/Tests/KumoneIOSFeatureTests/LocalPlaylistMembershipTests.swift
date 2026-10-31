@@ -42,6 +42,28 @@ final class LocalPlaylistMembershipTests: XCTestCase {
         XCTAssertTrue(store.containsAll([first, second], in: id))
     }
 
+    /// Saved songs lead the playlist, keeping their own order among
+    /// themselves; a second toggle takes them out again.
+    func testAddedTracksGoToTheTopAndRemoveUndoes() throws {
+        let store = makeStore()
+        let old = track("old", name: "Old")
+        let first = track("a", name: "First")
+        let second = track("b", name: "Second")
+        let id = try XCTUnwrap(store.create(name: "Mix", tracks: [old]))
+
+        XCTAssertEqual(store.add([first, second], to: id), 2)
+        XCTAssertEqual(store.playlist(id: id)?.tracks.map(\.name), ["First", "Second", "Old"])
+
+        let third = track("c", name: "Third")
+        store.add(third, to: id)
+        XCTAssertEqual(store.playlist(id: id)?.tracks.first?.name, "Third",
+                       "The single-track path saves to the top as well")
+
+        store.remove([first], from: id)
+        XCTAssertFalse(store.containsAll([first], in: id))
+        XCTAssertEqual(store.playlist(id: id)?.tracks.map(\.name), ["Third", "Second", "Old"])
+    }
+
     func testContainsAllIsFalseForEmptySelectionOrUnknownPlaylist() throws {
         let store = makeStore()
         let id = try XCTUnwrap(store.create(name: "Empty"))

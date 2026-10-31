@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 final class KumoneIOSUITests: XCTestCase {
@@ -42,6 +43,59 @@ final class KumoneIOSUITests: XCTestCase {
             object: nil
         )
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed, message)
+    }
+
+    /// The player's dark artwork backdrop must reach the very top and bottom
+    /// of the screen. A clip on the safe-area frame once left the status-bar
+    /// band and the bottom edge showing the light app behind the player.
+    @MainActor
+    private func assertPlayerCoversScreenEdges(
+        _ app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        // Give the zoom-in presentation time to settle on its final frame.
+        _ = XCTWaiter.wait(for: [XCTestExpectation(description: "presentation settles")], timeout: 1.5)
+        let screenshot = XCUIScreen.main.screenshot().image
+        guard let cgImage = screenshot.cgImage else {
+            XCTFail("Could not read the player screenshot", file: file, line: line)
+            return
+        }
+        let scale = CGFloat(cgImage.width) / screenshot.size.width
+        // Left edge, clear of the clock text, the Dynamic Island and the
+        // white home indicator in the bottom centre.
+        let samples: [(String, CGPoint)] = [
+            ("top", CGPoint(x: 24, y: 4)),
+            ("bottom", CGPoint(x: 24, y: screenshot.size.height - 4))
+        ]
+        for (edge, point) in samples {
+            let luminance = Self.luminance(of: cgImage, x: Int(point.x * scale), y: Int(point.y * scale))
+            XCTAssertLessThan(luminance, 0.6,
+                              "The player backdrop must cover the \(edge) edge (luminance \(luminance))",
+                              file: file, line: line)
+        }
+    }
+
+    private static func luminance(of image: CGImage, x: Int, y: Int) -> CGFloat {
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let drawn = pixel.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: 1, height: 1,
+                bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return false }
+            // Core Graphics is bottom-up: shift the image so pixel (x, y),
+            // counted from the top, lands on the context's single pixel.
+            context.draw(image, in: CGRect(
+                x: -x, y: y - image.height + 1,
+                width: image.width, height: image.height
+            ))
+            return true
+        }
+        guard drawn else { return 1 }
+        let r = CGFloat(pixel[0]) / 255, g = CGFloat(pixel[1]) / 255, b = CGFloat(pixel[2]) / 255
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
     }
 
     /// Let a lyric flick finish decelerating so the next tap is a tap, not
@@ -195,7 +249,10 @@ final class KumoneIOSUITests: XCTestCase {
         app.launchArguments = [
             "-imusic-ui-testing",
             "-imusic-ui-player-fixture",
-            "-imusic-ui-extended-lyrics-controls"
+            "-imusic-ui-extended-lyrics-controls",
+            // Light app behind the player, so a backdrop that stops short of
+            // the screen edges shows up as bright pixels.
+            "-settings.appearance", "light"
         ]
         app.launch()
 
@@ -214,6 +271,7 @@ final class KumoneIOSUITests: XCTestCase {
         let songAccessoryMidY = accessoryControls.frame.midY
         XCTAssertTrue(app.descendants(matching: .any)["nowPlayingTransportControls"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["nowPlayingVolumeControl"].exists)
+        assertPlayerCoversScreenEdges(app)
 
         let songAttachment = XCTAttachment(screenshot: app.screenshot())
         songAttachment.name = "iMusic-AppleMusic-歌曲页"
@@ -221,7 +279,7 @@ final class KumoneIOSUITests: XCTestCase {
         add(songAttachment)
 
         // The add-to-playlist sheet is a full navigation sheet: title bar,
-        // cancel, the song being saved and a New Playlist row.
+        // Done and a New Playlist row; it no longer repeats the song.
         app.buttons["更多操作"].firstMatch.tap()
         let addToPlaylist = app.buttons["加入歌单…"]
         XCTAssertTrue(addToPlaylist.waitForExistence(timeout: 5))
@@ -229,13 +287,13 @@ final class KumoneIOSUITests: XCTestCase {
         let sheetBar = app.navigationBars["收藏到歌单"]
         XCTAssertTrue(sheetBar.waitForExistence(timeout: 5), "Add to playlist must open as a titled sheet")
         XCTAssertTrue(app.buttons["addToPlaylistNewPlaylist"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.descendants(matching: .any)["addToPlaylistSelection"].exists,
-                      "The sheet must show the song being saved")
+        XCTAssertFalse(app.descendants(matching: .any)["addToPlaylistSelection"].exists,
+                       "The sheet must not repeat the song being saved")
         let sheetAttachment = XCTAttachment(screenshot: app.screenshot())
         sheetAttachment.name = "iMusic-收藏到歌单"
         sheetAttachment.lifetime = .keepAlways
         add(sheetAttachment)
-        app.buttons["addToPlaylistCancel"].tap()
+        app.buttons["addToPlaylistDone"].tap()
         XCTAssertTrue(sheetBar.waitForNonExistence(timeout: 5))
         XCTAssertTrue(songPage.waitForExistence(timeout: 5))
 

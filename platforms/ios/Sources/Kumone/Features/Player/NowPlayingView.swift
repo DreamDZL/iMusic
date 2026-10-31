@@ -241,9 +241,12 @@ struct NowPlayingView: View {
                 )
             }
             .background(.black)
-            .ignoresSafeArea()
-            // Rounded while the player is pulled down (0pt at rest).
+            // Rounded while the player is pulled down (0pt at rest). The clip
+            // must come before `ignoresSafeArea`: applied after it, the clip
+            // keeps the safe-area frame and cuts the backdrop off under the
+            // status bar and above the home indicator, showing the app behind.
             .modifier(PlayerCardClip())
+            .ignoresSafeArea()
 #else
         artworkBackdrop.ignoresSafeArea()
 #endif

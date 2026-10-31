@@ -626,7 +626,8 @@ final class LocalPlaylistStore: ObservableObject {
             return
         }
         markAsLocalCopyIfProviderPlaylist(at: index)
-        playlists[index].tracks.append(track)
+        // Newest first, like favourites: a song just saved leads the list.
+        playlists[index].tracks.insert(track, at: 0)
         playlists[index].updatedAt = .now
         persist()
         ToastCenter.shared.show("已添加到「\(playlists[index].name)」")
@@ -640,28 +641,29 @@ final class LocalPlaylistStore: ObservableObject {
         return tracks.allSatisfy { keys.contains(trackKey($0)) }
     }
 
-    /// Adds a group of tracks while preserving the order supplied by the caller.
-    /// Local playlists are source-agnostic, so duplicates are skipped using the
+    /// Adds a group of tracks to the top of the playlist (newest first),
+    /// keeping the order supplied by the caller among themselves. Local
+    /// playlists are source-agnostic, so duplicates are skipped using the
     /// same source-aware key as the single-track API.
     @discardableResult
     func add(_ tracks: [Track], to playlistID: UUID) -> Int {
         guard let index = playlists.firstIndex(where: { $0.id == playlistID }) else { return 0 }
 
         var existingKeys = Set(playlists[index].tracks.map(trackKey))
-        var added = 0
+        var newTracks: [Track] = []
         for track in tracks {
             let key = trackKey(track)
             guard existingKeys.insert(key).inserted else { continue }
-            playlists[index].tracks.append(track)
-            added += 1
+            newTracks.append(track)
         }
 
-        if added > 0 {
+        if !newTracks.isEmpty {
             markAsLocalCopyIfProviderPlaylist(at: index)
+            playlists[index].tracks.insert(contentsOf: newTracks, at: 0)
             playlists[index].updatedAt = .now
             persist()
         }
-        return added
+        return newTracks.count
     }
 
     func remove(_ track: Track, from playlistID: UUID) {
