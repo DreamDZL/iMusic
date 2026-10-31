@@ -119,6 +119,19 @@ public struct IOSMainWindow: View {
 
     @ViewBuilder
     private var presentationRoot: some View {
+        #if DEBUG
+        if NowPlayingNativeDiagnostics.usesUIKitRuntimeProbe {
+            NativeZoomRuntimeProbe(usesZoom: !NowPlayingNativeDiagnostics.usesUIKitSheetProbe)
+        } else {
+            nativePresentationRoot
+        }
+        #else
+        nativePresentationRoot
+        #endif
+    }
+
+    @ViewBuilder
+    private var nativePresentationRoot: some View {
         if UIDevice.current.userInterfaceIdiom == .phone {
             if #available(iOS 18.0, *) {
                 zoomNowPlayingRoot
@@ -423,6 +436,10 @@ enum NowPlayingNativeDiagnostics {
     static var usesMinimalDestination: Bool { enabled("-imusic-ui-native-zoom-minimal") }
     static var usesStableSource: Bool { enabled("-imusic-ui-native-zoom-stable-source") }
     static var skipsPageSwipe: Bool { enabled("-imusic-ui-native-zoom-no-page-swipe") }
+    static var usesUIKitRuntimeProbe: Bool {
+        enabled("-imusic-ui-native-uikit-zoom") || usesUIKitSheetProbe
+    }
+    static var usesUIKitSheetProbe: Bool { enabled("-imusic-ui-native-uikit-sheet") }
 }
 
 @available(iOS 26.0, *)

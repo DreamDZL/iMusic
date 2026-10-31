@@ -106,6 +106,11 @@ class IOSDesignCompileGuards(unittest.TestCase):
         self.assertNotIn("UserDefaults", diagnostic)
         player = (ROOT / "Features/Player/NowPlayingView.swift").read_text(encoding="utf-8")
         self.assertIn("including: gestureMask", player)
+        probe = (ROOT / "Features/Player/NativeZoomRuntimeProbe.swift").read_text(encoding="utf-8")
+        self.assertTrue(probe.startswith("#if os(iOS) && DEBUG\n"))
+        self.assertIn("interactiveDismissShouldBegin", probe)
+        self.assertNotIn("value(forKey:", probe)
+        self.assertNotIn("UIPanGestureRecognizer", probe)
 
     def test_tertiary_token_is_a_concrete_color(self):
         source = (ROOT / "DesignSystem/Theme.swift").read_text(encoding="utf-8")

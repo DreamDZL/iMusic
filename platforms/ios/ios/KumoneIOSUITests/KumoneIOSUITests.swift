@@ -668,6 +668,66 @@ final class KumoneIOSUITests: XCTestCase {
     }
 
     @MainActor
+    func testNativeZoomMinimalDestinationWithSystemSwipe() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture", "-imusic-ui-native-zoom-minimal"]
+        app.launch()
+        let opener = app.buttons["miniPlayerOpenNowPlaying"]
+        XCTAssertTrue(opener.waitForExistence(timeout: 15))
+        opener.tap()
+        let destination = app.descendants(matching: .any)["nativeZoomProbeDestination"]
+        XCTAssertTrue(destination.waitForExistence(timeout: 10))
+        destination.swipeDown(velocity: XCUIGestureVelocity(2400))
+        XCTAssertTrue(destination.waitForNonExistence(timeout: 8),
+                      "A direct system swipe must dismiss the gesture-free native zoom destination")
+    }
+
+    @MainActor
+    private func assertOwnedUIKitDismissal(sheet: Bool) {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-imusic-ui-testing", "-imusic-ui-player-fixture",
+            sheet ? "-imusic-ui-native-uikit-sheet" : "-imusic-ui-native-uikit-zoom"
+        ]
+        app.launch()
+        let opener = app.buttons["nativeUIKitProbeOpen"]
+        XCTAssertTrue(opener.waitForExistence(timeout: 15))
+        opener.tap()
+        let destination = app.descendants(matching: .any)["nativeUIKitProbeDestination"]
+        XCTAssertTrue(destination.waitForExistence(timeout: 10))
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", "ready=true"), object: destination
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed)
+        let start = app.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: app.frame.width * 0.5, dy: 86.6)
+        )
+        print("NATIVE-UIKIT sheet=\(sheet) before=\(String(describing: destination.value)) frame=\(destination.frame)")
+        start.press(
+            forDuration: 0.05,
+            thenDragTo: start.withOffset(CGVector(dx: 0, dy: 560)),
+            withVelocity: XCUIGestureVelocity(2400),
+            thenHoldForDuration: 0
+        )
+        let dismissed = destination.waitForNonExistence(timeout: 8)
+        if !dismissed {
+            print("NATIVE-UIKIT sheet=\(sheet) after=\(String(describing: destination.value))")
+        }
+        XCTAssertTrue(dismissed, "Owned UIKit \(sheet ? "sheet" : "zoom") must dismiss with the same direct drag")
+    }
+
+    @MainActor
+    func testOwnedUIKitZoomDismissal() {
+        assertOwnedUIKitDismissal(sheet: false)
+    }
+
+    @MainActor
+    func testOwnedUIKitSheetDismissalControl() {
+        assertOwnedUIKitDismissal(sheet: true)
+    }
+
+    @MainActor
     func testLyricsControlsAutoHideWithDefaultTiming() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
