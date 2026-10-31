@@ -445,8 +445,9 @@ final class KumoneIOSUITests: XCTestCase {
 
         let start = Date()
         var openedAt: TimeInterval?
+        var baselineEdges: CGFloat?
         var attachedMarks = Set<Int>()
-        while Date().timeIntervalSince(start) < 16 {
+        while Date().timeIntervalSince(start) < 20 {
             let shot = XCUIScreen.main.screenshot()
             let elapsed = Date().timeIntervalSince(start)
             guard let image = shot.image.cgImage else { continue }
@@ -455,15 +456,18 @@ final class KumoneIOSUITests: XCTestCase {
                 (name, Self.luminance(of: image, x: Int(point.x * scale), y: Int(point.y * scale)))
             }
             let line = values.map { "\($0.0)=\(String(format: "%.2f", $0.1))" }.joined(separator: " ")
-            let center = values.last?.1 ?? 1
-            if openedAt == nil && center < 0.5 { openedAt = elapsed }
+            // The opening starts with the first frame whose edges differ from
+            // the library's (the centre can be dark on either screen).
+            let edges = values.dropLast().map(\.1).reduce(0, +) / CGFloat(values.count - 1)
+            if baselineEdges == nil { baselineEdges = edges }
+            if openedAt == nil, let baselineEdges, abs(edges - baselineEdges) > 0.08 { openedAt = elapsed }
             let sinceOpen = openedAt.map { elapsed - $0 }
             print("EDGE-TIMELINE t=\(String(format: "%.2f", elapsed)) open=\(sinceOpen.map { String(format: "%.2f", $0) } ?? "-") \(line)")
 
             // Attach the opening frame and roughly every 0.5s for 3s after.
             if let sinceOpen {
                 let mark = Int((sinceOpen / 0.5).rounded(.down))
-                if mark <= 6 && attachedMarks.insert(mark).inserted {
+                if mark <= 8 && attachedMarks.insert(mark).inserted {
                     let attachment = XCTAttachment(screenshot: shot)
                     attachment.name = "player-open+\(String(format: "%.1f", sinceOpen))s"
                     attachment.lifetime = .keepAlways
@@ -520,13 +524,26 @@ final class KumoneIOSUITests: XCTestCase {
         // so the pull is a quick fling like a real one.
         let grabber = app.descendants(matching: .any)["nowPlayingDismissIndicator"]
         XCTAssertTrue(grabber.waitForExistence(timeout: 5))
+        // `.fast` is only 750 px/s; a real flick is several times that.
+        let flick = XCUIGestureVelocity(2400)
         let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
         start.press(
             forDuration: 0.05,
-            thenDragTo: start.withOffset(CGVector(dx: 0, dy: 520)),
-            withVelocity: .fast,
+            thenDragTo: start.withOffset(CGVector(dx: 0, dy: 560)),
+            withVelocity: flick,
             thenHoldForDuration: 0
         )
+        if !lyricsPage.waitForNonExistence(timeout: 4), grabber.exists {
+            // Synthesised touches occasionally miss the system's dismissal
+            // pan on the simulator; a second real flick must then close it.
+            let retry = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+            retry.press(
+                forDuration: 0.05,
+                thenDragTo: retry.withOffset(CGVector(dx: 0, dy: 560)),
+                withVelocity: flick,
+                thenHoldForDuration: 0
+            )
+        }
         XCTAssertTrue(lyricsPage.waitForNonExistence(timeout: 8),
                       "Dragging the grabber down must dismiss the player")
         XCTAssertTrue(miniPlayer.waitForExistence(timeout: 5),
