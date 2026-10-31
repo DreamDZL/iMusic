@@ -90,6 +90,14 @@ class IOSDesignCompileGuards(unittest.TestCase):
         self.assertIn("private struct SystemVolumeBridge", player)
         self.assertNotIn("withAlphaComponent(0.72)", player)
 
+    def test_zoom_opening_has_an_underlay(self):
+        # The zoom card stays rounded and inset for ~1-2s while it settles;
+        # without a dark layer behind it the light app showed as a rim.
+        window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")
+        root = window[window.index("private var zoomNowPlayingRoot"):]
+        root = root[:root.index(".fullScreenCover")]
+        self.assertIn("NowPlayingOpeningUnderlay(player: player)", root)
+
     def test_tertiary_token_is_a_concrete_color(self):
         source = (ROOT / "DesignSystem/Theme.swift").read_text(encoding="utf-8")
         self.assertNotIn("= Color.tertiary", source)

@@ -140,6 +140,7 @@ public struct IOSMainWindow: View {
     @available(iOS 18.0, *)
     private var zoomNowPlayingRoot: some View {
         appContent
+            .overlay { NowPlayingOpeningUnderlay(player: player) }
             .fullScreenCover(isPresented: $player.showNowPlaying) {
                 systemNowPlayingPresentation(zooms: true)
                     .navigationTransition(
@@ -394,6 +395,44 @@ extension IOSMainWindow {
         .init(tab: .library, title: "资料库", icon: "square.stack"),
         .init(tab: .search, title: "搜索", icon: "magnifyingglass"),
     ]
+}
+
+/// Black behind the player while it opens. The zoom keeps the card rounded
+/// and slightly inset until its spring settles (about 1.3s on the simulator,
+/// about 2s on an iPhone 17), and the light app showed around it as a white
+/// rim. Black reads as the screen's own edge. It leaves once the card has
+/// settled, so a later pull-down still shows the app behind the card, and it
+/// fades out with an early close.
+private struct NowPlayingOpeningUnderlay: View {
+    @ObservedObject var player: PlayerService
+    @State private var isShown = false
+    @State private var hideTask: Task<Void, Never>?
+
+    /// Longer than the slowest observed settle, short enough that a
+    /// pull-down rarely starts while it is still up.
+    static let holdDuration: Duration = .milliseconds(2600)
+
+    var body: some View {
+        Color.black
+            .ignoresSafeArea()
+            .opacity(isShown ? 1 : 0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onChange(of: player.showNowPlaying) { _, isPresented in
+                hideTask?.cancel()
+                guard isPresented else {
+                    withAnimation(.easeOut(duration: 0.25)) { isShown = false }
+                    return
+                }
+                withAnimation(.easeIn(duration: 0.12)) { isShown = true }
+                hideTask = Task {
+                    try? await Task.sleep(for: Self.holdDuration)
+                    guard !Task.isCancelled else { return }
+                    // Hidden behind the settled card, so no animation needed.
+                    isShown = false
+                }
+            }
+    }
 }
 
 /// Background of the cover's own layer.
