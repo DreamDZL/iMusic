@@ -89,6 +89,14 @@ class IOSDesignCompileGuards(unittest.TestCase):
         self.assertIn("private struct SystemVolumeBridge", player)
         self.assertNotIn("withAlphaComponent(0.72)", player)
 
+    def test_native_grabber_uses_standard_control_without_custom_gesture(self):
+        source = (ROOT / "Features/Player/NowPlayingPresentation.swift").read_text(encoding="utf-8")
+        indicator = source[source.index("private var dragIndicator: some View"):]
+        native = indicator[:indicator.index("} else {")]
+        self.assertIn("Button(action: dismiss)", native)
+        self.assertNotIn(".simultaneousGesture(", native)
+        self.assertNotIn("DragGesture(", native)
+
     def test_phone_opening_has_no_opaque_underlay(self):
         window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")
         self.assertNotIn("NowPlayingOpeningUnderlay", window)

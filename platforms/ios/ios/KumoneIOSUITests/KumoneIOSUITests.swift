@@ -467,6 +467,7 @@ final class KumoneIOSUITests: XCTestCase {
         var openedAt: TimeInterval?
         var baselineEdges: CGFloat?
         var attachedMarks = Set<Int>()
+        var lightEdgeFailures: [String] = []
         while Date().timeIntervalSince(start) < 20 {
             let shot = XCUIScreen.main.screenshot()
             let elapsed = Date().timeIntervalSince(start)
@@ -487,8 +488,11 @@ final class KumoneIOSUITests: XCTestCase {
             // or corners, settled or not.
             if let sinceOpen, sinceOpen >= 0.4 {
                 for (name, value) in values.dropLast() {
-                    XCTAssertLessThan(value, 0.55,
-                                      "Light \(name) (\(String(format: "%.2f", value))) at +\(String(format: "%.2f", sinceOpen))s after the player opened")
+                    if value >= 0.55 {
+                        lightEdgeFailures.append(
+                            "Light \(name) (\(String(format: "%.2f", value))) at +\(String(format: "%.2f", sinceOpen))s after the player opened"
+                        )
+                    }
                 }
             }
 
@@ -506,6 +510,9 @@ final class KumoneIOSUITests: XCTestCase {
         }
         print("EDGE-TIMELINE openedAt=\(openedAt.map { String(format: "%.2f", $0) } ?? "never")")
         XCTAssertNotNil(openedAt, "The player must open by itself in this test")
+        // Keep the same threshold and time window, but finish recording before
+        // failing so early light pixels do not discard the settling evidence.
+        XCTAssertTrue(lightEdgeFailures.isEmpty, lightEdgeFailures.joined(separator: "\n"))
     }
 
     /// Check status-bar rendering over the native player cover (light appearance).

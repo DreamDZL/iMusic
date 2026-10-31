@@ -151,7 +151,7 @@ public struct IOSMainWindow: View {
     @ViewBuilder
     private func systemNowPlayingPresentation(zooms: Bool) -> some View {
         if #available(iOS 16.4, *) {
-            nowPlayingPresentation(
+            let presentation = nowPlayingPresentation(
                 usesSystemInteractiveDismissal: zooms,
                 dismissAnimation: nil
             )
@@ -159,7 +159,14 @@ public struct IOSMainWindow: View {
             // the player's single accessible grabber and suppress any system
             // indicator if this presentation adapts to a sheet.
             .presentationDragIndicator(.hidden)
-            .presentationBackground(Color.clear)
+            if zooms {
+                // Let UIKit own the zoom presentation's backing surface and
+                // reveal the presenter through its native transition. A clear
+                // presentation background is not needed for an opaque player.
+                presentation
+            } else {
+                presentation.presentationBackground(Color.clear)
+            }
         } else {
             nowPlayingPresentation(
                 usesSystemInteractiveDismissal: true,
