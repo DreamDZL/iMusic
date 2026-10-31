@@ -50,8 +50,10 @@ class IOSDesignCompileGuards(unittest.TestCase):
         backdrop = player[player.index("private var artworkBackdrop"):]
         backdrop = backdrop[:backdrop.index("private func artworkGradient")]
         self.assertIn("!player.isPlaying", backdrop, "backdrop must freeze while paused")
+        # Animations follow the device refresh rate (ProMotion 120 Hz);
+        # without this key custom animations are capped at 60 Hz.
         plist = (ROOT.parents[1] / "ios/Config/Info.plist").read_text(encoding="utf-8")
-        self.assertNotIn("CADisableMinimumFrameDurationOnPhone", plist)
+        self.assertIn("CADisableMinimumFrameDurationOnPhone", plist)
 
     def test_tertiary_token_is_a_concrete_color(self):
         source = (ROOT / "DesignSystem/Theme.swift").read_text(encoding="utf-8")

@@ -158,9 +158,8 @@ public struct IOSMainWindow: View {
             // the player's single accessible grabber and suppress any system
             // indicator if this presentation adapts to a sheet.
             .presentationDragIndicator(.hidden)
-            // Artwork colour, not systemBackground: the cover's own layer is
-            // visible at the edges during the zoom-in and the drag-down, which
-            // showed as a white block in light mode.
+            // Clear, not systemBackground or a flat tint: dragging the player
+            // down reveals the app behind the card instead of a solid block.
             .modifier(NowPlayingTintedBackground())
         } else {
             nowPlayingPresentation(
@@ -390,14 +389,14 @@ extension IOSMainWindow {
     ]
 }
 
-/// Observes the player tint on its own, so a palette change re-renders only
-/// the presentation background rather than the whole window.
+/// The cover's own layer stays clear so pulling the player down reveals the
+/// app behind it, like the system player. The player paints its artwork
+/// backdrop edge to edge from the first frame (palette seeded from memory),
+/// so there is neither a white flash nor a flat colour block when dragging.
 @available(iOS 16.4, *)
 private struct NowPlayingTintedBackground: ViewModifier {
-    @ObservedObject private var tint = NowPlayingTint.shared
-
     func body(content: Content) -> some View {
-        content.presentationBackground(tint.presentationColor)
+        content.presentationBackground(.clear)
     }
 }
 

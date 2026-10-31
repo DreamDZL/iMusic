@@ -36,6 +36,30 @@ final class NowPlayingPresentationMetricsTests: XCTestCase {
         }
     }
 
+    /// Left swipe on the song page opens lyrics, right swipe on lyrics goes
+    /// back; short drags and the opposite direction stay put.
+    func testPageSwipeDirectionAndThreshold() {
+        XCTAssertEqual(NowPlayingPresentationMetrics.pageSwipeTarget(
+            translation: -80, predictedTranslation: -120, showsLyrics: false), true)
+        XCTAssertEqual(NowPlayingPresentationMetrics.pageSwipeTarget(
+            translation: 80, predictedTranslation: 120, showsLyrics: true), false)
+        XCTAssertNil(NowPlayingPresentationMetrics.pageSwipeTarget(
+            translation: 80, predictedTranslation: 300, showsLyrics: false))
+        XCTAssertNil(NowPlayingPresentationMetrics.pageSwipeTarget(
+            translation: -20, predictedTranslation: -40, showsLyrics: false))
+        // A quick flick commits even with little travel.
+        XCTAssertEqual(NowPlayingPresentationMetrics.pageSwipeTarget(
+            translation: -25, predictedTranslation: -260, showsLyrics: false), true)
+    }
+
+    /// The pulled-down player is a rounded card; at rest it is square.
+    func testDismissCardShape() {
+        XCTAssertEqual(NowPlayingPresentationMetrics.dismissCornerRadius(progress: 0), 0)
+        XCTAssertEqual(NowPlayingPresentationMetrics.dismissCornerRadius(progress: 1), 40)
+        XCTAssertEqual(NowPlayingPresentationMetrics.dismissProgress(dragOffset: 0, height: 900), 0)
+        XCTAssertEqual(NowPlayingPresentationMetrics.dismissProgress(dragOffset: 600, height: 900), 1)
+    }
+
     /// Hidden lyric controls come back only from a tap in the lower band;
     /// taps higher up stay available for seeking to a line.
     func testLyricsRevealTapOnlyInLowerBandWhileHidden() {

@@ -154,12 +154,8 @@ struct LocalPlaylistsView: View {
                         } label: {
                             Label("调整歌单顺序", systemImage: "line.3.horizontal")
                         }
-                        Button {
-                            isSelectingPlaylists = true
-                        } label: {
-                            Label("批量删除歌单", systemImage: "checklist")
-                        }
-                        .disabled(store.playlists.isEmpty)
+                        // Batch delete lives behind the 编辑 button (select,
+                        // then delete); a second menu entry duplicated it.
                         Button {
                             showImport = true
                         } label: {

@@ -18,6 +18,8 @@ struct NowPlayingView: View {
     #endif
 
     @State private var artworkImage: PlatformImage?
+    /// Cover URL `artworkImage` was loaded from, to skip redundant reloads.
+    @State private var artworkSourceKey: String?
     @State private var artworkPalette: ArtworkPaletteTransition
     @State private var activeIndex: Int?
     @State private var lyricLineFrames = LyricLineFrameStore()
@@ -43,6 +45,8 @@ struct NowPlayingView: View {
     @State private var skipForwardTrigger = 0
     @State private var skipBackTrigger = 0
     @State private var playPauseTrigger = 0
+    /// Live finger offset of the song ⇄ lyrics page swipe.
+    @State private var pageSwipeOffset: CGFloat = 0
     #if os(iOS)
     @State private var showQueueOnMobile = false
     @State private var showQueueSheet = false
@@ -69,6 +73,7 @@ struct NowPlayingView: View {
         }
         #endif
         _artworkImage = State(initialValue: seededImage)
+        _artworkSourceKey = State(initialValue: seededImage == nil ? nil : player.currentTrack?.album.picUrl)
         _artworkPalette = State(initialValue: ArtworkPaletteTransition(colors: seededColors ?? .fallback))
     }
 
@@ -237,6 +242,8 @@ struct NowPlayingView: View {
             }
             .background(.black)
             .ignoresSafeArea()
+            // Rounded while the player is pulled down (0pt at rest).
+            .modifier(PlayerCardClip())
 #else
         artworkBackdrop.ignoresSafeArea()
 #endif
@@ -326,16 +333,19 @@ struct NowPlayingView: View {
         guard !Task.isCancelled else { return }
         // Keep the artwork seeded by `init` when it already belongs to this
         // track; clearing it first flashed the placeholder on every open.
-        if let seeded = artworkImage,
-           let url = player.currentTrack?.album.picUrl?.resizedImageURL(768),
-           ImageCache.shared.cachedImage(for: url) === seeded {
+        if artworkImage != nil,
+           artworkSourceKey == player.currentTrack?.album.picUrl,
+           artworkSourceKey != nil {
             #if os(iOS)
             NowPlayingTint.shared.update(artworkPalette.colors, for: player.currentTrack?.playbackKey)
             #endif
             return
         }
-        artworkImage = nil
+        // The previous cover stays until the new one is ready, then the two
+        // cross-fade. Clearing it here flashed an empty placeholder between
+        // songs, which read as a stutter.
         guard let track = player.currentTrack else {
+            setArtwork(nil)
             transitionArtworkPalette(to: .fallback)
             return
         }
@@ -360,17 +370,40 @@ struct NowPlayingView: View {
         }
         guard let urlString, let url = urlString.resizedImageURL(768) else {
             guard !Task.isCancelled, player.currentTrack?.playbackKey == playbackKey else { return }
+            setArtwork(nil)
             transitionArtworkPalette(to: .fallback)
             return
         }
         let cachedImage = await ImageCache.shared.image(for: url)
         guard !Task.isCancelled, player.currentTrack?.playbackKey == playbackKey else { return }
         if let image = cachedImage {
-            artworkImage = image
+            #if os(iOS)
+            // Decode off the main thread before display. A lazily decoded
+            // 768px cover was decoded during the first animation frame, which
+            // is the hitch felt on song changes at 120 Hz.
+            let prepared = await image.byPreparingForDisplay() ?? image
+            guard !Task.isCancelled, player.currentTrack?.playbackKey == playbackKey else { return }
+            setArtwork(prepared)
+            #else
+            setArtwork(image)
+            #endif
+            artworkSourceKey = urlString
             transitionArtworkPalette(to: ArtworkPalette.extract(from: image, cacheKey: urlString))
         } else {
             guard player.currentTrack?.playbackKey == playbackKey else { return }
+            setArtwork(nil)
             transitionArtworkPalette(to: .fallback)
+        }
+    }
+
+    /// Swap the cover with a cross-fade (instant under Reduce Motion).
+    private func setArtwork(_ image: PlatformImage?) {
+        if image == nil { artworkSourceKey = nil }
+        guard image !== artworkImage else { return }
+        if reduceMotion {
+            artworkImage = image
+        } else {
+            withAnimation(.easeInOut(duration: 0.35)) { artworkImage = image }
         }
     }
 
@@ -502,6 +535,7 @@ struct NowPlayingView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .modifier(pageSwipe(width: size.width))
 
                 // Reserve the deck's footprint only while it is shown, so
                 // hidden controls give the whole page back to the lyrics.
@@ -525,6 +559,23 @@ struct NowPlayingView: View {
             }
         }
         .animation(reduceMotion ? .easeInOut(duration: 0.2) : NowPlayingMotion.page, value: showLyricsOnMobile)
+    }
+
+    /// Horizontal page swipe between song page and lyrics, besides the
+    /// lyrics button: left shows lyrics, right returns to the song page.
+    private func pageSwipe(width: CGFloat) -> PlayerPageSwipe {
+        PlayerPageSwipe(
+            showsLyrics: showLyricsOnMobile,
+            pageWidth: width,
+            reduceMotion: reduceMotion,
+            offset: $pageSwipeOffset
+        ) { showLyrics in
+            withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : NowPlayingMotion.page) {
+                showLyricsOnMobile = showLyrics
+                isUserScrolling = false
+                resumeTask?.cancel()
+            }
+        }
     }
 
     private static let deckAccessoryHeight: CGFloat = 44
@@ -609,7 +660,6 @@ struct NowPlayingView: View {
                     // Distinct identifier: during the page change both covers
                     // briefly coexist, and UI tests address the hero cover.
                     artworkView(size: 56, matched: true, identifier: "lyricsHeaderArtwork")
-                        .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
                     trackMeta(compact: true)
                 }
                 .padding(.bottom, 14)
@@ -1160,9 +1210,14 @@ struct NowPlayingView: View {
         Color.clear
             .overlay {
                 if let artworkImage {
+                    // A new identity per image lets the swap cross-fade.
                     Image(platformImage: artworkImage)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
+                        .id(ObjectIdentifier(artworkImage))
+                        // The new cover fades in over the old one, which stays
+                        // opaque until removed: no mid-fade see-through dip.
+                        .transition(.asymmetric(insertion: .opacity, removal: .identity))
                 } else {
                     Rectangle()
                         .fill(.white.opacity(0.06))
@@ -1178,13 +1233,15 @@ struct NowPlayingView: View {
         // thumbnail does not get the same 18pt corners as the hero artwork.
         // Clip before the geometry match so the clip follows the moving frame.
         .clipShape(RoundedRectangle(cornerRadius: min(14, max(6, size * 0.045)), style: .continuous))
+        // Shadow before the geometry match so it travels with the cover
+        // between the two pages instead of waiting at the destination.
+        .shadow(color: .black.opacity(size > 120 ? 0.32 : 0.2), radius: size > 120 ? 22 : 6, y: size > 120 ? 12 : 3)
         .modifier(MatchedArtwork(
             enabled: matched,
             id: Self.artworkGeometryID,
             namespace: playerPageNamespace
         ))
         .frame(width: size, height: size)
-        .shadow(color: .black.opacity(size > 120 ? 0.32 : 0.2), radius: size > 120 ? 22 : 6, y: size > 120 ? 12 : 3)
         .accessibilityLabel("专辑封面")
         .accessibilityIdentifier(identifier)
     }
@@ -1662,6 +1719,86 @@ struct NowPlayingView: View {
         // the previous one relaxes, instead of a linear fade.
         .animation(reduceMotion ? .easeOut(duration: 0.2) : NowPlayingMotion.lyricEmphasis, value: isActive)
         .animation(.easeOut(duration: 0.25), value: isUserScrolling)
+    }
+}
+
+/// Follows the finger horizontally and decides on release whether to change
+/// page. Only clearly horizontal drags count, so lyric scrolling, the
+/// pull-down to close and taps are untouched. The wrong direction rubber
+/// bands instead of moving freely.
+private struct PlayerPageSwipe: ViewModifier {
+    let showsLyrics: Bool
+    let pageWidth: CGFloat
+    let reduceMotion: Bool
+    @Binding var offset: CGFloat
+    let onCommit: (Bool) -> Void
+
+    private enum Axis { case undecided, horizontal, rejected }
+
+    /// Direction decided once per drag. `@GestureState` resets itself when a
+    /// gesture is cancelled (rotation, track change, scroll take-over), so a
+    /// stale "horizontal" lock can never leak into the next drag.
+    @GestureState private var axis: Axis = .undecided
+    /// The start-of-drag lock, kept for `onEnded` (gesture state has already
+    /// reset by then).
+    @State private var lockedHorizontal = false
+
+    func body(content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .offset(x: offset)
+            .opacity(1 - min(abs(offset) / max(pageWidth, 1), 0.35))
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 14)
+                    .updating($axis) { value, state, _ in
+                        guard state == .undecided else { return }
+                        let dx = abs(value.translation.width), dy = abs(value.translation.height)
+                        state = dx > dy * 1.4 ? .horizontal : .rejected
+                    }
+                    .onChanged { value in
+                        // Rewritten on every update, so each drag starts
+                        // from its own lock and a cancelled one can't leak.
+                        // The gesture state can trail by one update, so the
+                        // first event applies the same rule itself.
+                        let dx = value.translation.width
+                        switch axis {
+                        case .horizontal: lockedHorizontal = true
+                        case .rejected: lockedHorizontal = false
+                        case .undecided: lockedHorizontal = abs(dx) > abs(value.translation.height) * 1.4
+                        }
+                        guard lockedHorizontal, !reduceMotion else { return }
+                        let toward = NowPlayingPresentationMetrics.pageSwipeAllowedDirection(showsLyrics: showsLyrics)
+                        // Free movement toward the other page, resistance away.
+                        offset = dx * toward > 0 ? dx * 0.55 : dx * 0.12
+                    }
+                    .onEnded { value in
+                        // Only a drag that locked horizontal at its start may
+                        // change page, however it ends.
+                        let wasHorizontal = lockedHorizontal
+                        lockedHorizontal = false
+                        guard wasHorizontal, let target = NowPlayingPresentationMetrics.pageSwipeTarget(
+                            translation: value.translation.width,
+                            predictedTranslation: value.predictedEndTranslation.width,
+                            showsLyrics: showsLyrics
+                        ) else {
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { offset = 0 }
+                            return
+                        }
+                        // Drop the finger offset without animating it back
+                        // toward the old side; the page change carries the
+                        // motion from here.
+                        var reset = Transaction()
+                        reset.disablesAnimations = true
+                        withTransaction(reset) { offset = 0 }
+                        onCommit(target)
+                    }
+            )
+            // A cancelled drag never reaches onEnded; settle the page anyway.
+            .onChange(of: axis) { _, newValue in
+                guard newValue == .undecided, offset != 0 else { return }
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { offset = 0 }
+            }
+            .onDisappear { offset = 0 }
     }
 }
 

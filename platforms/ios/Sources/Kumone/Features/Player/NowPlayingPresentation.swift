@@ -70,6 +70,26 @@ enum NowPlayingPresentationMetrics {
     /// After the reader stops scrolling, lyrics glide back to the sung line.
     static let lyricsBrowseResumeDelay = Duration.milliseconds(2500)
 
+    /// Direction that leads to the other page: left (-1) from the song page
+    /// to lyrics, right (+1) from lyrics back to the song page.
+    static func pageSwipeAllowedDirection(showsLyrics: Bool) -> CGFloat {
+        showsLyrics ? 1 : -1
+    }
+
+    /// Page to show after a horizontal swipe, or nil to stay. Commits on a
+    /// 60pt drag or a 200pt fling in the allowed direction.
+    static func pageSwipeTarget(
+        translation: CGFloat,
+        predictedTranslation: CGFloat,
+        showsLyrics: Bool
+    ) -> Bool? {
+        let direction = pageSwipeAllowedDirection(showsLyrics: showsLyrics)
+        let distance = translation * direction
+        let predicted = predictedTranslation * direction
+        guard distance >= 60 || (predicted >= 200 && distance > 0) else { return nil }
+        return !showsLyrics
+    }
+
     /// While lyric controls are hidden, a tap in the lower band where the
     /// playback deck appears reveals the controls instead of seeking.
     static func isLyricsControlsRevealTap(
@@ -125,6 +145,18 @@ enum NowPlayingPresentationMetrics {
 
     static var dynamicIslandToIndicatorSpacing: CGFloat {
         dynamicIslandSafeAreaClearance + indicatorTopSpacing
+    }
+
+    /// 0 at rest, 1 once the player is pulled a third of the screen down.
+    static func dismissProgress(dragOffset: CGFloat, height: CGFloat) -> CGFloat {
+        guard height > 0 else { return 0 }
+        return min(max(dragOffset / (height / 3), 0), 1)
+    }
+
+    /// Corner radius of the player card while it is pulled down; it reaches
+    /// a display-like 40pt almost immediately so the edge reads as a card.
+    static func dismissCornerRadius(progress: CGFloat) -> CGFloat {
+        progress <= 0 ? 0 : min(40, 12 + progress * 120)
     }
 
     static func shouldDismiss(
@@ -194,6 +226,30 @@ extension EnvironmentValues {
     }
 }
 
+private struct PlayerCardCornerRadiusKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    /// Corner radius of the player card while it is pulled down (0 at rest).
+    var playerCardCornerRadius: CGFloat {
+        get { self[PlayerCardCornerRadiusKey.self] }
+        set { self[PlayerCardCornerRadiusKey.self] = newValue }
+    }
+}
+
+/// Rounds the player's full-bleed backdrop while it is pulled down. Applied
+/// to the backdrop after `ignoresSafeArea`, so it clips at the screen edge.
+/// The structure never changes (radius 0 at rest), so a drag in progress is
+/// never torn down, and only this modifier re-renders per drag frame.
+struct PlayerCardClip: ViewModifier {
+    @Environment(\.playerCardCornerRadius) private var cornerRadius
+
+    func body(content: Content) -> some View {
+        content.clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+}
+
 /// Owns presentation mechanics for Now Playing. The compact player draws one
 /// accessible drag indicator because full-screen covers do not consistently
 /// display the system sheet indicator.
@@ -222,6 +278,10 @@ struct IOSNowPlayingPresentation<Content: View>: View {
             let isInteractive = proxy.size.width < 720
             let usesCustomDrag = isInteractive && !usesSystemInteractiveDismissal
 
+            let progress = usesCustomDrag
+                ? NowPlayingPresentationMetrics.dismissProgress(
+                    dragOffset: dragOffset, height: proxy.size.height)
+                : 0
             ZStack(alignment: .top) {
                 content
                     .environment(\.dismissNowPlayingAction, dismiss)
@@ -229,12 +289,21 @@ struct IOSNowPlayingPresentation<Content: View>: View {
                         \.dismissNowPlayingDragAction,
                         dismissDragAction(usesCustomDrag: usesCustomDrag)
                     )
+                    .environment(
+                        \.playerCardCornerRadius,
+                        NowPlayingPresentationMetrics.dismissCornerRadius(progress: progress)
+                    )
 
                 if isInteractive && !usesSystemInteractiveDismissal {
                     dragIndicator
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // While pulled down the player becomes a card: rounded corners
+            // (on the backdrop, see PlayerCardClip), a slight shrink, and the
+            // app visible behind it (the presentation background is clear),
+            // instead of a flat block of colour filling the gap.
+            .scaleEffect(1 - 0.06 * progress, anchor: .top)
             .offset(y: usesCustomDrag ? dragOffset : 0)
         }
     }

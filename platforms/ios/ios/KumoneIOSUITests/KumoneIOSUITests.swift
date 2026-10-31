@@ -255,8 +255,10 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(accessoryControls.waitForNonExistence(timeout: 5),
                       "The accessory row must hide again with the controls")
 
-        lyricsScroll.swipeRight()
-        XCTAssertTrue(lyricsPage.exists, "Horizontal swipes must stay on lyrics")
+        // Swiping toward the song page's side is the only horizontal swipe
+        // that changes page; the opposite direction stays on lyrics.
+        lyricsScroll.swipeLeft()
+        XCTAssertTrue(lyricsPage.exists, "A left swipe on lyrics must not leave the lyrics page")
         XCTAssertFalse(songTransportControls.exists)
         XCTAssertFalse(transportControls.exists, "Transport controls must remain hidden during lyric browsing")
 
@@ -282,10 +284,18 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(app.buttons["showSynchronizedLyrics"].exists, "Revealed lyrics need the same bottom toolbar")
         app.buttons["showSynchronizedLyrics"].tap()
         XCTAssertTrue(songTransportControls.waitForExistence(timeout: 5))
-        XCTAssertTrue(songPage.exists)
+        XCTAssertTrue(songPage.waitForExistence(timeout: 5))
+        XCTAssertTrue(lyricsPage.waitForNonExistence(timeout: 5))
+        // Besides the button, a left swipe on the song page opens lyrics and
+        // a right swipe on lyrics returns to the song page.
         artwork.swipeLeft()
-        XCTAssertTrue(songPage.exists, "Switch pages only with the lyrics button")
+        XCTAssertTrue(lyricsPage.waitForExistence(timeout: 5), "A left swipe on the song page must open lyrics")
+        XCTAssertTrue(songPage.waitForNonExistence(timeout: 5))
+        lyricsScroll.swipeRight()
+        XCTAssertTrue(songPage.waitForExistence(timeout: 5), "A right swipe on lyrics must return to the song page")
+        XCTAssertTrue(lyricsPage.waitForNonExistence(timeout: 5))
         app.buttons["showSynchronizedLyrics"].tap()
+        XCTAssertTrue(lyricsPage.waitForExistence(timeout: 5))
         XCTAssertTrue(transportControls.waitForNonExistence(timeout: 20),
                       "Lyrics transport controls must auto-hide after returning from the song page")
 
@@ -361,5 +371,16 @@ final class KumoneIOSUITests: XCTestCase {
                       "A tap in the lower area must bring the controls back")
         assertSettles(accessoryControls, atMidY: songAccessoryMidY,
                       message: "The accessory row must reappear at its fixed position")
+
+        // Pulling the grabber down must close the player (the card follows
+        // the finger and the drag must survive its corner-rounding update).
+        let grabber = app.descendants(matching: .any)["nowPlayingDismissIndicator"]
+        XCTAssertTrue(grabber.waitForExistence(timeout: 5))
+        let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 420)))
+        XCTAssertTrue(lyricsPage.waitForNonExistence(timeout: 8),
+                      "Dragging the grabber down must dismiss the player")
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 5),
+                      "The mini player must be back after dismissing")
     }
 }
