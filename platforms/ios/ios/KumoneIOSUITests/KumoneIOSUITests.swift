@@ -451,12 +451,18 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(accessoryControls.waitForExistence(timeout: 5),
                       "A tap in the lower area must bring the controls back")
 
-        // Pulling the grabber down must close the player (the card follows
-        // the finger and the drag must survive its corner-rounding update).
+        // Pulling the grabber down must close the player. On iPhone this is
+        // the system zoom dismissal (the same shrink as a pull on the cover),
+        // so the pull is a quick fling like a real one.
         let grabber = app.descendants(matching: .any)["nowPlayingDismissIndicator"]
         XCTAssertTrue(grabber.waitForExistence(timeout: 5))
         let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
-        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 420)))
+        start.press(
+            forDuration: 0.05,
+            thenDragTo: start.withOffset(CGVector(dx: 0, dy: 520)),
+            withVelocity: .fast,
+            thenHoldForDuration: 0
+        )
         XCTAssertTrue(lyricsPage.waitForNonExistence(timeout: 8),
                       "Dragging the grabber down must dismiss the player")
         XCTAssertTrue(miniPlayer.waitForExistence(timeout: 5),

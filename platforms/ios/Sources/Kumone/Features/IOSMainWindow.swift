@@ -129,7 +129,7 @@ public struct IOSMainWindow: View {
     private var systemNowPlayingRoot: some View {
         appContent
             .fullScreenCover(isPresented: $player.showNowPlaying) {
-                systemNowPlayingPresentation
+                systemNowPlayingPresentation(zooms: false)
             }
     }
 
@@ -137,7 +137,7 @@ public struct IOSMainWindow: View {
     private var zoomNowPlayingRoot: some View {
         appContent
             .fullScreenCover(isPresented: $player.showNowPlaying) {
-                systemNowPlayingPresentation
+                systemNowPlayingPresentation(zooms: true)
                     .navigationTransition(
                         .zoom(
                             sourceID: NowPlayingTransitionID.surface,
@@ -147,20 +147,23 @@ public struct IOSMainWindow: View {
             }
     }
 
+    /// `zooms`: the iPhone cover with the zoom transition. Its system
+    /// interactive dismissal shrinks the whole card back into the mini player
+    /// from a drag anywhere, the grabber included, so the grabber has no drag
+    /// of its own and both pulls look the same. Without the zoom the player
+    /// keeps its own drag (follow the finger as a rounded card).
     @ViewBuilder
-    private var systemNowPlayingPresentation: some View {
+    private func systemNowPlayingPresentation(zooms: Bool) -> some View {
         if #available(iOS 16.4, *) {
             nowPlayingPresentation(
-                usesSystemInteractiveDismissal: false,
+                usesSystemInteractiveDismissal: zooms,
                 dismissAnimation: nil
             )
             // fullScreenCover does not reliably expose the sheet grabber. Use
             // the player's single accessible grabber and suppress any system
             // indicator if this presentation adapts to a sheet.
             .presentationDragIndicator(.hidden)
-            // Clear, not systemBackground or a flat tint: dragging the player
-            // down reveals the app behind the card instead of a solid block.
-            .modifier(NowPlayingTintedBackground())
+            .modifier(NowPlayingTintedBackground(isClear: !zooms))
         } else {
             nowPlayingPresentation(
                 usesSystemInteractiveDismissal: true,
@@ -389,14 +392,25 @@ extension IOSMainWindow {
     ]
 }
 
-/// The cover's own layer stays clear so pulling the player down reveals the
-/// app behind it, like the system player. The player paints its artwork
-/// backdrop edge to edge from the first frame (palette seeded from memory),
-/// so there is neither a white flash nor a flat colour block when dragging.
+/// Background of the cover's own layer.
+/// - Zoom (iPhone): the artwork tint. The zoom draws the card with rounded
+///   corners while it opens and closes; a clear layer let the light app show
+///   as a white rim around them. The system dismissal moves this layer with
+///   the card, so it never shows as a block.
+/// - Custom drag: clear, so the card the player draws while it follows the
+///   finger shows the app behind it.
+/// Observes the tint on its own so a palette change re-renders only this.
 @available(iOS 16.4, *)
 private struct NowPlayingTintedBackground: ViewModifier {
+    private let isClear: Bool
+    @ObservedObject private var tint = NowPlayingTint.shared
+
+    init(isClear: Bool) {
+        self.isClear = isClear
+    }
+
     func body(content: Content) -> some View {
-        content.presentationBackground(.clear)
+        content.presentationBackground(isClear ? Color.clear : tint.presentationColor)
     }
 }
 

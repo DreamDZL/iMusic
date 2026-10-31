@@ -1,5 +1,6 @@
 import SwiftUI
 #if os(iOS)
+import AVFoundation
 import MediaPlayer
 import UIKit
 #endif
@@ -2332,18 +2333,95 @@ private struct CompactTransportControls: View {
 
 private struct CompactVolumeControl: View {
 #if os(iOS)
+    @StateObject private var volume = SystemVolume()
+    /// Resets itself when the drag is cancelled (dismissal, sheet,
+    /// interruption), so the bar can never stay in its dragging state.
+    @GestureState private var isTouching = false
+    /// Level when a horizontal drag took hold; nil while no drag is active.
+    @State private var dragStartLevel: Float?
+    @State private var dragLevel: Float = 0
+
+    private var isDragging: Bool { isTouching && dragStartLevel != nil }
+
+    /// Thumbless bar drawn like the progress bar: one fill over one track,
+    /// thickening while dragged. The restyled system slider stacked two
+    /// translucent tracks under its thumb canvas, which showed as a lighter
+    /// block beside the dot. Drags are relative, like the system bar: a touch
+    /// alone never jumps the volume.
     var body: some View {
         HStack(spacing: 11) {
             Image(systemName: "speaker.fill")
                 .font(.caption2)
-            MPSystemVolumeSlider()
-                .frame(height: 28)
+            GeometryReader { geo in
+                let width = geo.size.width
+                let level = CGFloat(isDragging ? dragLevel : volume.level)
+                let trackHeight: CGFloat = isDragging ? 11 : 7
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(.white.opacity(0.22))
+                        .frame(height: trackHeight)
+                    Capsule()
+                        .fill(.white.opacity(isDragging ? 1 : 0.72))
+                        .frame(width: max(trackHeight, width * min(max(level, 0), 1)), height: trackHeight)
+                }
+                .animation(.spring(response: 0.26, dampingFraction: 0.82), value: isDragging)
+                // Hardware buttons move the bar smoothly; drags follow the
+                // finger directly.
+                .animation(isDragging ? nil : .easeOut(duration: 0.18), value: volume.level)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 2)
+                        .updating($isTouching) { _, touching, _ in touching = true }
+                        .onChanged { value in
+                            guard width > 0 else { return }
+                            if dragStartLevel == nil {
+                                // Mostly vertical pulls are left alone.
+                                guard abs(value.translation.width) >= abs(value.translation.height) else { return }
+                                dragStartLevel = volume.level
+                            }
+                            dragLevel = draggedLevel(for: value.translation.width, width: width)
+                            volume.set(dragLevel)
+                        }
+                        .onEnded { value in
+                            if dragStartLevel != nil, width > 0 {
+                                volume.set(draggedLevel(for: value.translation.width, width: width))
+                            }
+                            dragStartLevel = nil
+                        }
+                )
+            }
+            .frame(height: 28)
+            // Keeps the system volume HUD away and carries the change to the
+            // system; it is invisible and takes no touches.
+            .background { SystemVolumeBridge(volume: volume) }
+            .onAppear { volume.startTracking() }
+            .onDisappear { volume.stopTracking() }
+            // A cancelled drag never reaches onEnded.
+            .onChange(of: isTouching) { _, touching in
+                if !touching { dragStartLevel = nil }
+            }
+            .accessibilityElement()
+            .accessibilityLabel("音量")
+            .accessibilityValue("\(Int((volume.level * 100).rounded()))%")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: volume.set(min(volume.level + 0.0625, 1))
+                case .decrement: volume.set(max(volume.level - 0.0625, 0))
+                @unknown default: break
+                }
+            }
             Image(systemName: "speaker.wave.3.fill")
                 .font(.caption)
         }
         .foregroundStyle(.white.opacity(0.7))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("系统音量")
+    }
+
+    private func draggedLevel(for translation: CGFloat, width: CGFloat) -> Float {
+        let start = dragStartLevel ?? volume.level
+        return min(max(start + Float(translation / width), 0), 1)
     }
 #else
     @EnvironmentObject private var player: PlayerService
@@ -2411,54 +2489,103 @@ private struct CompactVolumeControl: View {
 }
 
 #if os(iOS)
-private struct MPSystemVolumeSlider: UIViewRepresentable {
+/// System output volume for the custom bar. Writes go through the hidden
+/// `MPVolumeView` slider, the public way to set it. Reads come from
+/// `AVAudioSession.outputVolume` KVO while the session is active, and from
+/// that slider (which MediaPlayer keeps in sync, also while paused and the
+/// session is inactive) through a light poll while the bar is on screen.
+@MainActor
+private final class SystemVolume: ObservableObject {
+    @Published private(set) var level: Float = AVAudioSession.sharedInstance().outputVolume
+    fileprivate weak var volumeView: MPVolumeView?
+    private var observation: NSKeyValueObservation?
+    private var pollTask: Task<Void, Never>?
+    /// Readings right after a local change are echoes of intermediate drag
+    /// values; ignoring them keeps the bar from stepping back.
+    private var lastLocalSet: TimeInterval = 0
+
+    init() {
+        observation = AVAudioSession.sharedInstance().observe(\.outputVolume) { [weak self] session, _ in
+            let value = session.outputVolume
+            Task { @MainActor in self?.receive(value) }
+        }
+    }
+
+    private var slider: UISlider? {
+        volumeView?.subviews.compactMap { $0 as? UISlider }.first
+    }
+
+    func set(_ value: Float) {
+        // No slider, no change: the bar must not show a volume the system
+        // does not have.
+        guard let slider else { return }
+        let clamped = min(max(value, 0), 1)
+        lastLocalSet = ProcessInfo.processInfo.systemUptime
+        level = clamped
+        slider.setValue(clamped, animated: false)
+        slider.sendActions(for: .valueChanged)
+    }
+
+    /// Two reads a second and a publish only on change: no redraw while the
+    /// volume stays put.
+    func startTracking() {
+        if let value = slider?.value { receive(value) }
+        guard pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self else { return }
+                if let value = self.slider?.value { self.receive(value) }
+            }
+        }
+    }
+
+    func stopTracking() {
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    private func receive(_ value: Float) {
+        guard ProcessInfo.processInfo.systemUptime - lastLocalSet > 0.35,
+              abs(value - level) > 0.001 else { return }
+        level = value
+    }
+}
+
+/// An `MPVolumeView` kept in the window so the system routes volume changes
+/// through it (and hides its HUD while the player is up), with blank track
+/// and thumb images so nothing of it is seen. Touches and accessibility go
+/// to the SwiftUI bar above it.
+private struct SystemVolumeBridge: UIViewRepresentable {
+    let volume: SystemVolume
+
     func makeUIView(context: Context) -> MPVolumeView {
         let view = MPVolumeView(frame: .zero)
         view.showsRouteButton = false
         view.showsVolumeSlider = true
-        view.tintColor = .white
-        Self.style(view)
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        view.accessibilityElementsHidden = true
+        attach(view)
         return view
     }
 
     func updateUIView(_ uiView: MPVolumeView, context: Context) {
         // MPVolumeView can rebuild its slider after a route change.
-        Self.style(uiView)
+        attach(uiView)
     }
 
-    /// Slim capsule track with a small dot, matching the progress bar instead
-    /// of UIKit's large default thumb. The thumb canvas stays 32pt square so
-    /// the drag target remains comfortable.
-    private static func style(_ view: MPVolumeView) {
+    private func attach(_ view: MPVolumeView) {
+        volume.volumeView = view
         guard let slider = view.subviews.compactMap({ $0 as? UISlider }).first,
-              slider.thumbImage(for: .normal) !== thumb else { return }
-        slider.setMinimumTrackImage(minimumTrack, for: .normal)
-        slider.setMaximumTrackImage(maximumTrack, for: .normal)
-        slider.setThumbImage(thumb, for: .normal)
-        slider.setThumbImage(thumb, for: .highlighted)
-        slider.accessibilityLabel = "系统音量"
+              slider.thumbImage(for: .normal) !== Self.blank else { return }
+        slider.setMinimumTrackImage(Self.blank, for: .normal)
+        slider.setMaximumTrackImage(Self.blank, for: .normal)
+        slider.setThumbImage(Self.blank, for: .normal)
+        slider.setThumbImage(Self.blank, for: .highlighted)
     }
 
-    private static let trackHeight: CGFloat = 7
-    // Rendered once; updateUIView runs on every player redraw.
-    private static let minimumTrack = capsule(UIColor.white.withAlphaComponent(0.72))
-    private static let maximumTrack = capsule(UIColor.white.withAlphaComponent(0.22))
-
-    private static func capsule(_ color: UIColor) -> UIImage {
-        let size = CGSize(width: trackHeight * 2 + 1, height: trackHeight)
-        let image = UIGraphicsImageRenderer(size: size).image { _ in
-            color.setFill()
-            UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: trackHeight / 2).fill()
-        }
-        return image.resizableImage(withCapInsets: UIEdgeInsets(
-            top: 0, left: trackHeight, bottom: 0, right: trackHeight
-        ))
-    }
-
-    private static let thumb: UIImage = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32)).image { _ in
-        UIColor.white.setFill()
-        UIBezierPath(ovalIn: CGRect(x: 10, y: 10, width: 12, height: 12)).fill()
-    }
+    private static let blank: UIImage = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
 }
 #endif
 

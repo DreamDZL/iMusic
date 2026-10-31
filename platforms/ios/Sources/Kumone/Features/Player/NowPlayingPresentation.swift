@@ -295,7 +295,7 @@ struct IOSNowPlayingPresentation<Content: View>: View {
                         NowPlayingPresentationMetrics.dismissCornerRadius(progress: progress)
                     )
 
-                if isInteractive && !usesSystemInteractiveDismissal {
+                if isInteractive {
                     dragIndicator
                 }
             }
@@ -312,7 +312,12 @@ struct IOSNowPlayingPresentation<Content: View>: View {
     @ViewBuilder
     private var dragIndicator: some View {
         if usesSystemInteractiveDismissal {
+            // No drag of its own: a pull starting here reaches the system's
+            // interactive dismissal, the same shrink as a pull on the cover.
+            // The surface stays hit-testable so the touch begins on a
+            // non-scrolling view rather than on the lyrics below it.
             dragIndicatorSurface
+                .contentShape(Rectangle())
                 .accessibilityLabel("下拉关闭播放页")
                 .accessibilityAction(named: Text("关闭播放页"), dismiss)
         } else {
@@ -367,7 +372,12 @@ struct IOSNowPlayingPresentation<Content: View>: View {
                 guard usesCustomDrag else { return }
                 updateDismissDrag(translation)
             },
-            onEnded: finishDismissDrag
+            onEnded: { translation, predicted in
+                // With the system dismissal the pull is the system's alone;
+                // closing here as well would race its own animation.
+                guard usesCustomDrag else { return }
+                finishDismissDrag(translation, predicted)
+            }
         )
     }
 

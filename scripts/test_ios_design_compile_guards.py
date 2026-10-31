@@ -73,6 +73,23 @@ class IOSDesignCompileGuards(unittest.TestCase):
         store = (ROOT / "Core/Storage/LocalPlaylistStore.swift").read_text(encoding="utf-8")
         self.assertNotIn("tracks.append(track)", store, "saved songs go to the top of a playlist")
 
+    def test_grabber_and_cover_share_the_zoom_dismissal(self):
+        # The zoom cover uses the system interactive dismissal for every pull
+        # (grabber included) and keeps the tinted layer behind its rounded
+        # corners; only the non-zoom cover draws its own card drag.
+        window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")
+        self.assertIn("systemNowPlayingPresentation(zooms: true)", window)
+        self.assertIn("usesSystemInteractiveDismissal: zooms", window)
+        self.assertIn("NowPlayingTintedBackground(isClear: !zooms)", window)
+
+    def test_volume_bar_is_not_a_restyled_system_slider(self):
+        # Two translucent track images overlapped under the system slider's
+        # thumb canvas and showed as a lighter block beside the dot.
+        player = (ROOT / "Features/Player/NowPlayingView.swift").read_text(encoding="utf-8")
+        self.assertNotIn("MPSystemVolumeSlider", player)
+        self.assertIn("private struct SystemVolumeBridge", player)
+        self.assertNotIn("withAlphaComponent(0.72)", player)
+
     def test_tertiary_token_is_a_concrete_color(self):
         source = (ROOT / "DesignSystem/Theme.swift").read_text(encoding="utf-8")
         self.assertNotIn("= Color.tertiary", source)
