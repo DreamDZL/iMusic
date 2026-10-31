@@ -140,8 +140,26 @@ public struct IOSMainWindow: View {
     @available(iOS 18.0, *)
     private var zoomNowPlayingRoot: some View {
         appContent
+            .overlay {
+                if NowPlayingNativeDiagnostics.usesStableSource {
+                    Button("Native zoom probe") { player.showNowPlaying = true }
+                        .accessibilityIdentifier("nativeZoomStableSource")
+                        .matchedTransitionSource(id: NowPlayingTransitionID.surface, in: nowPlayingTransition)
+                }
+            }
             .fullScreenCover(isPresented: $player.showNowPlaying) {
-                systemNowPlayingPresentation(zooms: true)
+                Group {
+                    if NowPlayingNativeDiagnostics.usesMinimalDestination {
+                        // Diagnostic destination, not a backing mask: no app
+                        // gestures, scroll views, player wrapper or controls.
+                        Color.teal.ignoresSafeArea()
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Native zoom probe")
+                            .accessibilityIdentifier("nativeZoomProbeDestination")
+                    } else {
+                        systemNowPlayingPresentation(zooms: true)
+                    }
+                }
                     .navigationTransition(
                         .zoom(sourceID: NowPlayingTransitionID.surface, in: nowPlayingTransition)
                     )
@@ -391,6 +409,22 @@ private enum NowPlayingTransitionID {
     static let surface = "now-playing-surface"
 }
 
+/// Nonpersistent A/B probes, disabled in release and without the UI-test flag.
+enum NowPlayingNativeDiagnostics {
+    private static func enabled(_ argument: String) -> Bool {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        return arguments.contains("-imusic-ui-testing") && arguments.contains(argument)
+        #else
+        return false
+        #endif
+    }
+
+    static var usesMinimalDestination: Bool { enabled("-imusic-ui-native-zoom-minimal") }
+    static var usesStableSource: Bool { enabled("-imusic-ui-native-zoom-stable-source") }
+    static var skipsPageSwipe: Bool { enabled("-imusic-ui-native-zoom-no-page-swipe") }
+}
+
 @available(iOS 26.0, *)
 private struct MiniPlayerAccessoryModifier: ViewModifier {
     let isActive: Bool
@@ -431,7 +465,7 @@ private struct IOSMiniPlayerAccessory: View {
 private extension View {
     @ViewBuilder
     func nowPlayingTransitionSource(in namespace: Namespace.ID) -> some View {
-        if #available(iOS 18.0, *) {
+        if #available(iOS 18.0, *), !NowPlayingNativeDiagnostics.usesStableSource {
             matchedTransitionSource(id: NowPlayingTransitionID.surface, in: namespace)
         } else {
             self

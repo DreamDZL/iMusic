@@ -1752,6 +1752,14 @@ private struct PlayerPageSwipe: ViewModifier {
     /// reset by then).
     @State private var lockedHorizontal = false
 
+    private var gestureMask: GestureMask {
+        #if os(iOS)
+        NowPlayingNativeDiagnostics.skipsPageSwipe ? .none : .all
+        #else
+        .all
+        #endif
+    }
+
     func body(content: Content) -> some View {
         content
             .contentShape(Rectangle())
@@ -1800,7 +1808,8 @@ private struct PlayerPageSwipe: ViewModifier {
                         reset.disablesAnimations = true
                         withTransaction(reset) { offset = 0 }
                         onCommit(target)
-                    }
+                    },
+                including: gestureMask
             )
             // A cancelled drag never reaches onEnded; settle the page anyway.
             .onChange(of: axis) { _, newValue in

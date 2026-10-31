@@ -96,6 +96,17 @@ class IOSDesignCompileGuards(unittest.TestCase):
         root = window[window.index("private var presentationRoot"):window.index("private var systemNowPlayingRoot")]
         self.assertIn("zoomNowPlayingRoot", root)
 
+    def test_native_zoom_diagnostics_are_nonpersistent_and_debug_only(self):
+        window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")
+        diagnostic = window[window.index("enum NowPlayingNativeDiagnostics {"):]
+        diagnostic = diagnostic[:diagnostic.index("@available(iOS 26.0, *)")]
+        self.assertIn("#if DEBUG", diagnostic)
+        self.assertIn('arguments.contains("-imusic-ui-testing")', diagnostic)
+        self.assertIn("#else\n        return false", diagnostic)
+        self.assertNotIn("UserDefaults", diagnostic)
+        player = (ROOT / "Features/Player/NowPlayingView.swift").read_text(encoding="utf-8")
+        self.assertIn("including: gestureMask", player)
+
     def test_tertiary_token_is_a_concrete_color(self):
         source = (ROOT / "DesignSystem/Theme.swift").read_text(encoding="utf-8")
         self.assertNotIn("= Color.tertiary", source)

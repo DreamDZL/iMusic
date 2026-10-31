@@ -594,6 +594,80 @@ final class KumoneIOSUITests: XCTestCase {
     }
 
     @MainActor
+    private func assertIsolatedNativeDismissal(
+        arguments: [String], minimal: Bool = false, stableSource: Bool = false,
+        artwork: Bool = false
+    ) {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture"] + arguments
+        app.launch()
+        let opener = app.buttons[stableSource ? "nativeZoomStableSource" : "miniPlayerOpenNowPlaying"]
+        XCTAssertTrue(opener.waitForExistence(timeout: 15))
+        opener.tap()
+        let destination = app.descendants(matching: .any)[
+            minimal ? "nativeZoomProbeDestination" : "appleMusicSongPage"
+        ]
+        XCTAssertTrue(destination.waitForExistence(timeout: 10))
+        let start: XCUICoordinate
+        if artwork {
+            let cover = app.descendants(matching: .any)["nowPlayingArtworkImage"]
+            XCTAssertTrue(cover.waitForExistence(timeout: 5))
+            start = cover.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+        } else {
+            // Same absolute start as the real 180×82 grabber target on the
+            // current simulator, without placing a control in the minimal view.
+            let grabber = app.descendants(matching: .any)["nowPlayingDismissIndicator"]
+            if minimal {
+                start = app.coordinate(withNormalizedOffset: .zero).withOffset(
+                    CGVector(dx: app.frame.width * 0.5, dy: 86.6)
+                )
+            } else {
+                XCTAssertTrue(grabber.waitForExistence(timeout: 5))
+                start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+            }
+        }
+        print("NATIVE-PROBE arguments=\(arguments) artwork=\(artwork) start=\(start.screenPoint)")
+        start.press(
+            forDuration: 0.05,
+            thenDragTo: start.withOffset(CGVector(dx: 0, dy: artwork ? 260 : 560)),
+            withVelocity: XCUIGestureVelocity(2400),
+            thenHoldForDuration: 0
+        )
+        XCTAssertTrue(destination.waitForNonExistence(timeout: 8),
+                      "Native probe must dismiss without fallback: \(arguments), artwork=\(artwork)")
+        XCTAssertTrue(opener.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testNativeZoomGestureFreeDestinationFromAccessory() {
+        assertIsolatedNativeDismissal(arguments: ["-imusic-ui-native-zoom-minimal"], minimal: true)
+    }
+
+    @MainActor
+    func testNativeZoomGestureFreeDestinationFromStableSource() {
+        assertIsolatedNativeDismissal(
+            arguments: ["-imusic-ui-native-zoom-minimal", "-imusic-ui-native-zoom-stable-source"],
+            minimal: true, stableSource: true
+        )
+    }
+
+    @MainActor
+    func testSongPageGrabberWithoutPageSwipe() {
+        assertIsolatedNativeDismissal(arguments: ["-imusic-ui-native-zoom-no-page-swipe"])
+    }
+
+    @MainActor
+    func testSongPageArtworkDismissesIndependently() {
+        assertIsolatedNativeDismissal(arguments: [], artwork: true)
+    }
+
+    @MainActor
+    func testSongPageArtworkWithoutPageSwipe() {
+        assertIsolatedNativeDismissal(arguments: ["-imusic-ui-native-zoom-no-page-swipe"], artwork: true)
+    }
+
+    @MainActor
     func testLyricsControlsAutoHideWithDefaultTiming() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
