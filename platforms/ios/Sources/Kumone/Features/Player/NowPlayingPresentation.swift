@@ -259,17 +259,35 @@ enum NativeNowPlayingDismissPolicy {
 /// this modifier never changes a view's position, scale, opacity or timing.
 struct NativeNowPlayingDismissRequest: ViewModifier {
     @Environment(\.dismissNowPlayingAction) private var dismiss
+    var acceptsTap = false
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content.simultaneousGesture(
-            DragGesture(minimumDistance: 14)
-                .onEnded { value in
-                    guard NativeNowPlayingDismissPolicy.shouldRequestDismiss(
-                        translation: value.translation, predicted: value.predictedEndTranslation
-                    ) else { return }
-                    dismiss?()
-                }
-        )
+        if acceptsTap {
+            // A recognized short pull must not fall through to tap-to-close.
+            // Simultaneous tap+drag can accept both under system tap slop.
+            content.gesture(
+                DragGesture(minimumDistance: 14)
+                    .exclusively(before: TapGesture())
+                    .onEnded { result in
+                        switch result {
+                        case .first(let drag): requestDismissal(drag)
+                        case .second: dismiss?()
+                        }
+                    }
+            )
+        } else {
+            content.simultaneousGesture(
+                DragGesture(minimumDistance: 14).onEnded(requestDismissal)
+            )
+        }
+    }
+
+    private func requestDismissal(_ value: DragGesture.Value) {
+        guard NativeNowPlayingDismissPolicy.shouldRequestDismiss(
+            translation: value.translation, predicted: value.predictedEndTranslation
+        ) else { return }
+        dismiss?()
     }
 }
 
@@ -294,15 +312,13 @@ struct IOSNowPlayingPresentation<Content: View>: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .environment(\.dismissNowPlayingAction, dismiss)
-        .accessibilityAddTraits(.isModal)
         .accessibilityAction(.escape, dismiss)
     }
 
     private var dragIndicator: some View {
         dragIndicatorSurface
             .contentShape(Rectangle())
-            .modifier(NativeNowPlayingDismissRequest())
-            .simultaneousGesture(TapGesture().onEnded { dismiss() })
+            .modifier(NativeNowPlayingDismissRequest(acceptsTap: true))
             // Keep one stable accessibility node for the entire hit target.
             // The inner clear surface and decorative capsule are not controls.
             .accessibilityElement(children: .ignore)

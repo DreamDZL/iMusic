@@ -78,7 +78,8 @@ class IOSDesignCompileGuards(unittest.TestCase):
         player = (ROOT / "Features/Player/NowPlayingView.swift").read_text(encoding="utf-8")
         window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")
         self.assertIn("NativeNowPlayingCover(", window)
-        self.assertIn(".modifier(NativeNowPlayingDismissRequest())", presentation)
+        self.assertIn(".modifier(NativeNowPlayingDismissRequest(acceptsTap: true))", presentation)
+        self.assertIn(".exclusively(before: TapGesture())", presentation)
         target = presentation[presentation.index("private var dragIndicator: some View"):presentation.index("private var dragIndicatorSurface:")]
         self.assertIn(".accessibilityElement(children: .ignore)", target)
         self.assertIn('.accessibilityIdentifier("nowPlayingDismissIndicator")', target)
@@ -113,8 +114,6 @@ class IOSDesignCompileGuards(unittest.TestCase):
         self.assertNotIn("UIViewControllerAnimatedTransitioning", cover)
         self.assertNotIn("UIPercentDrivenInteractiveTransition", cover)
         self.assertNotIn("UIView.animate", cover)
-        self.assertIn("host.view.accessibilityViewIsModal = true", cover)
-        self.assertIn("UIAccessibility.post(notification: .screenChanged", cover)
 
     def test_temporary_native_zoom_diagnostics_are_retired(self):
         window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")

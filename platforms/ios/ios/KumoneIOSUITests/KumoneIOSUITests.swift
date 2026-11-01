@@ -619,6 +619,23 @@ final class KumoneIOSUITests: XCTestCase {
     }
 
     @MainActor
+    func testPlayerGrabberTapClosesWithoutDragging() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture"]
+        app.launch()
+        let miniPlayer = app.buttons["miniPlayerOpenNowPlaying"]
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 15))
+        miniPlayer.tap()
+        let songPage = app.descendants(matching: .any)["appleMusicSongPage"]
+        XCTAssertTrue(songPage.waitForExistence(timeout: 10))
+        let grabber = app.descendants(matching: .any)["nowPlayingDismissIndicator"]
+        XCTAssertTrue(grabber.waitForExistence(timeout: 5))
+        grabber.tap()
+        XCTAssertTrue(songPage.waitForNonExistence(timeout: 8))
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testSongPageSubthresholdPullKeepsPlayerOpenThenFullPullDismisses() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
