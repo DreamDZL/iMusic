@@ -126,13 +126,6 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
                 presenter.present(host, animated: true) { [self, weak host] in
                     guard let host, self.host === host else { return }
                     phase = .presented
-                    host.preferredTransition = .zoom { [weak self] _ in
-                        guard let view = self?.value.source.view, view.window != nil,
-                              !view.bounds.isEmpty,
-                              view.bounds.origin.x.isFinite, view.bounds.origin.y.isFinite,
-                              view.bounds.width.isFinite, view.bounds.height.isFinite else { return nil }
-                        return view
-                    }
                     host.presentationController?.delegate = self
                     reconcile()
                 }
@@ -142,6 +135,16 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
                 requestedDismissal = true
                 dismissalRevision = revision
                 phase = .dismissing
+                // Install zoom only after the deliberate dismissal request.
+                // Installing it while idle also installs UIKit's interactive
+                // gestures, which can bypass the short-pull rejection policy.
+                host.preferredTransition = .zoom { [weak self] _ in
+                    guard let view = self?.value.source.view, view.window != nil,
+                          !view.bounds.isEmpty,
+                          view.bounds.origin.x.isFinite, view.bounds.origin.y.isFinite,
+                          view.bounds.width.isFinite, view.bounds.height.isFinite else { return nil }
+                    return view
+                }
                 owner.dismiss(animated: true) { [self, weak host] in
                     guard let host else { return }
                     dismissalEnded(host)
@@ -162,6 +165,7 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
             guard phase == .dismissing, let host,
                   !host.isBeingDismissed, host.presentingViewController != nil else { return }
             phase = .presented
+            host.preferredTransition = nil
             requestedDismissal = false
             reconcile()
         }

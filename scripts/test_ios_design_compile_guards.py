@@ -102,6 +102,11 @@ class IOSDesignCompileGuards(unittest.TestCase):
         self.assertIn("host.preferredTransition = .zoom", cover)
         self.assertLess(cover.index("presenter.present(host, animated: true)"),
                         cover.index("host.preferredTransition = .zoom"))
+        opening = cover[cover.index("presenter.present(host, animated: true)"):cover.index("case .presented:")]
+        self.assertNotIn("preferredTransition = .zoom", opening)
+        dismissal = cover[cover.index("case .presented:"):cover.index("case .presenting, .dismissing:")]
+        self.assertLess(dismissal.index("guard !desired"), dismissal.index("host.preferredTransition = .zoom"))
+        self.assertLess(dismissal.index("host.preferredTransition = .zoom"), dismissal.index("owner.dismiss(animated: true)"))
         self.assertNotIn("UIViewControllerAnimatedTransitioning", cover)
         self.assertNotIn("UIPercentDrivenInteractiveTransition", cover)
         self.assertNotIn("UIView.animate", cover)
