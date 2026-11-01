@@ -149,6 +149,11 @@ jobs:
             echo "Bundle identifier mismatch: $bundle_id" >&2
             exit 1
           fi
+          promotion="$(/usr/libexec/PlistBuddy -c 'Print :CADisableMinimumFrameDurationOnPhone' "$app/Info.plist")"
+          if [[ "$promotion" != "true" ]]; then
+            echo "Built app is missing its ProMotion timing opt-in" >&2
+            exit 1
+          fi
 
       - name: Package unsigned IPA
         working-directory: platforms/ios/ios

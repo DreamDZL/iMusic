@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// Motion vocabulary for the player. Springs, not eases: the system player
 /// moves with a soft settle, and one shared set keeps every part in step.
@@ -209,7 +212,18 @@ private struct DismissNowPlayingDragActionKey: EnvironmentKey {
     static let defaultValue: NowPlayingDismissDragAction? = nil
 }
 
+/// Explicit hit regions bridge layout to UIKit without inspecting SwiftUI's
+/// private subviews. Exclusions win over overlapping song/artwork regions.
+private struct NowPlayingDismissRegionKey: EnvironmentKey {
+    static let defaultValue: ((UIView, Bool, Bool) -> Void)? = nil
+}
+
 extension EnvironmentValues {
+    var nowPlayingDismissRegion: ((UIView, Bool, Bool) -> Void)? {
+        get { self[NowPlayingDismissRegionKey.self] }
+        set { self[NowPlayingDismissRegionKey.self] = newValue }
+    }
+
     var dismissNowPlayingAction: (() -> Void)? {
         get { self[DismissNowPlayingActionKey.self] }
         set { self[DismissNowPlayingActionKey.self] = newValue }
@@ -259,6 +273,16 @@ enum NativeNowPlayingDismissPolicy {
         return min(max(translation / (height * 0.75), 0), 1)
     }
 
+    static func interactiveOffset(translation: CGFloat, height: CGFloat) -> CGFloat {
+        guard translation.isFinite, height.isFinite, height > 0 else { return 0 }
+        return min(max(translation, 0), height * 0.75)
+    }
+
+    static func shouldBeginPan(velocity: CGPoint) -> Bool {
+        velocity.x.isFinite && velocity.y.isFinite
+            && velocity.y > 0 && velocity.y > abs(velocity.x) * 1.25
+    }
+
     static func shouldRequestDismiss(translation: CGSize, predicted: CGSize) -> Bool {
         guard translation.width.isFinite, translation.height.isFinite,
               predicted.width.isFinite, predicted.height.isFinite,
@@ -270,16 +294,57 @@ enum NativeNowPlayingDismissPolicy {
     }
 }
 
-/// Only header/artwork surfaces opt in. Horizontal paging, lyric scrolling and
-/// sliders never compete with a blanket full-screen dismissal recognizer.
+private struct NativeNowPlayingDismissRegionMarker: UIViewRepresentable {
+    let register: (UIView, Bool, Bool) -> Void
+    var acceptsTap = false
+    var excluded = false
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        register(view, acceptsTap, excluded)
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        register(view, acceptsTap, excluded)
+    }
+}
+
+/// Apply to sliders/buttons/decks inside a broad opted-in song-page surface.
+/// Lyrics scrolling must stay outside that surface (or explicitly excluded).
+struct NativeNowPlayingDismissExclusion: ViewModifier {
+    @Environment(\.nowPlayingDismissRegion) private var register
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let register {
+            content.background(NativeNowPlayingDismissRegionMarker(register: register, excluded: true))
+        } else {
+            content
+        }
+    }
+}
+
+/// Opt in the grabber, artwork and non-control song-page surface, not lyrics.
+/// UIKit owns native-cover recognition; SwiftUI is a compatibility fallback.
 struct NativeNowPlayingDismissRequest: ViewModifier {
     @Environment(\.dismissNowPlayingAction) private var dismiss
     @Environment(\.dismissNowPlayingDragAction) private var dragAction
+    @Environment(\.nowPlayingDismissRegion) private var register
     @GestureState private var isDragging = false
     var acceptsTap = false
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        if let register {
+            content.background(NativeNowPlayingDismissRegionMarker(register: register, acceptsTap: acceptsTap))
+        } else {
+            fallback(content: content)
+        }
+    }
+
+    @ViewBuilder
+    private func fallback(content: Content) -> some View {
         if acceptsTap {
             // A recognized short pull must not fall through to tap-to-close.
             // Simultaneous tap+drag can accept both under system tap slop.

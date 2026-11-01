@@ -16,6 +16,7 @@ struct NowPlayingView: View {
     #if os(iOS)
     @Environment(\.dismissNowPlayingAction) private var dismissNowPlayingAction
     @Environment(\.dismissNowPlayingDragAction) private var dismissNowPlayingDragAction
+    @StateObject private var motionFrameRate = PlayerMotionFrameRateLease()
     #endif
 
     @State private var artworkImage: PlatformImage?
@@ -30,6 +31,9 @@ struct NowPlayingView: View {
     @State private var isLyricsDragActive = false
     @State private var resumeTask: Task<Void, Never>?
     @State private var showLyricsOnMobile = false
+    @State private var pageRevision: UInt = 0
+    /// Survives the anchor hand-off between pages; never cache an Anchor itself.
+    @State private var portraitArtworkRect: CGRect = .zero
     @State private var lyricsControlsVisible = true
     @State private var lyricsControlsTask: Task<Void, Never>?
     @State private var showQualityPicker = false
@@ -105,6 +109,9 @@ struct NowPlayingView: View {
         .ignoresSafeArea()
         #endif
         .preferredColorScheme(settings.appearance.colorScheme)
+        #if os(iOS)
+        .background(PlayerMotionFrameRateAnchor(lease: motionFrameRate).frame(width: 0, height: 0))
+        #endif
         .task(id: player.currentTrack?.playbackKey) {
             await loadArtwork()
         }
@@ -117,6 +124,7 @@ struct NowPlayingView: View {
         }
         #if os(iOS)
         .onChange(of: player.currentTrack?.playbackKey) { _ in
+            pageRevision &+= 1
             showLyricsOnMobile = false
             lyricsControlsTask?.cancel()
             lyricsControlsVisible = true
@@ -157,6 +165,9 @@ struct NowPlayingView: View {
         .onDisappear {
             lyricsControlsTask?.cancel()
             resumeTask?.cancel()
+            #if os(iOS)
+            motionFrameRate.stop()
+            #endif
         }
         .sheet(isPresented: $showQualityPicker) {
             QualityPickerSheet()
@@ -426,6 +437,9 @@ struct NowPlayingView: View {
                         VStack(spacing: 8) {
                             Spacer(minLength: 0)
                             trackMetaView
+                                #if os(iOS)
+                                .modifier(NativeNowPlayingDismissExclusion())
+                                #endif
                                 .padding(.bottom, 8)
                             NowPlayingScrubber(showsRemainingTime: true)
                             primaryTransportControls
@@ -443,6 +457,7 @@ struct NowPlayingView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(pageAnimation, value: showLyricsOnMobile)
 
             songPageAccessoryControls
                 .frame(maxWidth: 360)
@@ -470,6 +485,7 @@ struct NowPlayingView: View {
             }
         }
         .padding(.vertical, size.height < 500 ? 24 : 40)
+        .animation(pageAnimation, value: showLyricsOnMobile)
     }
 
     @ViewBuilder
@@ -517,18 +533,24 @@ struct NowPlayingView: View {
                                 .padding(.bottom, isShortScreen ? 22 : 34)
 
                             trackMetaView
+                                #if os(iOS)
+                                .modifier(NativeNowPlayingDismissExclusion())
+                                #endif
 
                             Spacer(minLength: isShortScreen ? 8 : 16)
                         }
                         .padding(.horizontal, 26)
                         .padding(.top, isShortScreen ? 24 : 34)
+                        .contentShape(Rectangle())
+                        #if os(iOS)
+                        .modifier(NativeNowPlayingDismissRequest())
+                        #endif
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("appleMusicSongPage")
                         .transition(.identity)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .modifier(pageSwipe)
 
                 // Reserve the deck's footprint only while it is shown, so
                 // hidden controls give the whole page back to the lyrics.
@@ -538,29 +560,40 @@ struct NowPlayingView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if deckVisible {
-                appleMusicPlaybackControls(height: controlsHeight)
-                    .transition(.opacity)
-            }
-        }
-        // One persistent cover owns both endpoints. The page branches only
-        // publish layout anchors: neither retains an outgoing artwork copy.
-        .overlayPreferenceValue(PlayerArtworkAnchorKey.self) { anchor in
-            GeometryReader { proxy in
-                if let anchor {
-                    let rect = proxy[anchor]
+            // Keep the cover mounted even during an empty anchor preference
+            // pass. Animate resolved geometry, not the conditional page tree:
+            // rapid reversals retarget the same spring and never retain scenes.
+            .overlayPreferenceValue(PlayerArtworkAnchorKey.self) { anchor in
+                GeometryReader { proxy in
+                    let resolvedRect = anchor.map { proxy[$0] }
+                    let rect = resolvedRect ?? portraitArtworkRect
                     artworkView(
                         size: rect.width,
                         identifier: showLyricsOnMobile ? "lyricsHeaderArtwork" : "nowPlayingArtworkImage"
                     )
-                    // Attach before position expands the layout canvas, so
-                    // only the artwork intercepts taps, not lyrics or sliders.
-                    .modifier(pageSwipe)
                     .position(x: rect.midX, y: rect.midY)
-                    .animation(pageAnimation, value: showLyricsOnMobile)
+                    .animation(portraitArtworkRect == .zero ? nil : pageAnimation, value: rect)
+                    .onChange(of: resolvedRect, initial: true) { _, next in
+                        guard let next else { return }
+                        portraitArtworkRect = next
+                    }
                 }
             }
+            // One recognizer owns the page AND its artwork overlay. Keeping it
+            // outside the branches preserves its drag identity during reversal;
+            // the sibling playback deck keeps its own slider gestures.
+            .modifier(pageSwipe)
+
+            ZStack {
+                if deckVisible {
+                    appleMusicPlaybackControls(height: controlsHeight)
+                        #if os(iOS)
+                        .modifier(NativeNowPlayingDismissExclusion())
+                        #endif
+                        .transition(.opacity)
+                }
+            }
+            .animation(pageAnimation, value: deckVisible)
         }
     }
 
@@ -583,11 +616,19 @@ struct NowPlayingView: View {
 
     private func setLyricsPage(_ showLyrics: Bool) {
         guard showLyricsOnMobile != showLyrics else { return }
+        #if os(iOS)
+        motionFrameRate.request()
+        #endif
         resumeTask?.cancel()
         resumeTask = nil
         isUserScrolling = false
         isLyricsDragActive = false
-        withAnimation(pageAnimation) {
+        // Cancel before changing pages, not in a later onChange callback: an
+        // old auto-hide task must not hide the deck of a newly reopened page.
+        lyricsControlsTask?.cancel()
+        withTransaction(Transaction(animation: nil)) {
+            pageRevision &+= 1
+            lyricsControlsVisible = true
             showLyricsOnMobile = showLyrics
         }
     }
@@ -596,7 +637,13 @@ struct NowPlayingView: View {
     private var pageSwipe: PlayerPageSwipe {
         PlayerPageSwipe(
             showsLyrics: showLyricsOnMobile,
-            onCommit: setLyricsPage
+            revision: pageRevision,
+            onCommit: { target, originRevision in
+                // A button or track change may have superseded this drag,
+                // including a song → lyrics → song (ABA) reversal.
+                guard originRevision == pageRevision else { return }
+                setLyricsPage(target)
+            }
         )
     }
 
@@ -733,6 +780,9 @@ struct NowPlayingView: View {
 
     private func revealLyricsControls() {
         guard showLyricsOnMobile else { return }
+        #if os(iOS)
+        motionFrameRate.request()
+        #endif
         withAnimation(pageAnimation) {
             lyricsControlsVisible = true
         }
@@ -752,6 +802,7 @@ struct NowPlayingView: View {
             // VoiceOver users cannot find a hidden deck by tapping blind; keep
             // it visible for them.
             guard !UIAccessibility.isVoiceOverRunning else { return }
+            motionFrameRate.request()
             #endif
             withAnimation(pageAnimation) {
                 lyricsControlsVisible = false
@@ -1733,7 +1784,8 @@ struct NowPlayingView: View {
 /// under the finger. SwiftUI owns the transition when the gesture commits.
 private struct PlayerPageSwipe: ViewModifier {
     let showsLyrics: Bool
-    let onCommit: (Bool) -> Void
+    let revision: UInt
+    let onCommit: (Bool, UInt) -> Void
 
     private enum Axis { case undecided, horizontal, rejected }
 
@@ -1741,21 +1793,27 @@ private struct PlayerPageSwipe: ViewModifier {
     /// gesture is cancelled (rotation, track change, scroll take-over), so a
     /// stale "horizontal" lock can never leak into the next drag.
     @GestureState private var axis: Axis = .undecided
+    @GestureState private var originRevision: UInt?
     /// The start-of-drag lock, kept for `onEnded` (gesture state has already
     /// reset by then).
     @State private var lockedHorizontal = false
+    @State private var lockedRevision: UInt?
 
     func body(content: Content) -> some View {
         content
             .contentShape(Rectangle())
             .simultaneousGesture(
                 DragGesture(minimumDistance: 14)
+                    .updating($originRevision) { _, state, _ in
+                        if state == nil { state = revision }
+                    }
                     .updating($axis) { value, state, _ in
                         guard state == .undecided else { return }
                         let dx = abs(value.translation.width), dy = abs(value.translation.height)
                         state = dx > dy * 1.4 ? .horizontal : .rejected
                     }
                     .onChanged { value in
+                        lockedRevision = originRevision ?? revision
                         // Rewritten on every update, so each drag starts
                         // from its own lock and a cancelled one can't leak.
                         // The gesture state can trail by one update, so the
@@ -1771,18 +1829,24 @@ private struct PlayerPageSwipe: ViewModifier {
                         // Only a drag that locked horizontal at its start may
                         // change page, however it ends.
                         let wasHorizontal = lockedHorizontal
+                        let dragRevision = lockedRevision
                         lockedHorizontal = false
-                        guard wasHorizontal, let target = NowPlayingPresentationMetrics.pageSwipeTarget(
+                        lockedRevision = nil
+                        guard wasHorizontal, let dragRevision,
+                              let target = NowPlayingPresentationMetrics.pageSwipeTarget(
                             translation: value.translation.width,
                             predictedTranslation: value.predictedEndTranslation.width,
                             showsLyrics: showsLyrics
                         ) else { return }
-                        onCommit(target)
+                        onCommit(target, dragRevision)
                     }
             )
             // Every onChanged rewrites the lock from this gesture's axis, so
             // cancellation cannot leak a previous drag's lock into the next.
-            .onDisappear { lockedHorizontal = false }
+            .onDisappear {
+                lockedHorizontal = false
+                lockedRevision = nil
+            }
     }
 }
 

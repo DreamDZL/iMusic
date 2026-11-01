@@ -1,4 +1,4 @@
-"""Keep motion evidence available on green CI runs; not a rendering test."""
+"""Keep functional motion gates; device visual acceptance belongs to the maintainer."""
 from pathlib import Path
 import unittest
 import yaml
@@ -7,17 +7,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PlayerMotionDeliveryTests(unittest.TestCase):
-    def test_passing_runs_record_the_repeated_interaction(self):
+    def test_ci_runs_functional_gates_without_a_second_visual_acceptance_pass(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/ios-smoke.yml').read_text(encoding='utf-8'))
         steps = workflow['jobs']['launch']['steps']
-        record = next(s for s in steps if s['name'] == 'Record repeated player transitions including passing runs')
-        self.assertNotIn('failure()', record.get('if', ''))
-        run = record['run']
-        for required in ('recordVideo', 'kill -INT', 'test-without-building',
-                         'testRepeatedPlayerPageTransitionsAndCollapse', 'player-transitions.mp4'):
-            self.assertIn(required, run)
+        run = next(s for s in steps if s['name'] == 'Run feature and UI navigation tests, then launch on the latest simulator')['run']
+        self.assertIn('xcodebuild test', run)
+        self.assertFalse(any('recordVideo' in step.get('run', '') for step in steps))
         upload = next(s for s in steps if s['name'] == 'Upload simulator test results and screenshots')
-        self.assertIn('player-transitions.mp4', upload['with']['path'])
+        self.assertIn('smoke-tests.xcresult', upload['with']['path'])
         self.assertEqual(upload['if'], 'always()')
 
     def test_repetition_gate_checks_both_page_removal_and_mini_player_reuse(self):

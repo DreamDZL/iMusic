@@ -31,10 +31,14 @@ class PlayerPageTransitionGuards(unittest.TestCase):
         self.assertIn("artworkPlaceholder(size: artworkSize)", pages)
         self.assertIn("usesSharedArtwork: true", pages)
         self.assertEqual(overlay.count("artworkView("), 1)
-        self.assertIn("let rect = proxy[anchor]", overlay)
+        self.assertIn("let resolvedRect = anchor.map { proxy[$0] }", overlay)
+        self.assertIn("let rect = resolvedRect ?? portraitArtworkRect", overlay)
+        self.assertNotIn("if let anchor", overlay)
         self.assertIn(".position(x: rect.midX, y: rect.midY)", overlay)
-        self.assertLess(overlay.index(".modifier(pageSwipe)"), overlay.index(".position("))
-        self.assertIn(".animation(pageAnimation, value: showLyricsOnMobile)", overlay)
+        self.assertEqual(layout.count(".modifier(pageSwipe)"), 1)
+        self.assertGreater(overlay.index(".modifier(pageSwipe)"), overlay.index(".position("))
+        self.assertLess(overlay.index(".modifier(pageSwipe)"), overlay.index("appleMusicPlaybackControls("))
+        self.assertIn(".animation(portraitArtworkRect == .zero ? nil : pageAnimation, value: rect)", overlay)
         self.assertIn('showLyricsOnMobile ? "lyricsHeaderArtwork" : "nowPlayingArtworkImage"', overlay)
         for token in (".scaleEffect(", ".offset(", "NowPlayingMotion.page"):
             self.assertNotIn(token, layout)
@@ -44,7 +48,7 @@ class PlayerPageTransitionGuards(unittest.TestCase):
         self.assertIn(".simultaneousGesture(", swipe)
         self.assertIn("NowPlayingPresentationMetrics.pageSwipeTarget(", swipe)
         self.assertIn("dx > dy * 1.4", swipe)
-        self.assertIn("guard wasHorizontal", swipe)
+        self.assertIn("guard wasHorizontal, let dragRevision", swipe)
         for token in (".offset(", ".opacity(", "withAnimation(", "@Binding", "pageSwipeOffset"):
             self.assertNotIn(token, swipe)
 
@@ -53,11 +57,41 @@ class PlayerPageTransitionGuards(unittest.TestCase):
         self.assertIn("resumeTask?.cancel()", setter)
         self.assertIn("isUserScrolling = false", setter)
         self.assertIn("isLyricsDragActive = false", setter)
-        self.assertEqual(setter.count("withAnimation(pageAnimation)"), 1)
-        self.assertIn("onCommit: setLyricsPage", setter)
+        self.assertNotIn("withAnimation(", setter)
+        self.assertIn("withTransaction(Transaction(animation: nil))", setter)
+        self.assertIn("setLyricsPage(target)", setter)
         accessory = self.section("private var songPageAccessoryControls", "private func accessoryGlyph")
         self.assertIn("setLyricsPage(!showLyricsOnMobile)", accessory)
         self.assertIn("reduceMotion ? nil : .spring(response: 0.48, dampingFraction: 0.9)", self.source)
+
+    def test_anchor_handoff_retains_owner_without_storing_stale_anchor(self):
+        overlay = self.section(".overlayPreferenceValue(PlayerArtworkAnchorKey.self)", "private func artworkPlaceholder")
+        self.assertIn("@State private var portraitArtworkRect: CGRect = .zero", self.source)
+        self.assertIn(".onChange(of: resolvedRect, initial: true)", overlay)
+        self.assertIn("guard let next else { return }", overlay)
+        self.assertIn("portraitArtworkRect = next", overlay)
+        self.assertNotIn(".id(", overlay)
+        self.assertNotIn("Task", overlay)
+
+    def test_superseded_drag_is_rejected_even_after_aba_page_reversal(self):
+        setter = self.section("private func setLyricsPage(", "private static let deckAccessoryHeight")
+        self.assertIn("guard showLyricsOnMobile != showLyrics else { return }", setter)
+        self.assertIn("pageRevision &+= 1", setter)
+        self.assertIn("guard originRevision == pageRevision else { return }", setter)
+        self.assertLess(setter.index("guard originRevision == pageRevision"), setter.index("setLyricsPage(target)"))
+        reset = self.section(".onChange(of: player.currentTrack?.playbackKey)", ".onChange(of: showLyricsOnMobile)")
+        self.assertIn("pageRevision &+= 1", reset)
+        swipe = self.section("private struct PlayerPageSwipe:", "private struct PlayerArtworkAnchorKey:")
+        self.assertIn("@GestureState private var originRevision: UInt?", swipe)
+        self.assertIn("if state == nil { state = revision }", swipe)
+        self.assertIn("lockedRevision = originRevision ?? revision", swipe)
+        self.assertIn("onCommit(target, dragRevision)", swipe)
+        self.assertIn("lockedRevision = nil", swipe)
+
+    def test_new_page_cancels_old_hide_task_before_atomic_state_change(self):
+        setter = self.section("private func setLyricsPage(", "/// Left shows lyrics")
+        self.assertLess(setter.index("lyricsControlsTask?.cancel()"), setter.index("withTransaction("))
+        self.assertLess(setter.index("lyricsControlsVisible = true"), setter.index("showLyricsOnMobile = showLyrics"))
 
     def test_deck_uses_native_opacity_and_keeps_accessible_auto_hide(self):
         layout = self.section("private func appleMusicCompactLayout", "private static let playerPageTransition")

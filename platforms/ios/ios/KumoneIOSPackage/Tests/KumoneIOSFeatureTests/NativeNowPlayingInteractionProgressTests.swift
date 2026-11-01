@@ -26,6 +26,34 @@ final class NativeNowPlayingInteractionProgressTests: XCTestCase {
         ))
     }
 
+    func testFingerFollowOffsetIsOneToOneBeforeCommitAndReturnsToRest() {
+        for distance in [CGFloat(14), 25, 60, 100, 260] {
+            XCTAssertEqual(NativeNowPlayingDismissPolicy.interactiveOffset(translation: distance, height: 800), distance)
+        }
+        // Cancellation uses zero travel/prediction, never the last fling's
+        // velocity. The same presentation must return to identity and stay open.
+        XCTAssertEqual(NativeNowPlayingDismissPolicy.interactiveOffset(translation: 0, height: 800), 0)
+        XCTAssertEqual(NativeNowPlayingDismissPolicy.interactiveProgress(translation: 0, height: 800), 0)
+        XCTAssertFalse(NativeNowPlayingDismissPolicy.shouldRequestDismiss(translation: .zero, predicted: .zero))
+    }
+
+    func testFingerFollowOffsetClampsOverscrollAndRejectsInvalidGeometry() {
+        XCTAssertEqual(NativeNowPlayingDismissPolicy.interactiveOffset(translation: 2000, height: 800), 600)
+        XCTAssertEqual(NativeNowPlayingDismissPolicy.interactiveOffset(translation: -20, height: 800), 0)
+        XCTAssertEqual(NativeNowPlayingDismissPolicy.interactiveOffset(translation: .nan, height: 800), 0)
+        XCTAssertEqual(NativeNowPlayingDismissPolicy.interactiveOffset(translation: 20, height: .infinity), 0)
+        XCTAssertEqual(NativeNowPlayingDismissPolicy.interactiveOffset(translation: 20, height: 0), 0)
+    }
+
+    func testUIKitPanDoesNotClaimHorizontalPageSwipesOrUpwardMotion() {
+        XCTAssertTrue(NativeNowPlayingDismissPolicy.shouldBeginPan(velocity: CGPoint(x: 20, y: 200)))
+        for velocity in [CGPoint(x: 200, y: 20), CGPoint(x: -200, y: 20),
+                         CGPoint(x: 100, y: 100), CGPoint(x: 0, y: -200), .zero,
+                         CGPoint(x: CGFloat.nan, y: 200), CGPoint(x: 0, y: CGFloat.infinity)] {
+            XCTAssertFalse(NativeNowPlayingDismissPolicy.shouldBeginPan(velocity: velocity))
+        }
+    }
+
     func testProgressIsBoundedAndRejectsInvalidGeometry() {
         XCTAssertEqual(NativeNowPlayingDismissPolicy.interactiveProgress(translation: -20, height: 800), 0)
         XCTAssertEqual(NativeNowPlayingDismissPolicy.interactiveProgress(translation: 2000, height: 800), 1)

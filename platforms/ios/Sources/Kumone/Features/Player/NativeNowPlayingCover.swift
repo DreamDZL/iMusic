@@ -88,9 +88,12 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
         private var phase: Phase = .idle
         private var revision = 0
         private var dismissalRevision = 0
+        private var presentationID = UUID()
         private var requestedDismissal = false
-        private var interaction: UIPercentDrivenInteractiveTransition?
+        private var interaction = false
         private var interactionEnding = false
+        private var rebound: UIViewPropertyAnimator?
+        private let frameRate = PlayerMotionFrameRateLease()
         private var childDismissalInFlight = false
 
         init(_ value: NativeNowPlayingCover) {
@@ -114,15 +117,34 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
             case .idle:
                 guard active, desired, let presenter, presenter.viewIfLoaded?.window != nil,
                       presenter.presentedViewController == nil else { return }
+                let id = UUID()
+                presentationID = id
+                let close: () -> Void = { [weak self] in
+                    guard let self, self.presentationID == id else { return }
+                    self.close()
+                }
                 let drag = NowPlayingDismissDragAction(
-                    onChanged: { [weak self] in self?.dragChanged($0) },
-                    onEnded: { [weak self] in self?.dragEnded($0, predicted: $1) }
+                    onChanged: { [weak self] translation in
+                        guard let self, self.presentationID == id else { return }
+                        self.dragChanged(translation)
+                    },
+                    onEnded: { [weak self] translation, predicted in
+                        guard let self, self.presentationID == id else { return }
+                        self.dragEnded(translation, predicted: predicted)
+                    }
                 )
                 let root = AnyView(value.content
-                    .environment(\.dismissNowPlayingAction, { [weak self] in self?.close() })
-                    .environment(\.dismissNowPlayingDragAction, drag))
+                    .environment(\.dismissNowPlayingAction, close)
+                    .environment(\.dismissNowPlayingDragAction, drag)
+                    .environment(\.nowPlayingDismissRegion, { [weak self] view, tap, excluded in
+                        guard let self, self.presentationID == id else { return }
+                        self.host?.registerRegion(view, acceptsTap: tap, excluded: excluded)
+                    }))
                 let host = NativeNowPlayingHost(rootView: root)
                 self.host = host
+                host.onDragChanged = drag.onChanged
+                host.onDragEnded = drag.onEnded
+                host.onClose = close
                 host.modalPresentationStyle = .custom
                 host.modalPresentationCapturesStatusBarAppearance = true
                 host.transitioningDelegate = self
@@ -147,6 +169,9 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
                   !childDismissalInFlight,
                   let owner = host.presentingViewController,
                   owner.presentedViewController === host else { return }
+            stopRebound()
+            interaction = false
+            frameRate.stop()
             if host.presentedViewController != nil {
                 // A partial-height child sheet does not necessarily produce
                 // another host.viewDidAppear. Explicitly finish that sheet
@@ -171,59 +196,103 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
         }
 
         private func close() {
-            guard interaction == nil else { return }
+            guard !interaction else { return }
             beginDismissal(requested: false)
         }
 
         private func dragChanged(_ translation: CGFloat) {
-            guard active, translation.isFinite, !interactionEnding else { return }
-            if interaction == nil {
+            guard active, translation.isFinite else { return }
+            if !interaction {
                 guard translation > 0, phase == .presented,
                       host?.presentedViewController == nil else { return }
-                let driver = UIPercentDrivenInteractiveTransition()
-                driver.completionCurve = .easeOut
-                interaction = driver
-                beginDismissal(requested: false)
-                if phase != .dismissing { interaction = nil; return }
+                stopRebound()
+                interaction = true
             }
-            interaction?.update(NativeNowPlayingDismissPolicy.interactiveProgress(
+            guard let view = host?.view else { return }
+            frameRate.window = view.window
+            frameRate.request()
+            let progress = NativeNowPlayingDismissPolicy.interactiveProgress(
                 translation: translation, height: host?.view.bounds.height ?? 0
-            ))
+            )
+            // Do not begin a UIKit dismissal here. That sends viewWillDisappear
+            // and can cancel the gesture which is still driving this motion.
+            view.transform = CGAffineTransform(translationX: 0,
+                y: NativeNowPlayingDismissPolicy.interactiveOffset(translation: translation, height: view.bounds.height))
+                .scaledBy(x: 1 - 0.12 * progress, y: 1 - 0.12 * progress)
+            view.clipsToBounds = true
+            view.layer.cornerCurve = .continuous
+            view.layer.cornerRadius = NowPlayingPresentationMetrics.dismissCornerRadius(progress: progress)
         }
 
         private func dragEnded(_ translation: CGFloat, predicted: CGFloat) {
-            guard let interaction, !interactionEnding else { return }
+            guard interaction, !interactionEnding else { return }
+            interaction = false
             interactionEnding = true
             if NativeNowPlayingDismissPolicy.shouldRequestDismiss(
                 translation: CGSize(width: 0, height: translation),
                 predicted: CGSize(width: 0, height: predicted)
             ) {
-                interaction.completionSpeed = completionSpeed(fraction: 1 - interaction.percentComplete)
-                interaction.finish()
+                // The animator inherits the live transform; no reset to full
+                // screen and no disappearance until the gesture has ended.
+                frameRate.stop()
+                beginDismissal(requested: false)
             } else {
-                interaction.completionSpeed = completionSpeed(fraction: interaction.percentComplete)
-                interaction.cancel()
+                restoreAfterPull()
             }
         }
 
-        private func completionSpeed(fraction: CGFloat) -> CGFloat {
-            // UIKit otherwise reverses a short pull in only a few milliseconds.
-            // Give even that small excursion a visible, gentle rebound.
-            let duration: CGFloat = UIAccessibility.isReduceMotionEnabled ? 0.22 : 0.48
-            return max(0.01, min(1, fraction * duration / 0.3))
+        private func stopRebound() {
+            if rebound != nil, let view = host?.view, let layer = view.layer.presentation() {
+                let transform = layer.affineTransform()
+                let radius = layer.cornerRadius
+                rebound?.stopAnimation(true)
+                view.transform = transform
+                view.layer.cornerRadius = radius
+            } else {
+                rebound?.stopAnimation(true)
+            }
+            rebound = nil
+            interactionEnding = false
         }
 
         fileprivate func cancelInteraction() {
-            guard let interaction, !interactionEnding else { return }
+            guard interaction else { return }
+            interaction = false
             interactionEnding = true
-            interaction.completionSpeed = completionSpeed(fraction: interaction.percentComplete)
-            interaction.cancel()
+            restoreAfterPull()
+        }
+
+        private func restoreAfterPull() {
+            guard let view = host?.view else {
+                interactionEnding = false
+                frameRate.stop()
+                return
+            }
+            frameRate.window = view.window
+            frameRate.request()
+            let animator = UIViewPropertyAnimator(
+                duration: UIAccessibility.isReduceMotionEnabled ? 0.22 : 0.48, dampingRatio: 0.9)
+            rebound = animator
+            animator.addAnimations {
+                view.transform = .identity
+                view.layer.cornerRadius = 0
+            }
+            animator.addCompletion { [weak self, weak animator] _ in
+                guard let self, let animator, self.rebound === animator else { return }
+                self.rebound = nil
+                self.interactionEnding = false
+                view.clipsToBounds = false
+                self.frameRate.stop()
+                self.reconcile()
+            }
+            animator.startAnimation()
         }
 
         private func dismissalEnded(_ dismissed: NativeNowPlayingHost<AnyView>, completed: Bool) {
             guard host === dismissed else { return }
-            interaction = nil
+            interaction = false
             interactionEnding = false
+            frameRate.stop()
             guard completed else {
                 phase = .presented
                 requestedDismissal = false
@@ -261,9 +330,6 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
             }
         }
 
-        func interactionControllerForDismissal(using animator: UIViewControllerAnimatedTransitioning) -> UIViewControllerInteractiveTransitioning? {
-            interaction
-        }
     }
 }
 
@@ -278,10 +344,99 @@ private final class NativeNowPlayingPresenter: UIViewController {
     }
 }
 
-private final class NativeNowPlayingHost<Content: View>: UIHostingController<Content> {
+private final class NativeNowPlayingHost<Content: View>: UIHostingController<Content>, UIGestureRecognizerDelegate {
     // The player uses a dark artwork backdrop regardless of the library scheme.
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
     var onAppear: (() -> Void)?
+    var onDragChanged: ((CGFloat) -> Void)?
+    var onDragEnded: ((CGFloat, CGFloat) -> Void)?
+    var onClose: (() -> Void)?
+    private final class Region {
+        weak var view: UIView?
+        let acceptsTap: Bool
+        let excluded: Bool
+        init(_ view: UIView, acceptsTap: Bool, excluded: Bool) {
+            self.view = view
+            self.acceptsTap = acceptsTap
+            self.excluded = excluded
+        }
+    }
+    private var regions: [Region] = []
+    private var pan: UIPanGestureRecognizer!
+    private var tap: UITapGestureRecognizer!
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        pan.delegate = self
+        tap.delegate = self
+        tap.require(toFail: pan)
+        view.addGestureRecognizer(pan)
+        view.addGestureRecognizer(tap)
+    }
+
+    func registerRegion(_ view: UIView, acceptsTap: Bool, excluded: Bool) {
+        regions.removeAll { $0.view == nil || $0.view === view }
+        regions.append(Region(view, acceptsTap: acceptsTap, excluded: excluded))
+    }
+
+    func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard presentedViewController == nil else { return false }
+        // Use only public UIKit controls and explicit SwiftUI geometry markers,
+        // never SwiftUI's private hosting hierarchy or accessibility internals.
+        var touched = touch.view
+        while let candidate = touched, candidate !== view {
+            if candidate is UIControl || candidate is UIScrollView { return false }
+            touched = candidate.superview
+        }
+        let hits = regions.filter { region in
+            guard let marker = region.view, marker.window === view.window,
+                  !marker.isHidden, marker.bounds.width > 0, marker.bounds.height > 0 else { return false }
+            return marker.bounds.contains(touch.location(in: marker))
+        }
+        guard !hits.contains(where: { $0.excluded }) else { return false }
+        return hits.contains { recognizer === pan || $0.acceptsTap }
+    }
+
+    func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+        guard recognizer === pan else { return true }
+        let velocity = pan.velocity(in: view.window)
+        return NativeNowPlayingDismissPolicy.shouldBeginPan(velocity: velocity)
+    }
+
+    func gestureRecognizer(_ recognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        recognizer === pan && other !== tap
+    }
+
+    @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
+        // Window coordinates stay fixed while the hosting view follows the finger.
+        let translation = recognizer.translation(in: view.window)
+        switch recognizer.state {
+        case .began, .changed:
+            onDragChanged?(max(0, translation.y))
+        case .ended:
+            let velocity = recognizer.velocity(in: view.window)
+            let predicted = CGSize(width: translation.x + velocity.x * 0.2,
+                                   height: translation.y + velocity.y * 0.2)
+            let accepted = NativeNowPlayingDismissPolicy.shouldRequestDismiss(
+                translation: CGSize(width: translation.x, height: translation.y), predicted: predicted)
+            onDragEnded?(accepted ? translation.y : 0, accepted ? predicted.height : 0)
+        case .cancelled, .failed:
+            onDragEnded?(0, 0)
+        default: break
+        }
+    }
+
+    @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
+        if recognizer.state == .ended { onClose?() }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        onDragEnded?(0, 0)
+    }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -312,6 +467,7 @@ private final class NativeNowPlayingAnimator: NSObject, UIViewControllerAnimated
     private let source: NativeNowPlayingSource
     private let completion: ((Bool) -> Void)?
     private var animator: UIViewPropertyAnimator?
+    private let frameRate = PlayerMotionFrameRateLease()
 
     init(opening: Bool, source: NativeNowPlayingSource, completion: ((Bool) -> Void)? = nil) {
         self.opening = opening
@@ -338,11 +494,20 @@ private final class NativeNowPlayingAnimator: NSObject, UIViewControllerAnimated
             animator = fallback
             return fallback
         }
-        let frame = opening ? context.finalFrame(for: controller) : context.initialFrame(for: controller)
-        player.transform = .identity
-        player.frame = frame
-        if opening { container.addSubview(player) }
+        let frame = opening ? context.finalFrame(for: controller)
+            : CGRect(x: player.center.x - player.bounds.width / 2,
+                     y: player.center.y - player.bounds.height / 2,
+                     width: player.bounds.width, height: player.bounds.height)
+        if opening {
+            player.transform = .identity
+            player.frame = frame
+            container.addSubview(player)
+        }
+        // On dismissal preserve the finger-follow transform. Writing frame
+        // with that transform applied is undefined and causes a visible jump.
         player.layoutIfNeeded()
+        frameRate.window = container.window
+        frameRate.request()
 
         // Convert directly between views in the same window, never via global
         // screen coordinates or an unrelated scene's root controller.
@@ -389,6 +554,7 @@ private final class NativeNowPlayingAnimator: NSObject, UIViewControllerAnimated
             player.clipsToBounds = originalClipping
             if self.opening && !completed { player.removeFromSuperview() }
             context.completeTransition(completed)
+            self.frameRate.stop()
             self.animator = nil
             self.completion?(completed)
         }
@@ -396,4 +562,5 @@ private final class NativeNowPlayingAnimator: NSObject, UIViewControllerAnimated
         return spring
     }
 }
+
 #endif

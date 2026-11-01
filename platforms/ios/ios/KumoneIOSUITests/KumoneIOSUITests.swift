@@ -708,6 +708,29 @@ final class KumoneIOSUITests: XCTestCase {
     }
 
     @MainActor
+    func testSongPageBackgroundPullCollapsesWithoutTouchingGrabberOrArtwork() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture"]
+        app.launch()
+        let miniPlayer = app.buttons["miniPlayerOpenNowPlaying"]
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 15))
+        miniPlayer.tap()
+        let song = app.descendants(matching: .any)["appleMusicSongPage"]
+        XCTAssertTrue(song.waitForExistence(timeout: 10))
+        // Left of the grabber, in the song page's empty upper margin. The
+        // previous gates only exercised the grabber/artwork opt-in targets.
+        let start = song.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.12))
+        start.press(forDuration: 0.05,
+                    thenDragTo: start.withOffset(CGVector(dx: 0, dy: 320)),
+                    withVelocity: XCUIGestureVelocity(900), thenHoldForDuration: 0)
+        XCTAssertTrue(song.waitForNonExistence(timeout: 8),
+                      "Pulling the song surface must collapse the player, not just the small handle")
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 5))
+        XCTAssertTrue(miniPlayer.isHittable)
+    }
+
+    @MainActor
     func testRepeatedPlayerPageTransitionsAndCollapse() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
