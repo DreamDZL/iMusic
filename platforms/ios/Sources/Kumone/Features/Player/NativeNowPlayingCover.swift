@@ -115,6 +115,7 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
                 host.modalTransitionStyle = .crossDissolve
                 host.preferredTransition = nil // Opening must remain UIKit's cross-dissolve.
                 host.view.backgroundColor = .clear
+                host.view.accessibilityViewIsModal = true
                 host.onDismissalBegan = { [weak self] in self?.dismissalBegan() }
                 host.onDismissalEnded = { [weak self, weak host] in
                     guard let host else { return }
@@ -226,6 +227,10 @@ private final class NativeNowPlayingHost<Content: View>: UIHostingController<Con
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // This controller is presented outside SwiftUI's cover machinery.
+        // Keep VoiceOver/XCTest in the visible modal, not the retained library.
+        view.accessibilityViewIsModal = true
+        UIAccessibility.post(notification: .screenChanged, argument: nil)
         onAppear?() // Interactive cancellation returns here without a completed disappearance.
     }
 }

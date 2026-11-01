@@ -294,6 +294,7 @@ struct IOSNowPlayingPresentation<Content: View>: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .environment(\.dismissNowPlayingAction, dismiss)
+        .accessibilityAddTraits(.isModal)
         .accessibilityAction(.escape, dismiss)
     }
 

@@ -113,6 +113,8 @@ class IOSDesignCompileGuards(unittest.TestCase):
         self.assertNotIn("UIViewControllerAnimatedTransitioning", cover)
         self.assertNotIn("UIPercentDrivenInteractiveTransition", cover)
         self.assertNotIn("UIView.animate", cover)
+        self.assertIn("host.view.accessibilityViewIsModal = true", cover)
+        self.assertIn("UIAccessibility.post(notification: .screenChanged", cover)
 
     def test_temporary_native_zoom_diagnostics_are_retired(self):
         window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")
