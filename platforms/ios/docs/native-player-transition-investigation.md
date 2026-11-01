@@ -1,5 +1,9 @@
 # Native player transition investigation
 
+> Historical investigation below describes the earlier deferred-zoom approach.
+> Device feedback superseded it; see [player motion recovery](player-motion-recovery.md)
+> for the current interaction contract and validation requirements.
+
 ## Release gate
 
 Do not attach `imusic_ios_2.0.ipa` to `v2.0` until the **same commit** passes

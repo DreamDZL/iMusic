@@ -73,7 +73,7 @@ class IOSDesignCompileGuards(unittest.TestCase):
         store = (ROOT / "Core/Storage/LocalPlaylistStore.swift").read_text(encoding="utf-8")
         self.assertNotIn("tracks.append(track)", store, "saved songs go to the top of a playlist")
 
-    def test_phone_uses_native_dismissal(self):
+    def test_phone_connects_artwork_and_grabber_to_the_same_interaction(self):
         presentation = (ROOT / "Features/Player/NowPlayingPresentation.swift").read_text(encoding="utf-8")
         player = (ROOT / "Features/Player/NowPlayingView.swift").read_text(encoding="utf-8")
         window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")
@@ -87,6 +87,15 @@ class IOSDesignCompileGuards(unittest.TestCase):
         wrapper = presentation[presentation.index("struct NativeNowPlayingDismissRequest:"):]
         for custom_motion in (".scaleEffect(", ".offset(", "withAnimation(", ".animation("):
             self.assertNotIn(custom_motion, wrapper)
+        cover = (ROOT / "Features/Player/NativeNowPlayingCover.swift").read_text(encoding="utf-8")
+        self.assertIn("UIPercentDrivenInteractiveTransition()", cover)
+        self.assertIn("interaction.finish()", cover)
+        self.assertIn("interaction.cancel()", cover)
+        self.assertIn("host.dismiss(animated: active)", cover)
+        self.assertIn("revision == requestRevision", cover)
+        self.assertIn(".environment(\\.dismissNowPlayingDragAction, drag)", cover)
+        self.assertIn(".onChanged(reportDrag)", presentation)
+        self.assertIn("coordinateSpace: .global", presentation)
 
     def test_volume_bar_is_not_a_restyled_system_slider(self):
         # Two translucent track images overlapped under the system slider's
@@ -101,19 +110,20 @@ class IOSDesignCompileGuards(unittest.TestCase):
         self.assertNotIn("NowPlayingOpeningUnderlay", window)
         self.assertNotIn("legacyPresentationRoot", window)
         cover = (ROOT / "Features/Player/NativeNowPlayingCover.swift").read_text(encoding="utf-8")
-        self.assertIn("host.modalTransitionStyle = .crossDissolve", cover)
-        self.assertIn("host.preferredTransition = nil", cover)
-        self.assertIn("host.preferredTransition = .zoom", cover)
-        self.assertLess(cover.index("presenter.present(host, animated: true)"),
-                        cover.index("host.preferredTransition = .zoom"))
-        opening = cover[cover.index("presenter.present(host, animated: true)"):cover.index("case .presented:")]
-        self.assertNotIn("preferredTransition = .zoom", opening)
-        dismissal = cover[cover.index("case .presented:"):cover.index("case .presenting, .dismissing:")]
-        self.assertLess(dismissal.index("guard !desired"), dismissal.index("host.preferredTransition = .zoom"))
-        self.assertLess(dismissal.index("host.preferredTransition = .zoom"), dismissal.index("owner.dismiss(animated: true)"))
-        self.assertNotIn("UIViewControllerAnimatedTransitioning", cover)
-        self.assertNotIn("UIPercentDrivenInteractiveTransition", cover)
-        self.assertNotIn("UIView.animate", cover)
+        # The maintainer clarified native *motion quality*, not a restriction
+        # to deferred UIKit zoom. Keep the actual mini-player visible beneath
+        # one reversible public-UIKit timeline, without an opening colour mask.
+        self.assertIn("host.modalPresentationStyle = .custom", cover)
+        self.assertIn("shouldRemovePresentersView: Bool { false }", cover)
+        self.assertIn("anchor.window === container.window", cover)
+        self.assertIn("anchor.convert(anchor.bounds, to: container)", cover)
+        self.assertIn("interruptibleAnimator(using context:", cover)
+        self.assertIn("if let animator { return animator }", cover)
+        self.assertIn("context.transitionWasCancelled", cover)
+        self.assertIn("UIAccessibility.isReduceMotionEnabled", cover)
+        self.assertIn(".scaledBy(x: scale, y: scale)", cover)
+        self.assertNotIn(".crossDissolve", cover)
+        self.assertNotIn("snapshotView(", cover)
 
     def test_temporary_native_zoom_diagnostics_are_retired(self):
         window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")

@@ -412,15 +412,29 @@ final class KumoneIOSUITests: XCTestCase {
 
         XCUIDevice.shared.orientation = .landscapeLeft
         let window = app.windows.firstMatch
+        var landscapeSamples: [String] = []
         let landscapeExpectation = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
                 let frame = window.frame
+                landscapeSamples.append("\(Date().timeIntervalSince1970): \(frame)")
                 return CGFloat(frame.size.width) > CGFloat(frame.size.height)
             },
             object: window
         )
+        let landscapeResult = XCTWaiter.wait(for: [landscapeExpectation], timeout: 5)
+        if landscapeResult != .completed {
+            let geometry = XCTAttachment(string: landscapeSamples.joined(separator: "\n")
+                + "\n" + app.debugDescription)
+            geometry.name = "player-landscape-window-geometry"
+            geometry.lifetime = .keepAlways
+            add(geometry)
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.name = "player-landscape-failure"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+        }
         XCTAssertEqual(
-            XCTWaiter.wait(for: [landscapeExpectation], timeout: 5),
+            landscapeResult,
             .completed,
             "The app window must become wider than it is tall after rotating to landscape"
         )
@@ -657,8 +671,8 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(grabber.waitForExistence(timeout: 5))
         let originalMidY = grabber.frame.midY
         let shortStart = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
-        // This is cancellation of the dismissal request, not an app-owned
-        // interactive shrink. A short, normal-speed pull must keep the page.
+        // A short pull must spring back without closing. The same presentation
+        // must still accept the next full pull, without a tap/relaunch fallback.
         shortStart.press(
             forDuration: 0.05,
             thenDragTo: shortStart.withOffset(CGVector(dx: 0, dy: 25)),
@@ -691,6 +705,68 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(songPage.waitForNonExistence(timeout: 8),
                       "A full pull after cancellation must close the native player without a tap fallback")
         XCTAssertTrue(miniPlayer.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testRepeatedPlayerPageTransitionsAndCollapse() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture",
+                               "-imusic-ui-extended-lyrics-controls"]
+        app.launch()
+        let miniPlayer = app.buttons["miniPlayerOpenNowPlaying"]
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 15))
+        let song = app.descendants(matching: .any)["appleMusicSongPage"]
+        let lyrics = app.descendants(matching: .any)["appleMusicLyricsPage"]
+        let toggle = app.buttons["showSynchronizedLyrics"]
+        for cycle in 0..<3 {
+            miniPlayer.tap()
+            XCTAssertTrue(song.waitForExistence(timeout: 10))
+            for change in 0..<3 {
+                XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+                toggle.tap()
+                XCTAssertTrue(lyrics.waitForExistence(timeout: 8))
+                XCTAssertTrue(song.waitForNonExistence(timeout: 5),
+                              "The outgoing song page must not remain over lyrics")
+                let thumbnail = app.descendants(matching: .any)["lyricsHeaderArtwork"]
+                XCTAssertTrue(thumbnail.waitForExistence(timeout: 5))
+                let thumbnailSettled = XCTNSPredicateExpectation(
+                    predicate: NSPredicate { _, _ in
+                        guard let snapshot = try? thumbnail.snapshot() else { return false }
+                        return abs(snapshot.frame.width - 56) <= 2
+                    }, object: nil)
+                XCTAssertEqual(XCTWaiter.wait(for: [thumbnailSettled], timeout: 5), .completed,
+                               "The cover must finish shrinking into the lyrics header")
+                let shot = XCTAttachment(screenshot: app.screenshot())
+                shot.name = "player-cycle-\(cycle)-lyrics-\(change)"
+                shot.lifetime = .keepAlways
+                add(shot)
+                XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+                toggle.tap()
+                XCTAssertTrue(song.waitForExistence(timeout: 8))
+                XCTAssertTrue(lyrics.waitForNonExistence(timeout: 5),
+                              "The outgoing lyrics must not remain over the hero artwork")
+                let hero = app.descendants(matching: .any)["nowPlayingArtworkImage"]
+                XCTAssertTrue(hero.waitForExistence(timeout: 5))
+                let heroSettled = XCTNSPredicateExpectation(
+                    predicate: NSPredicate { _, _ in
+                        guard let snapshot = try? hero.snapshot() else { return false }
+                        return snapshot.frame.width > 120
+                    }, object: nil)
+                XCTAssertEqual(XCTWaiter.wait(for: [heroSettled], timeout: 5), .completed,
+                               "The cover must expand back from the lyrics thumbnail")
+            }
+            let grabber = app.descendants(matching: .any)["nowPlayingDismissIndicator"]
+            XCTAssertTrue(grabber.waitForExistence(timeout: 5))
+            let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+            start.press(forDuration: 0.05,
+                        thenDragTo: start.withOffset(CGVector(dx: 0, dy: 420)),
+                        withVelocity: XCUIGestureVelocity(1000), thenHoldForDuration: 0)
+            XCTAssertTrue(song.waitForNonExistence(timeout: 8))
+            XCTAssertTrue(miniPlayer.waitForExistence(timeout: 5))
+            XCTAssertTrue(miniPlayer.isHittable,
+                          "Collapsing must restore an interactive mini player on every cycle")
+        }
     }
 
     @MainActor

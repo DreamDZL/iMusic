@@ -49,6 +49,7 @@ jobs:
             exit 1
           fi
           echo "Using iPhone simulator: $SIMULATOR_ID"
+          echo "PLAYER_SIMULATOR_ID=$SIMULATOR_ID" >> "$GITHUB_ENV"
           # Restart the simulator so stale Accessibility/XCTest services do not
           # leak into the UI navigation smoke test.
           xcrun simctl shutdown "$SIMULATOR_ID" || true
@@ -69,6 +70,25 @@ jobs:
           xcrun simctl install "$SIMULATOR_ID" smoke-build/Build/Products/Debug-iphonesimulator/iMusic.app
           xcrun simctl launch "$SIMULATOR_ID" com.jiajia2222.imusic.ios
 
+      - name: Record repeated player transitions including passing runs
+        working-directory: platforms/ios/ios
+        run: |
+          set -euo pipefail
+          # XCTest normally retains video only for failures. Capture this
+          # focused interaction explicitly so a green run remains reviewable.
+          xcrun simctl io "$PLAYER_SIMULATOR_ID" recordVideo --codec=h264 player-transitions.mp4 &
+          RECORDER_PID=$!
+          trap 'kill -INT "$RECORDER_PID" 2>/dev/null || true; wait "$RECORDER_PID" || true' EXIT
+          xcodebuild test-without-building \
+            -project KumoneIOS.xcodeproj \
+            -scheme KumoneIOS \
+            -destination "platform=iOS Simulator,id=$PLAYER_SIMULATOR_ID" \
+            -derivedDataPath smoke-build \
+            -resultBundlePath player-transitions.xcresult \
+            -parallel-testing-enabled NO \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testRepeatedPlayerPageTransitionsAndCollapse \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+
       - name: Export UI test attachments for visual diagnosis
         if: always()
         working-directory: platforms/ios/ios
@@ -87,4 +107,6 @@ jobs:
           path: |
             platforms/ios/ios/smoke-tests.xcresult
             platforms/ios/ios/smoke-attachments
+            platforms/ios/ios/player-transitions.mp4
+            platforms/ios/ios/player-transitions.xcresult
           if-no-files-found: warn

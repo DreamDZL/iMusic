@@ -38,16 +38,11 @@ struct NowPlayingView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Lyric size: 34pt at the default text size, following Dynamic Type.
     @ScaledMetric(relativeTo: .largeTitle) private var lyricFontSize: CGFloat = 34
-    /// Shared space for the cover moving between song page and lyric header.
-    @Namespace private var playerPageNamespace
-    private static let artworkGeometryID = "nowPlayingArtwork"
     /// Tap counters that drive the transport animations and haptics, so
     /// remote commands and track ends never buzz the phone.
     @State private var skipForwardTrigger = 0
     @State private var skipBackTrigger = 0
     @State private var playPauseTrigger = 0
-    /// Live finger offset of the song ⇄ lyrics page swipe.
-    @State private var pageSwipeOffset: CGFloat = 0
     #if os(iOS)
     @State private var showQueueOnMobile = false
     @State private var showQueueSheet = false
@@ -257,22 +252,19 @@ struct NowPlayingView: View {
     }
 
     private var artworkBackdrop: some View {
-        // Energy: the drifting blobs move ~2pt/s, so they need only 4 fps; the
-        // full rate is kept for the 0.8s palette cross-fade. Paused playback
-        // freezes the backdrop entirely (it previously kept redrawing two
-        // full-screen blurs at 24 fps even when nothing played).
+        // Only palette changes need ticks. Static artwork no longer redraws
+        // two full-screen blurs throughout playback or page switching.
+        // Do not gate solely on !player.isPlaying: paused track changes still
+        // need to finish their palette cross-fade.
         TimelineView(.animation(
-            minimumInterval: artworkPalette.isTransitioning
-                ? renderingBudget.minimumAnimationInterval
-                : max(renderingBudget.minimumAnimationInterval, 0.25),
+            minimumInterval: renderingBudget.minimumAnimationInterval,
             paused: reduceMotion
                 || !renderingBudget.isSceneActive
                 || !renderingBudget.allowsContinuousEffects
-                || (!player.isPlaying && !artworkPalette.isTransitioning)
+                || !artworkPalette.isTransitioning
         )) { _ in
             let uptime = ProcessInfo.processInfo.systemUptime
             let palette = artworkPalette.displayedColors(at: uptime)
-            let motion = reduceMotion || !renderingBudget.allowsContinuousEffects ? 0.0 : uptime
             GeometryReader { geometry in
                 ZStack {
                     artworkGradient(for: palette)
@@ -281,16 +273,16 @@ struct NowPlayingView: View {
                         .frame(width: geometry.size.width * 1.15)
                         .blur(radius: 78)
                         .offset(
-                            x: -geometry.size.width * 0.24 + CGFloat(sin(motion * 0.18)) * 10,
-                            y: -geometry.size.height * 0.22 + CGFloat(cos(motion * 0.14)) * 8
+                            x: -geometry.size.width * 0.24,
+                            y: -geometry.size.height * 0.22
                         )
                     Circle()
                         .fill(palette.secondary.opacity(0.44))
                         .frame(width: geometry.size.width * 0.98)
                         .blur(radius: 92)
                         .offset(
-                            x: geometry.size.width * 0.26 + CGFloat(cos(motion * 0.16)) * 12,
-                            y: geometry.size.height * 0.08 + CGFloat(sin(motion * 0.12)) * 10
+                            x: geometry.size.width * 0.26,
+                            y: geometry.size.height * 0.08
                         )
                     LinearGradient(
                         colors: [.black.opacity(0.04), .clear, .black.opacity(0.22)],
@@ -422,6 +414,7 @@ struct NowPlayingView: View {
             Group {
                 if showLyricsOnMobile {
                     appleMusicLyricsPage()
+                        .transition(Self.playerPageTransition)
                         .padding(.bottom, 54)
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("appleMusicLyricsPage")
@@ -446,6 +439,7 @@ struct NowPlayingView: View {
                     .padding(.bottom, 54)
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("appleMusicSongPage")
+                    .transition(Self.playerPageTransition)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -465,10 +459,12 @@ struct NowPlayingView: View {
         return Group {
             if showLyricsOnMobile {
                 appleMusicLyricsPage()
+                    .transition(Self.playerPageTransition)
                     .frame(maxWidth: 620)
                     .frame(maxWidth: .infinity)
             } else {
                 leftColumn(artworkSize: artworkSize)
+                    .transition(Self.playerPageTransition)
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, 48)
             }
@@ -509,26 +505,15 @@ struct NowPlayingView: View {
             VStack(spacing: 0) {
                 Group {
                     if showLyricsOnMobile {
-                        appleMusicLyricsPage(revealRegionHeight: controlsHeight)
+                        appleMusicLyricsPage(revealRegionHeight: controlsHeight, usesSharedArtwork: true)
+                            .transition(.identity)
                             .accessibilityElement(children: .contain)
                             .accessibilityIdentifier("appleMusicLyricsPage")
                     } else {
                         VStack(spacing: 0) {
                             Spacer(minLength: isShortScreen ? 12 : 20)
 
-                            artworkView(size: artworkSize, matched: true)
-                                // The cover glides into the lyric header
-                                // thumbnail when switching pages.
-                                // Paused artwork recedes slightly, like the
-                                // system player; reduce motion skips the scale.
-                                .scaleEffect(player.isPlaying || reduceMotion ? 1 : 0.8)
-                                // Grows back with a slight overshoot, recedes
-                                // without one, as the system player does.
-                                .animation(
-                                    reduceMotion ? nil
-                                        : (player.isPlaying ? NowPlayingMotion.artworkPlay : NowPlayingMotion.artworkPause),
-                                    value: player.isPlaying
-                                )
+                            artworkPlaceholder(size: artworkSize)
                                 .padding(.bottom, isShortScreen ? 22 : 34)
 
                             trackMetaView
@@ -539,10 +524,11 @@ struct NowPlayingView: View {
                         .padding(.top, isShortScreen ? 24 : 34)
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("appleMusicSongPage")
+                        .transition(.identity)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .modifier(pageSwipe(width: size.width))
+                .modifier(pageSwipe)
 
                 // Reserve the deck's footprint only while it is shown, so
                 // hidden controls give the whole page back to the lyrics.
@@ -554,35 +540,64 @@ struct NowPlayingView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if deckVisible {
-                // A short rise with a fade (not a full slide from the screen
-                // edge), so the deck appears to surface from below the lyrics.
                 appleMusicPlaybackControls(height: controlsHeight)
-                    .transition(
-                        .asymmetric(
-                            insertion: .offset(y: 28).combined(with: .opacity),
-                            removal: .offset(y: 18).combined(with: .opacity)
-                        )
-                    )
+                    .transition(.opacity)
             }
         }
-        .animation(reduceMotion ? .easeInOut(duration: 0.2) : NowPlayingMotion.page, value: showLyricsOnMobile)
+        // One persistent cover owns both endpoints. The page branches only
+        // publish layout anchors: neither retains an outgoing artwork copy.
+        .overlayPreferenceValue(PlayerArtworkAnchorKey.self) { anchor in
+            GeometryReader { proxy in
+                if let anchor {
+                    let rect = proxy[anchor]
+                    artworkView(
+                        size: rect.width,
+                        identifier: showLyricsOnMobile ? "lyricsHeaderArtwork" : "nowPlayingArtworkImage"
+                    )
+                    // Attach before position expands the layout canvas, so
+                    // only the artwork intercepts taps, not lyrics or sliders.
+                    .modifier(pageSwipe)
+                    .position(x: rect.midX, y: rect.midY)
+                    .animation(pageAnimation, value: showLyricsOnMobile)
+                }
+            }
+        }
     }
 
-    /// Horizontal page swipe between song page and lyrics, besides the
-    /// lyrics button: left shows lyrics, right returns to the song page.
-    private func pageSwipe(width: CGFloat) -> PlayerPageSwipe {
+    private func artworkPlaceholder(size: CGFloat) -> some View {
+        Color.clear
+            .frame(width: size, height: size)
+            .anchorPreference(key: PlayerArtworkAnchorKey.self, value: .bounds) { $0 }
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
+    }
+
+    // Non-portrait layouts retain a lightweight native page fade. Portrait
+    // uses identity page replacement plus the single artwork morph above.
+    private static let playerPageTransition: AnyTransition =
+        .asymmetric(insertion: .opacity, removal: .identity)
+
+    private var pageAnimation: Animation? {
+        reduceMotion ? nil : .spring(response: 0.48, dampingFraction: 0.9)
+    }
+
+    private func setLyricsPage(_ showLyrics: Bool) {
+        guard showLyricsOnMobile != showLyrics else { return }
+        resumeTask?.cancel()
+        resumeTask = nil
+        isUserScrolling = false
+        isLyricsDragActive = false
+        withAnimation(pageAnimation) {
+            showLyricsOnMobile = showLyrics
+        }
+    }
+
+    /// Left shows lyrics, right returns to the song page; no finger transform.
+    private var pageSwipe: PlayerPageSwipe {
         PlayerPageSwipe(
             showsLyrics: showLyricsOnMobile,
-            pageWidth: width,
-            reduceMotion: reduceMotion,
-            offset: $pageSwipeOffset
-        ) { showLyrics in
-            withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : NowPlayingMotion.page) {
-                showLyricsOnMobile = showLyrics
-                isUserScrolling = false
-                resumeTask?.cancel()
-            }
-        }
+            onCommit: setLyricsPage
+        )
     }
 
     private static let deckAccessoryHeight: CGFloat = 44
@@ -660,13 +675,18 @@ struct NowPlayingView: View {
     /// - Parameter revealRegionHeight: height of the bottom band that brings
     ///   hidden controls back (the deck's footprint). Nil where the controls
     ///   never auto-hide (landscape keeps its accessory row).
-    private func appleMusicLyricsPage(revealRegionHeight: CGFloat? = nil) -> some View {
+    private func appleMusicLyricsPage(
+        revealRegionHeight: CGFloat? = nil,
+        usesSharedArtwork: Bool = false
+    ) -> some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    // Distinct identifier: during the page change both covers
-                    // briefly coexist, and UI tests address the hero cover.
-                    artworkView(size: 56, matched: true, identifier: "lyricsHeaderArtwork")
+                    if usesSharedArtwork {
+                        artworkPlaceholder(size: 56)
+                    } else {
+                        artworkView(size: 56, identifier: "lyricsHeaderArtwork")
+                    }
                     trackMeta(compact: true)
                 }
                 .padding(.bottom, 14)
@@ -709,12 +729,11 @@ struct NowPlayingView: View {
                     if lyricsControlsVisible { scheduleLyricsControlsAutoHide() }
                 })
         }
-        .animation(reduceMotion ? .easeInOut(duration: 0.2) : NowPlayingMotion.page, value: lyricsControlsVisible)
     }
 
     private func revealLyricsControls() {
         guard showLyricsOnMobile else { return }
-        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : NowPlayingMotion.page) {
+        withAnimation(pageAnimation) {
             lyricsControlsVisible = true
         }
         scheduleLyricsControlsAutoHide()
@@ -734,9 +753,7 @@ struct NowPlayingView: View {
             // it visible for them.
             guard !UIAccessibility.isVoiceOverRunning else { return }
             #endif
-            // Hiding is slower and calmer than revealing.
-            withAnimation(reduceMotion ? .easeInOut(duration: 0.25)
-                          : .spring(response: 0.7, dampingFraction: 0.95)) {
+            withAnimation(pageAnimation) {
                 lyricsControlsVisible = false
             }
         }
@@ -745,11 +762,7 @@ struct NowPlayingView: View {
     private var songPageAccessoryControls: some View {
         HStack(spacing: 0) {
             Button {
-                withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : NowPlayingMotion.page) {
-                    showLyricsOnMobile.toggle()
-                    isUserScrolling = false
-                    resumeTask?.cancel()
-                }
+                setLyricsPage(!showLyricsOnMobile)
             } label: {
                 accessoryGlyph(showLyricsOnMobile ? "quote.bubble.fill" : "quote.bubble",
                                isActive: showLyricsOnMobile)
@@ -821,7 +834,7 @@ struct NowPlayingView: View {
             } label: {
                 Image(systemName: player.isFMMode ? "hand.thumbsdown.fill" : "backward.fill")
                     .font(.system(size: player.isFMMode ? 26 : 32, weight: .regular))
-                    .modifier(SkipNudge(trigger: skipBackTrigger, direction: -1, enabled: !reduceMotion))
+                    .symbolEffect(.bounce, value: reduceMotion ? 0 : skipBackTrigger)
                     .frame(width: 72, height: 64)
                     // Highlight is drawn around the glyph; the tap area still
                     // spans the whole third of the row.
@@ -839,7 +852,7 @@ struct NowPlayingView: View {
             } label: {
                 Image(systemName: "forward.fill")
                     .font(.system(size: 32, weight: .regular))
-                    .modifier(SkipNudge(trigger: skipForwardTrigger, direction: 1, enabled: !reduceMotion))
+                    .symbolEffect(.bounce, value: reduceMotion ? 0 : skipForwardTrigger)
                     .frame(width: 72, height: 64)
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
@@ -1204,11 +1217,8 @@ struct NowPlayingView: View {
         #endif
     }
 
-    /// - Parameter matched: tie this cover to the other page's cover, so it
-    ///   glides and resizes between song page and lyric header.
     private func artworkView(
         size: CGFloat,
-        matched: Bool = false,
         identifier: String = "nowPlayingArtworkImage"
     ) -> some View {
         // A flexible square canvas with the image as an overlay: the fill
@@ -1238,16 +1248,8 @@ struct NowPlayingView: View {
             .clipped()
         // Radius and shadow scale with the artwork, so the 56pt lyric header
         // thumbnail does not get the same 18pt corners as the hero artwork.
-        // Clip before the geometry match so the clip follows the moving frame.
         .clipShape(RoundedRectangle(cornerRadius: min(14, max(6, size * 0.045)), style: .continuous))
-        // Shadow before the geometry match so it travels with the cover
-        // between the two pages instead of waiting at the destination.
         .shadow(color: .black.opacity(size > 120 ? 0.32 : 0.2), radius: size > 120 ? 22 : 6, y: size > 120 ? 12 : 3)
-        .modifier(MatchedArtwork(
-            enabled: matched,
-            id: Self.artworkGeometryID,
-            namespace: playerPageNamespace
-        ))
         .frame(width: size, height: size)
         .accessibilityLabel("专辑封面")
         .accessibilityIdentifier(identifier)
@@ -1568,9 +1570,8 @@ struct NowPlayingView: View {
                             }
                             Color.clear.frame(height: geometry.size.height * 0.78)
                         }
-                        // The lyrics page already applies the shared side
-                        // margin. The trailing room absorbs the sung line's
-                        // 6% scale so long lines are not clipped.
+                        // The trailing room absorbs the sung line's 6% scale
+                        // without changing the shared leading margin.
                         .padding(.trailing, 24)
                     }
                     .coordinateSpace(name: "synchronizedLyrics")
@@ -1709,9 +1710,7 @@ struct NowPlayingView: View {
             }
         }
         .multilineTextAlignment(.leading)
-        // The sung line grows slightly from its leading edge. scaleEffect is
-        // a render transform: neighbours never reflow, so the list stays still
-        // while the emphasis moves.
+        // Render-only emphasis keeps adjacent lyric lines from reflowing.
         .scaleEffect(isActive ? Self.activeLyricScale : 1, anchor: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -1725,22 +1724,15 @@ struct NowPlayingView: View {
         .onDisappear { lyricLineFrames.frames[line.id] = nil }
         // One depth blur for the whole line (main text, romaji, translation).
         .blur(radius: lyricBlurRadius(for: line.id, isActive: isActive))
-        // Soft spring with a touch of overshoot: the new line swells in while
-        // the previous one relaxes, instead of a linear fade.
         .animation(reduceMotion ? .easeOut(duration: 0.2) : NowPlayingMotion.lyricEmphasis, value: isActive)
         .animation(.easeOut(duration: 0.25), value: isUserScrolling)
     }
 }
 
-/// Follows the finger horizontally and decides on release whether to change
-/// page. Only clearly horizontal drags count, so lyric scrolling, the
-/// pull-down to close and taps are untouched. The wrong direction rubber
-/// bands instead of moving freely.
+/// Recognizes horizontal swipes without moving, scaling or fading the page
+/// under the finger. SwiftUI owns the transition when the gesture commits.
 private struct PlayerPageSwipe: ViewModifier {
     let showsLyrics: Bool
-    let pageWidth: CGFloat
-    let reduceMotion: Bool
-    @Binding var offset: CGFloat
     let onCommit: (Bool) -> Void
 
     private enum Axis { case undecided, horizontal, rejected }
@@ -1756,8 +1748,6 @@ private struct PlayerPageSwipe: ViewModifier {
     func body(content: Content) -> some View {
         content
             .contentShape(Rectangle())
-            .offset(x: offset)
-            .opacity(1 - min(abs(offset) / max(pageWidth, 1), 0.35))
             .simultaneousGesture(
                 DragGesture(minimumDistance: 14)
                     .updating($axis) { value, state, _ in
@@ -1776,10 +1766,6 @@ private struct PlayerPageSwipe: ViewModifier {
                         case .rejected: lockedHorizontal = false
                         case .undecided: lockedHorizontal = abs(dx) > abs(value.translation.height) * 1.4
                         }
-                        guard lockedHorizontal, !reduceMotion else { return }
-                        let toward = NowPlayingPresentationMetrics.pageSwipeAllowedDirection(showsLyrics: showsLyrics)
-                        // Free movement toward the other page, resistance away.
-                        offset = dx * toward > 0 ? dx * 0.55 : dx * 0.12
                     }
                     .onEnded { value in
                         // Only a drag that locked horizontal at its start may
@@ -1790,60 +1776,23 @@ private struct PlayerPageSwipe: ViewModifier {
                             translation: value.translation.width,
                             predictedTranslation: value.predictedEndTranslation.width,
                             showsLyrics: showsLyrics
-                        ) else {
-                            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { offset = 0 }
-                            return
-                        }
-                        // Drop the finger offset without animating it back
-                        // toward the old side; the page change carries the
-                        // motion from here.
-                        var reset = Transaction()
-                        reset.disablesAnimations = true
-                        withTransaction(reset) { offset = 0 }
+                        ) else { return }
                         onCommit(target)
                     }
             )
-            // A cancelled drag never reaches onEnded; settle the page anyway.
-            .onChange(of: axis) { _, newValue in
-                guard newValue == .undecided, offset != 0 else { return }
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { offset = 0 }
-            }
-            .onDisappear { offset = 0 }
+            // Every onChanged rewrites the lock from this gesture's axis, so
+            // cancellation cannot leak a previous drag's lock into the next.
+            .onDisappear { lockedHorizontal = false }
     }
 }
 
-private struct MatchedArtwork: ViewModifier {
-    let enabled: Bool
-    let id: String
-    let namespace: Namespace.ID
+/// Only the active portrait page supplies an anchor. No cached screen-space
+/// rectangles can survive a rotation, safe-area change or controls reveal.
+private struct PlayerArtworkAnchorKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
 
-    func body(content: Content) -> some View {
-        if enabled {
-            content.matchedGeometryEffect(id: id, in: namespace)
-        } else {
-            content
-        }
-    }
-}
-
-/// Skip glyph nudge: on each tap the arrows push ~10pt in their direction and
-/// spring back, like the system player's forward/back buttons.
-private struct SkipNudge: ViewModifier {
-    let trigger: Int
-    let direction: CGFloat
-    let enabled: Bool
-
-    func body(content: Content) -> some View {
-        if enabled {
-            content.keyframeAnimator(initialValue: CGFloat(0), trigger: trigger) { view, offset in
-                view.offset(x: offset)
-            } keyframes: { _ in
-                SpringKeyframe(10 * direction, duration: 0.12, spring: .snappy)
-                SpringKeyframe(0, duration: 0.42, spring: .bouncy)
-            }
-        } else {
-            content
-        }
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        if let next = nextValue() { value = next }
     }
 }
 

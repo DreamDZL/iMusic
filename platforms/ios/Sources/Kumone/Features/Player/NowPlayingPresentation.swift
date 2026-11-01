@@ -128,7 +128,7 @@ enum NowPlayingPresentationMetrics {
     static let dismissPrediction: CGFloat = 190
     static let miniPlayerExpandDistance: CGFloat = 28
     static let miniPlayerExpandPrediction: CGFloat = 72
-    /// Compatibility presentation only; native zoom owns iPhone cover motion.
+    /// Compatibility presentation only; UIKit owns iPhone cover motion.
     static let presentationAnimation = Animation.easeInOut(duration: 0.35)
 
     static var immersiveHeaderTopInset: CGFloat {
@@ -247,6 +247,18 @@ struct PlayerCardClip: ViewModifier {
 }
 
 enum NativeNowPlayingDismissPolicy {
+    static func shouldCloseBinding(
+        completed: Bool, active: Bool, requestedDismissal: Bool,
+        dismissalRevision: Int, currentRevision: Int
+    ) -> Bool {
+        completed && active && !requestedDismissal && dismissalRevision == currentRevision
+    }
+
+    static func interactiveProgress(translation: CGFloat, height: CGFloat) -> CGFloat {
+        guard translation.isFinite, height.isFinite, height > 0 else { return 0 }
+        return min(max(translation / (height * 0.75), 0), 1)
+    }
+
     static func shouldRequestDismiss(translation: CGSize, predicted: CGSize) -> Bool {
         guard translation.width.isFinite, translation.height.isFinite,
               predicted.width.isFinite, predicted.height.isFinite,
@@ -258,10 +270,12 @@ enum NativeNowPlayingDismissPolicy {
     }
 }
 
-/// A downward pull only requests dismissal. UIKit alone animates the cover;
-/// this modifier never changes a view's position, scale, opacity or timing.
+/// Only header/artwork surfaces opt in. Horizontal paging, lyric scrolling and
+/// sliders never compete with a blanket full-screen dismissal recognizer.
 struct NativeNowPlayingDismissRequest: ViewModifier {
     @Environment(\.dismissNowPlayingAction) private var dismiss
+    @Environment(\.dismissNowPlayingDragAction) private var dragAction
+    @GestureState private var isDragging = false
     var acceptsTap = false
 
     @ViewBuilder
@@ -270,7 +284,9 @@ struct NativeNowPlayingDismissRequest: ViewModifier {
             // A recognized short pull must not fall through to tap-to-close.
             // Simultaneous tap+drag can accept both under system tap slop.
             content.gesture(
-                DragGesture(minimumDistance: 14)
+                DragGesture(minimumDistance: 14, coordinateSpace: .global)
+                    .updating($isDragging) { _, state, _ in state = true }
+                    .onChanged(reportDrag)
                     .exclusively(before: TapGesture())
                     .onEnded { result in
                         switch result {
@@ -279,23 +295,53 @@ struct NativeNowPlayingDismissRequest: ViewModifier {
                         }
                     }
             )
+            .onChange(of: isDragging) { _, dragging in
+                // GestureState also resets on interruption. Defer until the
+                // normal onEnded has had its chance to finish the transition.
+                if !dragging {
+                    DispatchQueue.main.async { dragAction?.onEnded(0, 0) }
+                }
+            }
         } else {
             content.simultaneousGesture(
-                DragGesture(minimumDistance: 14).onEnded(requestDismissal)
+                DragGesture(minimumDistance: 14, coordinateSpace: .global)
+                    .updating($isDragging) { _, state, _ in state = true }
+                    .onChanged(reportDrag)
+                    .onEnded(requestDismissal)
             )
+            .onChange(of: isDragging) { _, dragging in
+                if !dragging {
+                    DispatchQueue.main.async { dragAction?.onEnded(0, 0) }
+                }
+            }
         }
     }
 
     private func requestDismissal(_ value: DragGesture.Value) {
+        if let dragAction {
+            let downward = value.translation.height > abs(value.translation.width) * 1.25
+            let accepts = NativeNowPlayingDismissPolicy.shouldRequestDismiss(
+                translation: value.translation, predicted: value.predictedEndTranslation
+            )
+            dragAction.onEnded(downward ? value.translation.height : 0,
+                               accepts ? value.predictedEndTranslation.height : 0)
+            return
+        }
         guard NativeNowPlayingDismissPolicy.shouldRequestDismiss(
             translation: value.translation, predicted: value.predictedEndTranslation
         ) else { return }
         dismiss?()
     }
+
+    private func reportDrag(_ value: DragGesture.Value) {
+        let downward = value.translation.height > abs(value.translation.width) * 1.25
+        dragAction?.onChanged(downward ? value.translation.height : 0)
+    }
 }
 
-/// Player content and one accessible close target, without a custom animator.
+/// Player content and one accessible close target. The cover owns the motion.
 struct IOSNowPlayingPresentation<Content: View>: View {
+    @Environment(\.dismissNowPlayingAction) private var coverDismiss
     private let content: Content
 
     @Binding private var isPresented: Bool
@@ -351,7 +397,8 @@ struct IOSNowPlayingPresentation<Content: View>: View {
     }
 
     private func dismiss() {
-        isPresented = false
+        if let coverDismiss { coverDismiss() }
+        else { isPresented = false }
     }
 }
 #endif
