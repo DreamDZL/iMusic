@@ -79,6 +79,9 @@ class IOSDesignCompileGuards(unittest.TestCase):
         window = (ROOT / "Features/IOSMainWindow.swift").read_text(encoding="utf-8")
         self.assertIn("NativeNowPlayingCover(", window)
         self.assertIn(".modifier(NativeNowPlayingDismissRequest())", presentation)
+        target = presentation[presentation.index("private var dragIndicator: some View"):presentation.index("private var dragIndicatorSurface:")]
+        self.assertIn(".accessibilityElement(children: .ignore)", target)
+        self.assertIn('.accessibilityIdentifier("nowPlayingDismissIndicator")', target)
         self.assertIn(".modifier(NativeNowPlayingDismissRequest())", player)
         wrapper = presentation[presentation.index("struct NativeNowPlayingDismissRequest:"):]
         for custom_motion in (".scaleEffect(", ".offset(", "withAnimation(", ".animation("):

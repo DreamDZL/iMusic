@@ -647,6 +647,10 @@ final class KumoneIOSUITests: XCTestCase {
         unexpectedDismissal.isInverted = true
         XCTAssertEqual(XCTWaiter.wait(for: [unexpectedDismissal], timeout: 1), .completed,
                        "A subthreshold pull must leave the song page visible")
+        let attachment = XCTAttachment(string: app.debugDescription)
+        attachment.name = "player-after-subthreshold-pull"
+        attachment.lifetime = .keepAlways
+        add(attachment)
         assertSettles(grabber, atMidY: originalMidY,
                       message: "The grabber must remain at its resting position after cancellation")
         XCTAssertTrue(songPage.exists)

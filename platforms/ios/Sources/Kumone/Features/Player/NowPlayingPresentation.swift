@@ -302,7 +302,12 @@ struct IOSNowPlayingPresentation<Content: View>: View {
             .contentShape(Rectangle())
             .modifier(NativeNowPlayingDismissRequest())
             .simultaneousGesture(TapGesture().onEnded { dismiss() })
+            // Keep one stable accessibility node for the entire hit target.
+            // The inner clear surface and decorative capsule are not controls.
+            .accessibilityElement(children: .ignore)
+            .accessibilityIdentifier("nowPlayingDismissIndicator")
             .accessibilityLabel("下拉关闭播放页")
+            .accessibilityAddTraits(.isButton)
             .accessibilityAction(named: Text("关闭播放页"), dismiss)
     }
 
@@ -323,7 +328,6 @@ struct IOSNowPlayingPresentation<Content: View>: View {
             width: NowPlayingPresentationMetrics.indicatorHitWidth,
             height: NowPlayingPresentationMetrics.indicatorHitHeight
         )
-        .accessibilityIdentifier("nowPlayingDismissIndicator")
     }
 
     private func dismiss() {
