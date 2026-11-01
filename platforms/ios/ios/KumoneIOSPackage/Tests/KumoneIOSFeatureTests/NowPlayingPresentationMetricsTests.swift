@@ -23,7 +23,7 @@ final class NowPlayingPresentationMetricsTests: XCTestCase {
             }
             let expected: Duration
             #if DEBUG
-            expected = mask == (1 << required.count) - 1 ? .seconds(12) : .seconds(3)
+            expected = mask == (1 << required.count) - 1 ? .seconds(45) : .seconds(3)
             #else
             expected = .seconds(3)
             #endif

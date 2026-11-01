@@ -327,9 +327,9 @@ final class KumoneIOSUITests: XCTestCase {
         let songTransportControls = app.descendants(matching: .any)["nowPlayingTransportControls"]
         // Full-screen lyrics: after the initial auto-hide the whole deck,
         // accessory row included, leaves the screen like the system player.
-        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 20),
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 60),
                       "Lyrics transport controls must initially auto-hide")
-        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 20),
+        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 60),
                       "Lyrics volume control must initially auto-hide")
         XCTAssertTrue(accessoryControls.waitForNonExistence(timeout: 5),
                       "Full-screen lyrics must hide the bottom accessory row too")
@@ -345,9 +345,9 @@ final class KumoneIOSUITests: XCTestCase {
                       "Revealing controls must bring the accessory row back")
         assertSettles(accessoryControls, atMidY: songAccessoryMidY,
                       message: "The accessory row must reappear at the song page's position")
-        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 20),
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 60),
                       "Lyrics transport controls must be removed from the accessibility tree when hidden")
-        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 20),
+        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 60),
                       "Lyrics volume control must be removed from the accessibility tree when hidden")
         XCTAssertTrue(accessoryControls.waitForNonExistence(timeout: 5),
                       "The accessory row must hide again with the controls")
@@ -381,11 +381,10 @@ final class KumoneIOSUITests: XCTestCase {
             message: "Revealed playback state must simultaneously contain transport, volume, 0:14, and the current quality button"
         )
         XCTAssertTrue(app.buttons["showSynchronizedLyrics"].exists, "Revealed lyrics need the same bottom toolbar")
-        // Snapshot checks above consumed >12s on the loaded CI simulator:
-        // the fixture's real auto-hide deadline expired between exists and
-        // tap. Start a fresh reveal window for the separate navigation action.
+        // Start a fresh reveal window for the separate navigation action;
+        // inspecting state and navigating are independent timed interactions.
         // Auto-hide and simultaneous playback-state assertions remain above.
-        XCTAssertTrue(accessoryControls.waitForNonExistence(timeout: 20),
+        XCTAssertTrue(accessoryControls.waitForNonExistence(timeout: 60),
                       "The playback toolbar must still auto-hide after state inspection")
         lyricsPage.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
         XCTAssertTrue(accessoryControls.waitForExistence(timeout: 5))
@@ -403,7 +402,7 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(lyricsPage.waitForNonExistence(timeout: 5))
         app.buttons["showSynchronizedLyrics"].tap()
         XCTAssertTrue(lyricsPage.waitForExistence(timeout: 5))
-        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 20),
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 60),
                       "Lyrics transport controls must auto-hide after returning from the song page")
 
         let lyricsAttachment = XCTAttachment(screenshot: app.screenshot())

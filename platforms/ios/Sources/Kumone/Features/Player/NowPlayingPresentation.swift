@@ -186,7 +186,10 @@ enum NowPlayingPresentationMetrics {
             "-imusic-ui-extended-lyrics-controls"
         ]
         if requiredArguments.isSubset(of: Set(arguments)) {
-            return .seconds(12)
+            // Loaded CI accessibility snapshots can each take several
+            // seconds. Only the extended inspection fixture gets this window;
+            // the separate default-timing regression still uses three seconds.
+            return .seconds(45)
         }
         #endif
         return lyricsControlsAutoHideDelay
