@@ -381,6 +381,14 @@ final class KumoneIOSUITests: XCTestCase {
             message: "Revealed playback state must simultaneously contain transport, volume, 0:14, and the current quality button"
         )
         XCTAssertTrue(app.buttons["showSynchronizedLyrics"].exists, "Revealed lyrics need the same bottom toolbar")
+        // Snapshot checks above consumed >12s on the loaded CI simulator:
+        // the fixture's real auto-hide deadline expired between exists and
+        // tap. Start a fresh reveal window for the separate navigation action.
+        // Auto-hide and simultaneous playback-state assertions remain above.
+        XCTAssertTrue(accessoryControls.waitForNonExistence(timeout: 20),
+                      "The playback toolbar must still auto-hide after state inspection")
+        lyricsPage.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
+        XCTAssertTrue(accessoryControls.waitForExistence(timeout: 5))
         app.buttons["showSynchronizedLyrics"].tap()
         XCTAssertTrue(songTransportControls.waitForExistence(timeout: 5))
         XCTAssertTrue(songPage.waitForExistence(timeout: 5))
