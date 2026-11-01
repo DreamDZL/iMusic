@@ -174,6 +174,12 @@ jobs:
             echo 'Unexpected app extension in IPA' >&2
             exit 1
           fi
+          # Validate the device executable as well as ZIP filenames. This is
+          # structural validation, not a claim of provisioning/installability.
+          python3 ../../../scripts/verify_ios_ipa.py \
+            "dist/imusic_ios_${RELEASE_VERSION}.ipa" \
+            --expected-version "$RELEASE_VERSION" \
+            --expected-bundle-id com.jiajia2222.imusic.ios
 
       - name: Upload IPA
         uses: actions/upload-artifact@v6
