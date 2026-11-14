@@ -807,7 +807,7 @@ final class KumoneIOSUITests: XCTestCase {
         toggle.tap()
         let lyrics = app.descendants(matching: .any)["appleMusicLyricsPage"]
         XCTAssertTrue(lyrics.waitForExistence(timeout: 10))
-        let next = app.buttons["下一首"]
+        let next = app.descendants(matching: .any)["lyricsTransportControls"].buttons["下一首"]
         XCTAssertTrue(next.waitForExistence(timeout: 5))
         next.tap()
         XCTAssertTrue(app.staticTexts["iMusic 下一首测试曲目"].waitForExistence(timeout: 10))

@@ -83,7 +83,20 @@ private final class QishuiMockProtocol: URLProtocol {
         if url.path.contains("/client/token/") {
             response = ["err_no": 0, "client_token": "test-token"]
         } else {
-            let body = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+            var requestBody = request.httpBody
+            if requestBody == nil, let stream = request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var bytes = [UInt8](repeating: 0, count: 4096)
+                var data = Data()
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&bytes, maxLength: bytes.count)
+                    if count <= 0 { break }
+                    data.append(contentsOf: bytes.prefix(count))
+                }
+                requestBody = data
+            }
+            let body = requestBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
             let cursor = Int(body["cursor"] as? String ?? "0") ?? 0
             let end = min(cursor + 20, 80)
             let rows: [[String: Any]] = (cursor..<end).map { index in
