@@ -31,6 +31,34 @@ final class QishuiSearchTests: XCTestCase {
         XCTAssertNil(QishuiSearch.track(["base_info": ["id": "not-an-id", "name": "x"]]))
     }
 
+    func testLXBridgeRecognizesQishuiDeclaration() async throws {
+        let source = LXSourceStore.Source(
+            id: "qishui-alias-fixture", name: "fixture", description: "",
+            version: "1", author: "tests", homepage: "https://example.invalid",
+            script: #"""
+            lx.on(lx.EVENT_NAMES.request, async ({source, info}) => {
+                if (source !== 'qs' || info.musicInfo.songmid !== '7676337516358617115') {
+                    throw new Error('wrong Qishui identity')
+                }
+                return 'https://example.invalid/audio.mp3'
+            })
+            lx.send(lx.EVENT_NAMES.inited, {
+                status: true,
+                sources: { qs: { type: 'music', actions: ['musicUrl'], qualitys: ['128k'] } }
+            })
+            """#,
+            sourceURL: nil
+        )
+        let service = LXUserAPIService.shared
+        service.load(source)
+        defer { service.loadSelectedSource() }
+        for _ in 0..<40 where service.capabilities["sd"] == nil {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(service.capabilities["sd"], ["musicUrl"])
+        XCTAssertEqual(service.qualityCapabilities["sd"], ["128k"])
+    }
+
     func testPaginationFillsPagesAcrossFixedProviderBatches() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [QishuiMockProtocol.self]

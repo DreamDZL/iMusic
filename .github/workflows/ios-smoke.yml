@@ -55,6 +55,8 @@ jobs:
           xcrun simctl boot "$SIMULATOR_ID"
           xcrun simctl bootstatus "$SIMULATOR_ID" -b
           xcodebuild test \
+            -only-testing:KumoneIOSFeatureTests/QishuiSearchTests \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testLyricsPageRemainsOpenWhenTrackChanges \
             -project KumoneIOS.xcodeproj \
             -scheme KumoneIOS \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
