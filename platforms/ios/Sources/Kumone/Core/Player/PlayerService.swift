@@ -923,6 +923,15 @@ final class PlayerService: ObservableObject {
     }
 
     func next() {
+        #if os(iOS)
+        // The deterministic UI fixture exercises the same queue transition as
+        // an item-end notification without requiring real audio or a timer.
+        if ProcessInfo.processInfo.arguments.contains("-imusic-ui-testing"),
+           ProcessInfo.processInfo.arguments.contains("-imusic-ui-next-track-fixture") {
+            advanceToNext(userInitiated: false)
+            return
+        }
+        #endif
         advanceToNext(userInitiated: true)
     }
 
