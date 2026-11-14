@@ -528,8 +528,17 @@ final class PlayerService: ObservableObject {
             )
         })
 
-        queue = [track]
-        queueItemIDs = [UUID().uuidString]
+        let nextTrack = Track(
+            id: 27_000_004,
+            name: "iMusic 下一首测试曲目",
+            artists: [ArtistRef(id: 27_000_002, name: "测试歌手")],
+            album: AlbumRef(id: 27_000_003, name: "测试专辑", picUrl: nil),
+            durationMS: 180_000,
+            source: "wy"
+        )
+        queue = ProcessInfo.processInfo.arguments.contains("-imusic-ui-next-track-fixture")
+            ? [track, nextTrack] : [track]
+        queueItemIDs = queue.map { _ in UUID().uuidString }
         shuffledQueue = []
         shuffledQueueItemIDs = []
         shuffleEnabled = false

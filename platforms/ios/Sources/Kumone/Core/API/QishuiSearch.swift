@@ -9,11 +9,15 @@ actor QishuiSearch {
     private let deviceID = String(UInt64.random(in: 1_000_000_000_000_000_000...9_999_999_999_999_999_999))
     private var token: String?
 
-    private init() {
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 20
-        config.timeoutIntervalForResource = 30
-        session = URLSession(configuration: config)
+    init(session: URLSession? = nil) {
+        if let session {
+            self.session = session
+        } else {
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = 20
+            config.timeoutIntervalForResource = 30
+            self.session = URLSession(configuration: config)
+        }
     }
 
     private func url(host: String, path: String, tokenRequest: Bool = false) throws -> URL {

@@ -793,6 +793,29 @@ final class KumoneIOSUITests: XCTestCase {
     }
 
     @MainActor
+    func testLyricsPageRemainsOpenWhenTrackChanges() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture",
+                               "-imusic-ui-next-track-fixture", "-imusic-ui-extended-lyrics-controls"]
+        app.launch()
+        let miniPlayer = app.buttons["miniPlayerOpenNowPlaying"]
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 15))
+        miniPlayer.tap()
+        let toggle = app.buttons["showSynchronizedLyrics"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        toggle.tap()
+        let lyrics = app.descendants(matching: .any)["appleMusicLyricsPage"]
+        XCTAssertTrue(lyrics.waitForExistence(timeout: 10))
+        let next = app.buttons["下一首"]
+        XCTAssertTrue(next.waitForExistence(timeout: 5))
+        next.tap()
+        XCTAssertTrue(app.staticTexts["iMusic 下一首测试曲目"].waitForExistence(timeout: 10))
+        XCTAssertTrue(lyrics.exists, "Track transitions must preserve the open lyrics page")
+        XCTAssertFalse(app.descendants(matching: .any)["appleMusicSongPage"].exists)
+    }
+
+    @MainActor
     func testLyricsControlsAutoHideWithDefaultTiming() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

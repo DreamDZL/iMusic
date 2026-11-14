@@ -30,4 +30,45 @@ final class QishuiSearchTests: XCTestCase {
         XCTAssertNil(QishuiSearch.track(["base_info": ["id": 7_676_337_516_358_617_115, "name": "x"]]))
         XCTAssertNil(QishuiSearch.track(["base_info": ["id": "not-an-id", "name": "x"]]))
     }
+
+    func testPaginationFillsPagesAcrossFixedProviderBatches() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [QishuiMockProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let service = QishuiSearch(session: session)
+        let first = try await service.search("fixture", page: 1, limit: 30)
+        let second = try await service.search("fixture", page: 2, limit: 30)
+        XCTAssertEqual(first.count, 30)
+        XCTAssertEqual(second.count, 30)
+        XCTAssertEqual(first.map(\.id), Array(1...30))
+        XCTAssertEqual(second.map(\.id), Array(31...60))
+    }
+}
+
+private final class QishuiMockProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let url = request.url else { return }
+        let response: [String: Any]
+        if url.path.contains("/client/token/") {
+            response = ["err_no": 0, "client_token": "test-token"]
+        } else {
+            let body = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+            let cursor = Int(body["cursor"] as? String ?? "0") ?? 0
+            let end = min(cursor + 20, 80)
+            let rows: [[String: Any]] = (cursor..<end).map { index in
+                ["entity": ["track": ["base_info": ["id": String(index + 1), "name": "track \(index + 1)"]]]]
+            }
+            response = ["err_no": 0, "data": ["result_groups": [["id": "tracks", "data": rows,
+                          "has_more": end < 80, "next_cursor": String(end)]]]]
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: response),
+              let http = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil) else { return }
+        client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }
