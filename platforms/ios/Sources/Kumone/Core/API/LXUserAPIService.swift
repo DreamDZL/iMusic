@@ -669,6 +669,10 @@ final class LXUserAPIService: ObservableObject {
                     guard let value = pair.value as? [String: Any] else { return }
                     result[pair.key] = value["qualitys"] as? [String] ?? []
                 }
+                if capabilities["sd"] == nil, let actions = capabilities["qs"] {
+                    capabilities["sd"] = actions
+                    qualityCapabilities["sd"] = qualityCapabilities["qs"]
+                }
                 let active = capabilities
                     .filter { !$0.value.isEmpty }
                     .map { "\($0.key): \($0.value.joined(separator: ", "))" }
@@ -790,7 +794,7 @@ final class LXUserAPIService: ObservableObject {
                 }
                 pending[requestKey] = continuation
                 callJS(action: "request", data: ["requestKey": requestKey,
-                                                    "data": ["source": source, "action": action, "info": info]])
+                                                    "data": ["source": Self.protocolSource(source, capabilities: capabilities), "action": action, "info": info]])
                 requestTimeoutTasks[requestKey] = Task { @MainActor [weak self] in
                     do {
                         try await Task.sleep(for: .seconds(20))
@@ -899,22 +903,22 @@ final class LXUserAPIService: ObservableObject {
         let primary = canonicalPlatform(track.source ?? track.sourceMetadata["source"]) ?? "wy"
         var values: [String] = []
 
-        // Soda Music is a playlist-import format only. Its IDs are not sent
-        // to an LX source as a playable platform; imported tracks are matched
-        // against the real catalogue platforms below instead.
-        if primary != "sd" {
-            values.append(primary)
-        }
+        values.append(primary)
 
         if primary == "sd" {
-            values.append(contentsOf: ["wy", "kw", "kg", "tx", "mg"])
+            values.append(contentsOf: ["wy", "kw", "kg", "tx"])
         } else if SettingsManager.shared.enableSourcePlatformFallback {
-            values.append(contentsOf: ["wy", "kw", "kg", "tx", "mg"])
+            values.append(contentsOf: ["wy", "kw", "kg", "tx"])
         }
         var seen = Set<String>()
         return values.filter { platform in
             capabilities[platform]?.contains(action) == true && seen.insert(platform).inserted
         }
+    }
+
+    static func protocolSource(_ source: String, capabilities: [String: [String]]) -> String {
+        // sd is the app's canonical name; scripts advertising qs expect qs.
+        source == "sd" && capabilities["qs"] != nil ? "qs" : source
     }
 
     private func activate(_ source: LXSourceStore.Source) async -> Bool {
@@ -1012,7 +1016,7 @@ final class LXUserAPIService: ObservableObject {
         case "kg", "kugou": return "kg"
         case "tx", "qq", "qqmusic", "qq-music": return "tx"
         case "mg", "migu": return "mg"
-        case "sd", "soda", "sodamusic", "soda-music", "qishui", "qishui-music": return "sd"
+        case "sd", "qs", "soda", "sodamusic", "soda-music", "qishui", "qishui-music": return "sd"
         default: return value
         }
     }

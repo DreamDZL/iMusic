@@ -125,13 +125,13 @@ struct NowPlayingView: View {
         #if os(iOS)
         .onChange(of: player.currentTrack?.playbackKey) { _ in
             pageRevision &+= 1
-            showLyricsOnMobile = false
             lyricsControlsTask?.cancel()
             lyricsControlsVisible = true
             isLyricsDragActive = false
             isUserScrolling = false
             resumeTask?.cancel()
             resumeTask = nil
+            if showLyricsOnMobile { scheduleLyricsControlsAutoHide() }
         }
         #endif
         .onChange(of: showLyricsOnMobile) { _, isShowing in

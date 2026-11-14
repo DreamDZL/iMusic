@@ -15,12 +15,14 @@ enum LXCatalogPlatform: String, CaseIterable, Identifiable {
     case mg
     case sd
 
-    /// Catalogue adapters that are actually supported by the app UI.
-    /// Qishui remains a playlist importer, but is intentionally excluded from
-    /// search, home recommendations, hot keywords, and playback selection.
+    /// User-visible search platforms. Other catalogue operations must check
+    /// their own capabilities rather than assuming every source supports them.
     static var catalogueCases: [LXCatalogPlatform] {
-        allCases.filter { $0 != .sd }
+        allCases.filter { $0 != .mg }
     }
+
+    /// Qishui currently supplies track search, not discovery feeds or songlists.
+    static var discoveryCases: [LXCatalogPlatform] { [.kw, .kg, .tx, .wy] }
 
     var id: String { rawValue }
     var displayName: String {
@@ -58,7 +60,7 @@ enum LXCatalogPlatform: String, CaseIterable, Identifiable {
         case "kg", "kugou": return "酷狗"
         case "tx", "qq", "qqmusic", "qq-music": return "QQ 音乐"
         case "mg", "migu": return "咪咕"
-        case "sd", "soda", "sodamusic", "soda-music", "qishui", "qishui-music": return "汽水音乐"
+        case "sd", "qs", "soda", "sodamusic", "soda-music", "qishui", "qishui-music": return "汽水音乐"
         case "": return "未知"
         default: return rawValue ?? "未知"
         }
@@ -164,7 +166,7 @@ enum LXCatalogService {
         case .tx: return try await searchQQ(keyword, page: page, limit: limit)
         case .wy: return try await searchNetease(keyword, page: page, limit: limit)
         case .mg: return try await searchMigu(keyword, page: page, limit: limit)
-        case .sd: throw LXCatalogError.unsupported
+        case .sd: return try await QishuiSearch.shared.search(keyword, page: page, limit: limit)
         case .aggregate: throw LXCatalogError.unsupported
         }
     }
@@ -1322,7 +1324,7 @@ enum LXCatalogService {
         if platform == .aggregate {
             let results = await withTaskGroup(of: [LXPlaylistSummary].self,
                                               returning: [[LXPlaylistSummary]].self) { group in
-                for item in LXCatalogPlatform.catalogueCases where item != .aggregate {
+                for item in LXCatalogPlatform.discoveryCases {
                     group.addTask {
                         (try? await searchSonglists(keyword, platform: item, page: page, limit: limit)) ?? []
                     }
@@ -1473,7 +1475,7 @@ enum LXCatalogService {
             // Preserve catalogueCases priority. Completion-order aggregation
             // made the displayed numbered list change with network latency.
             var results: [[String]] = []
-            for item in LXCatalogPlatform.catalogueCases where item != .aggregate {
+            for item in LXCatalogPlatform.discoveryCases {
                 results.append((try? await hotKeywords(platform: item)) ?? [])
             }
             var seen = Set<String>()

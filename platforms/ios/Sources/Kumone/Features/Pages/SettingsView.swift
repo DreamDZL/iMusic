@@ -89,7 +89,7 @@ struct SettingsView: View {
                     }
                 }
                 Picker("推荐平台", selection: $settings.homeRecommendationPlatform) {
-                    ForEach(LXCatalogPlatform.catalogueCases.filter { $0 != .aggregate }) { platform in
+                    ForEach(LXCatalogPlatform.discoveryCases) { platform in
                         Text(platform.displayName).tag(platform)
                     }
                 }

@@ -301,7 +301,7 @@ struct ExploreView: View {
     private var discoveryMenu: some View {
         Menu {
             Section("音乐平台") {
-                ForEach(LXCatalogPlatform.catalogueCases.filter { $0 != .aggregate }) { platform in
+                ForEach(LXCatalogPlatform.discoveryCases) { platform in
                     Button {
                         model.selectPlatform(platform)
                     } label: {

@@ -349,7 +349,7 @@ final class SettingsManager: ObservableObject {
         let storedPlatform = defaults.string(forKey: Keys.homeRecommendationPlatform)
             .flatMap(LXCatalogPlatform.init)
         homeRecommendationPlatform = storedPlatform.flatMap {
-            ($0 == .aggregate || $0 == .sd) ? nil : $0
+            LXCatalogPlatform.discoveryCases.contains($0) ? $0 : nil
         } ?? .wy
         enableSourcePlatformFallback = defaults.object(forKey: Keys.sourcePlatformFallback) as? Bool ?? true
     }

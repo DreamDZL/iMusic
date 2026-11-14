@@ -502,7 +502,7 @@ struct HomeView: View {
     }
 
     private var homePlatforms: [LXCatalogPlatform] {
-        LXCatalogPlatform.catalogueCases.filter { $0 != .aggregate }
+        LXCatalogPlatform.discoveryCases
     }
 
     private var homeSourceTitle: String {

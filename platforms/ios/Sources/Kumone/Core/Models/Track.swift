@@ -179,7 +179,7 @@ struct Track: Codable, Hashable, Identifiable, Sendable {
         case "kugou": normalized = "kg"
         case "qq", "qqmusic", "qq-music": normalized = "tx"
         case "migu": normalized = "mg"
-        case "sd", "soda", "sodamusic", "soda-music", "qishui", "qishui-music": normalized = "sd"
+        case "sd", "qs", "soda", "sodamusic", "soda-music", "qishui", "qishui-music": normalized = "sd"
         default: normalized = rawSource.lowercased()
         }
         var copy = self
