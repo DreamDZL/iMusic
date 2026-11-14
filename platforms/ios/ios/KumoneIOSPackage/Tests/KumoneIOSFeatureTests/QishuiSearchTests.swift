@@ -31,6 +31,34 @@ final class QishuiSearchTests: XCTestCase {
         XCTAssertNil(QishuiSearch.track(["base_info": ["id": "not-an-id", "name": "x"]]))
     }
 
+    func testLXBridgeRecognizesQishuiDeclaration() async throws {
+        let source = LXSourceStore.Source(
+            id: "qishui-alias-fixture", name: "fixture", description: "",
+            version: "1", author: "tests", homepage: "https://example.invalid",
+            script: #"""
+            lx.on(lx.EVENT_NAMES.request, async ({source, info}) => {
+                if (source !== 'qs' || info.musicInfo.songmid !== '7676337516358617115') {
+                    throw new Error('wrong Qishui identity')
+                }
+                return 'https://example.invalid/audio.mp3'
+            })
+            lx.send(lx.EVENT_NAMES.inited, {
+                status: true,
+                sources: { qs: { type: 'music', actions: ['musicUrl'], qualitys: ['128k'] } }
+            })
+            """#,
+            sourceURL: nil
+        )
+        let service = LXUserAPIService.shared
+        service.load(source)
+        defer { service.loadSelectedSource() }
+        for _ in 0..<40 where service.capabilities["sd"] == nil {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(service.capabilities["sd"], ["musicUrl"])
+        XCTAssertEqual(service.qualityCapabilities["sd"], ["128k"])
+    }
+
     func testPaginationFillsPagesAcrossFixedProviderBatches() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [QishuiMockProtocol.self]
@@ -55,7 +83,20 @@ private final class QishuiMockProtocol: URLProtocol {
         if url.path.contains("/client/token/") {
             response = ["err_no": 0, "client_token": "test-token"]
         } else {
-            let body = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+            var requestBody = request.httpBody
+            if requestBody == nil, let stream = request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var bytes = [UInt8](repeating: 0, count: 4096)
+                var data = Data()
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&bytes, maxLength: bytes.count)
+                    if count <= 0 { break }
+                    data.append(contentsOf: bytes.prefix(count))
+                }
+                requestBody = data
+            }
+            let body = requestBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
             let cursor = Int(body["cursor"] as? String ?? "0") ?? 0
             let end = min(cursor + 20, 80)
             let rows: [[String: Any]] = (cursor..<end).map { index in
