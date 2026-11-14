@@ -54,6 +54,10 @@ final class LXUserAPIService: ObservableObject {
     private static let downloadResolver = LXUserAPIService()
 
     private let session: URLSession
+    /// Snapshot injection keeps end-to-end bridge tests independent of the
+    /// user's persisted sources. Production always reads the live store.
+    private let sourceSnapshot: () -> (revision: Int, sources: [LXSourceStore.Source])
+    private let catalogueMatch: @MainActor (Track, String) async -> Track?
     private var context: JSContext?
     private var key = ""
     private var loadedID: String?
@@ -72,11 +76,23 @@ final class LXUserAPIService: ObservableObject {
     @Published private(set) var qualityCapabilities: [String: [String]] = [:]
     @Published private(set) var statusMessage = "未加载音源"
 
-    private init() {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 20
-        configuration.timeoutIntervalForResource = 30
-        session = URLSession(configuration: configuration)
+    init(session: URLSession? = nil,
+         sourceSnapshot: (() -> (revision: Int, sources: [LXSourceStore.Source]))? = nil,
+         catalogueMatch: (@MainActor (Track, String) async -> Track?)? = nil) {
+        self.sourceSnapshot = sourceSnapshot ?? {
+            (LXSourceStore.shared.configurationRevision, LXSourceStore.shared.playbackSources)
+        }
+        self.catalogueMatch = catalogueMatch ?? { track, platform in
+            await LXCatalogService.matchingTrack(track, on: platform)
+        }
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = 20
+            configuration.timeoutIntervalForResource = 30
+            self.session = URLSession(configuration: configuration)
+        }
     }
 
     func loadSelectedSource() {
@@ -107,6 +123,9 @@ final class LXUserAPIService: ObservableObject {
     }
 
     func load(_ source: LXSourceStore.Source?) {
+        // Invalidate queued callbacks even when this load exits early (nil
+        // source or missing preload), not only when a new JSContext is made.
+        key = UUID().uuidString
         sourceInitializationTask?.cancel()
         sourceInitializationTask = nil
         pendingInitializationID = source?.id
@@ -129,7 +148,6 @@ final class LXUserAPIService: ObservableObject {
             if let exception { Logger(subsystem: "com.jiajia2222.imusic.ios", category: "LXSource.Script").error("JavaScript exception: \(exception.toString(), privacy: .private)") }
         }
         context = js
-        key = UUID().uuidString
         installHostFunctions(in: js!)
         js?.evaluateScript(preload)
         if let exception = js?.exception {
@@ -237,11 +255,14 @@ final class LXUserAPIService: ObservableObject {
     }
 
     private func resolveMusicURLAcrossSources(for track: Track, quality: String) async throws -> ResolvedURL {
-        let sourceRevision = LXSourceStore.shared.configurationRevision
-        let playbackSources = LXSourceStore.shared.playbackSources
+        let snapshot = sourceSnapshot()
+        let sourceRevision = snapshot.revision
+        let playbackSources = snapshot.sources
         guard !playbackSources.isEmpty else { throw LXError.noSource }
 
         let primaryPlatform = canonicalPlatform(track.source ?? track.sourceMetadata["source"]) ?? "wy"
+        let platformFallbackEnabled = SettingsManager.shared.enableSourcePlatformFallback
+        var missingPrimaryCapabilityCount = 0
         var failures: [String] = []
 
         // Resolve each route before preparing fallbacks. This honors the
@@ -251,15 +272,23 @@ final class LXUserAPIService: ObservableObject {
             try Task.checkCancellation()
             try validateSourceConfiguration(sourceRevision, source: source)
             let isAvailable = await activate(source)
+            try Task.checkCancellation()
             try validateSourceConfiguration(sourceRevision, source: source)
             guard isAvailable else {
-                failures.append("\(source.name): unavailable")
+                failures.append("\(source.name)：\(statusMessage)")
                 continue
             }
-            let platforms = sourceCandidates(for: track, action: "musicUrl")
+            let platforms = sourceCandidates(for: track, action: "musicUrl",
+                                              platformFallbackEnabled: platformFallbackEnabled)
             if platforms.isEmpty {
-                failures.append("\(source.name): no musicUrl platform")
+                missingPrimaryCapabilityCount += 1
+                failures.append("\(source.name)：\(LXError.missingCapability(primaryPlatform, "musicUrl").localizedDescription)")
                 continue
+            }
+            if primaryPlatform == "sd", !supports("sd", action: "musicUrl") {
+                // Other catalogue matches may still work, but their presence
+                // must not imply this script can resolve Qishui IDs directly.
+                failures.append("\(source.name)：\(LXError.missingCapability("sd", "musicUrl").localizedDescription)")
             }
 
             for platform in platforms {
@@ -269,7 +298,7 @@ final class LXUserAPIService: ObservableObject {
                 } else {
                     // IDs are platform-specific. Match the song before using
                     // a different platform's musicUrl endpoint.
-                    guard let matched = await LXCatalogService.matchingTrack(track, on: platform) else {
+                    guard let matched = await catalogueMatch(track, platform) else {
                         failures.append("\(source.name)/\(platform): track not found")
                         continue
                     }
@@ -299,8 +328,7 @@ final class LXUserAPIService: ObservableObject {
                     guard let data = response["data"] as? [String: Any],
                           let rawURL = data["url"] as? String,
                           let url = URL(string: rawURL),
-                          let scheme = url.scheme?.lowercased(),
-                          scheme == "http" || scheme == "https" else {
+                          Self.validHTTPURL(url) else {
                         failures.append("\(source.name)/\(platform): invalid URL")
                         continue
                     }
@@ -317,6 +345,13 @@ final class LXUserAPIService: ObservableObject {
             }
         }
 
+        try Task.checkCancellation()
+        // Only a positively initialized capability table establishes that a
+        // route is absent. Do not turn a failed/unfinished initialization or a
+        // backend request failure into a non-retryable capability error.
+        if !platformFallbackEnabled, missingPrimaryCapabilityCount == playbackSources.count {
+            throw LXError.missingCapability(primaryPlatform, "musicUrl")
+        }
         if failures.isEmpty {
             throw LXError.sourceUnavailable("No enabled LX source exposes musicUrl")
         }
@@ -364,9 +399,9 @@ final class LXUserAPIService: ObservableObject {
                                      detail: statusMessage)
         }
 
-        let platformOrder = ["wy", "kw", "kg", "tx", "mg"]
+        let platformOrder = ["wy", "kw", "kg", "tx", "mg", "sd"]
         let supportedPlatforms = platformOrder.filter {
-            capabilities[$0]?.contains("musicUrl") == true
+            supports($0, action: "musicUrl")
         }
         guard !supportedPlatforms.isEmpty else {
             let detail = capabilities.isEmpty
@@ -408,8 +443,7 @@ final class LXUserAPIService: ObservableObject {
                 guard let data = response["data"] as? [String: Any],
                       let rawURL = data["url"] as? String,
                       let url = URL(string: rawURL),
-                      let scheme = url.scheme?.lowercased(),
-                      scheme == "http" || scheme == "https" else {
+                      Self.validHTTPURL(url) else {
                     failures.append("\(platformName)：没有返回有效播放地址")
                     continue
                 }
@@ -445,7 +479,7 @@ final class LXUserAPIService: ObservableObject {
     }
 
     func resolveLyrics(for track: Track) async throws -> ResolvedLyrics {
-        let resolver = Self.lyricsResolver
+        let resolver = self === Self.shared ? Self.lyricsResolver : self
         try await resolver.acquireSourceOperation()
         defer { resolver.releaseSourceOperation() }
         try Task.checkCancellation()
@@ -478,41 +512,49 @@ final class LXUserAPIService: ObservableObject {
 #endif
     }
     private func resolveLyricsAcrossSources(for track: Track) async throws -> ResolvedLyrics {
-        let sourceRevision = LXSourceStore.shared.configurationRevision
-        let playbackSources = LXSourceStore.shared.playbackSources
+        let snapshot = sourceSnapshot()
+        let sourceRevision = snapshot.revision
+        let playbackSources = snapshot.sources
         guard !playbackSources.isEmpty else { throw LXError.noSource }
 
         let primaryPlatform = canonicalPlatform(track.source ?? track.sourceMetadata["source"]) ?? "wy"
+        var attemptedLyricRoute = false
         for source in playbackSources {
             try Task.checkCancellation()
             try validateSourceConfiguration(sourceRevision, source: source)
             let isAvailable = await activate(source)
+            try Task.checkCancellation()
             try validateSourceConfiguration(sourceRevision, source: source)
             guard isAvailable else { continue }
             for platform in sourceCandidates(for: track, action: "lyric") {
+                attemptedLyricRoute = true
                 let requestTrack: Track
                 if platform == primaryPlatform {
                     requestTrack = track
                 } else {
-                    guard let matched = await LXCatalogService.matchingTrack(track, on: platform) else { continue }
+                    guard let matched = await catalogueMatch(track, platform) else { continue }
                     requestTrack = matched
                 }
                 try Task.checkCancellation()
                 try validateSourceConfiguration(sourceRevision, source: source)
 
                 for attempt in 0..<2 {
+                    try Task.checkCancellation()
                     do {
                         let response = try await request(
                             source: platform,
                             action: "lyric",
                             info: [
                                 "type": "lyric",
-                                "musicInfo": musicInfo(for: requestTrack, platform: platform)
+                                "musicInfo": musicInfo(for: requestTrack, platform: platform, action: "lyric")
                             ]
                         )
                         try Task.checkCancellation()
                         try validateSourceConfiguration(sourceRevision, source: source)
-                        if let lyrics = await lyricPayload(from: response) { return lyrics }
+                        let lyrics = await lyricPayload(from: response)
+                        try Task.checkCancellation()
+                        try validateSourceConfiguration(sourceRevision, source: source)
+                        if let lyrics { return lyrics }
                     } catch {
                         if error is CancellationError { throw error }
                         try validateSourceConfiguration(sourceRevision, source: source)
@@ -521,7 +563,9 @@ final class LXUserAPIService: ObservableObject {
                 }
             }
         }
-        throw LXError.resolveFailed([])
+        try Task.checkCancellation()
+        if !attemptedLyricRoute { throw LXError.missingCapability(primaryPlatform, "lyric") }
+        throw LXError.sourceUnavailable("LX 音源没有返回可用歌词")
     }
 
     /// LX source scripts do not all return the same lyric shape. In the wild
@@ -556,13 +600,15 @@ final class LXUserAPIService: ObservableObject {
             if lyric == nil,
                let urlString = text(["lrcUrl", "lyricUrl", "url"]),
                let url = URL(string: urlString),
-               let (data, response) = try? await URLSession.shared.data(from: url),
-               (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true {
+               Self.validHTTPURL(url),
+               let (data, response) = try? await session.data(from: url), !Task.isCancelled,
+               data.count <= 262_144,
+               (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true {
                 lyric = String(data: data, encoding: .utf8)
             }
         }
 
-        guard let lyric = lyric ?? yrc,
+        guard !Task.isCancelled, let lyric = lyric ?? yrc ?? lxlyric,
               !lyric.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return ResolvedLyrics(lyric: lyric, tlyric: tlyric, rlyric: rlyric,
                               lxlyric: lxlyric, yrc: yrc)
@@ -572,6 +618,7 @@ final class LXUserAPIService: ObservableObject {
         case noSource
         case resolveFailed([String])
         case sourceUnavailable(String)
+        case missingCapability(String, String)
         case requestTimedOut
         case javascript(String)
 
@@ -583,6 +630,8 @@ final class LXUserAPIService: ObservableObject {
                 return failures.prefix(2).joined(separator: "；")
             case .sourceUnavailable(let status):
                 return status.isEmpty ? "LX 音源尚未返回可用播放接口" : status
+            case .missingCapability(let platform, let action):
+                return "当前 LX 音源未提供\(LXCatalogPlatform.displayName(for: platform))的 \(action) 接口，请启用支持该平台的音源"
             case .javascript(let message): return message
             case .requestTimedOut: return "LX 音源请求超时，请检查音源服务器和网络后重试"
             }
@@ -628,9 +677,13 @@ final class LXUserAPIService: ObservableObject {
         js.setObject(aes, forKeyedSubscript: "__lx_native_call__utils_aes_encrypt" as NSString)
         js.setObject(rsa, forKeyedSubscript: "__lx_native_call__utils_rsa_encrypt" as NSString)
 
+        let generationKey = key
         let timeout: @convention(block) (Int, Int) -> Void = { [weak self] id, delay in
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(max(0, delay))) {
-                Task { @MainActor in self?.callJS(action: "__set_timeout__", data: id) }
+                Task { @MainActor in
+                    guard let self, self.key == generationKey else { return }
+                    self.callJS(action: "__set_timeout__", data: id)
+                }
             }
         }
         js.setObject(timeout, forKeyedSubscript: "__lx_native_call__set_timeout" as NSString)
@@ -712,6 +765,11 @@ final class LXUserAPIService: ObservableObject {
 
     private func sendScriptRequest(requestKey: String, url: URL, options: [String: Any]) {
         guard scriptRequestKeys.contains(requestKey) else { return }
+        guard Self.validHTTPURL(url) else {
+            scriptRequestKeys.remove(requestKey)
+            callJS(action: "response", data: ["requestKey": requestKey, "error": "LX requests require an HTTP(S) URL without embedded credentials"])
+            return
+        }
         var request = URLRequest(url: url)
         request.httpMethod = (options["method"] as? String ?? "GET").uppercased()
         // Match LX Mobile's request helper. A number of source backends reject
@@ -746,11 +804,17 @@ final class LXUserAPIService: ObservableObject {
         }
         if let timeout = options["timeout"] as? Double, timeout > 0 { request.timeoutInterval = min(timeout / 1000, 60) }
 
+        let generationKey = key
         let task = session.dataTask(with: request) { [weak self] data, response, error in
             Task { @MainActor in
-                guard let self, self.scriptRequestKeys.remove(requestKey) != nil else { return }
+                guard let self, self.key == generationKey,
+                      self.scriptRequestKeys.remove(requestKey) != nil else { return }
                 self.tasks.removeValue(forKey: requestKey)
                 let rawBody = data ?? Data()
+                guard rawBody.count <= 4_000_000 else {
+                    self.callJS(action: "response", data: ["requestKey": requestKey, "error": "LX response exceeds the 4 MB limit"])
+                    return
+                }
                 let body: Any
                 if options["binary"] as? Bool == true {
                     // Binary responses are not parsed. The current LX source
@@ -785,6 +849,7 @@ final class LXUserAPIService: ObservableObject {
 
     private func request(source: String, action: String, info: [String: Any]) async throws -> [String: Any] {
         guard context != nil else { throw LXError.noSource }
+        guard supports(source, action: action) else { throw LXError.missingCapability(source, action) }
         let requestKey = "request__\(UUID().uuidString)"
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -794,7 +859,7 @@ final class LXUserAPIService: ObservableObject {
                 }
                 pending[requestKey] = continuation
                 callJS(action: "request", data: ["requestKey": requestKey,
-                                                    "data": ["source": Self.protocolSource(source, capabilities: capabilities), "action": action, "info": info]])
+                                                    "data": ["source": Self.protocolSource(source, capabilities: capabilities, action: action), "action": action, "info": info]])
                 requestTimeoutTasks[requestKey] = Task { @MainActor [weak self] in
                     do {
                         try await Task.sleep(for: .seconds(20))
@@ -836,7 +901,7 @@ final class LXUserAPIService: ObservableObject {
         continuation.resume(throwing: error)
     }
 
-    private func cancelPendingRequests() {
+    private func cancelPendingRequests(invalidateSession: Bool = true) {
         sourceInitializationTask?.cancel()
         sourceInitializationTask = nil
         pendingInitializationID = nil
@@ -848,11 +913,13 @@ final class LXUserAPIService: ObservableObject {
         tasks.values.forEach { $0.cancel() }
         tasks.removeAll()
         scriptRequestKeys.removeAll()
+        key = UUID().uuidString
         context = nil
         loadedID = nil
+        loadedScript = nil
         capabilities = [:]
         qualityCapabilities = [:]
-        session.invalidateAndCancel()
+        if invalidateSession { session.invalidateAndCancel() }
     }
 
     /// `init` is delivered through a main-actor callback. A number of user API
@@ -899,26 +966,30 @@ final class LXUserAPIService: ObservableObject {
         _ = function.call(withArguments: encoded == nil ? [key, action] : [key, action, encoded!])
     }
 
-    private func sourceCandidates(for track: Track, action: String = "musicUrl") -> [String] {
+    private func sourceCandidates(for track: Track, action: String = "musicUrl",
+                                  platformFallbackEnabled: Bool? = nil) -> [String] {
         let primary = canonicalPlatform(track.source ?? track.sourceMetadata["source"]) ?? "wy"
         var values: [String] = []
 
         values.append(primary)
 
-        if primary == "sd" {
-            values.append(contentsOf: ["wy", "kw", "kg", "tx"])
-        } else if SettingsManager.shared.enableSourcePlatformFallback {
+        if platformFallbackEnabled ?? SettingsManager.shared.enableSourcePlatformFallback {
             values.append(contentsOf: ["wy", "kw", "kg", "tx"])
         }
         var seen = Set<String>()
         return values.filter { platform in
-            capabilities[platform]?.contains(action) == true && seen.insert(platform).inserted
+            supports(platform, action: action) && seen.insert(platform).inserted
         }
     }
 
-    static func protocolSource(_ source: String, capabilities: [String: [String]]) -> String {
+    private func supports(_ source: String, action: String) -> Bool {
+        let protocolKey = Self.protocolSource(source, capabilities: capabilities, action: action)
+        return capabilities[protocolKey]?.contains(action) == true
+    }
+
+    static func protocolSource(_ source: String, capabilities: [String: [String]], action: String = "musicUrl") -> String {
         // sd is the app's canonical name; scripts advertising qs expect qs.
-        source == "sd" && capabilities["qs"] != nil ? "qs" : source
+        source == "sd" && capabilities["qs"]?.contains(action) == true ? "qs" : source
     }
 
     private func activate(_ source: LXSourceStore.Source) async -> Bool {
@@ -926,6 +997,15 @@ final class LXUserAPIService: ObservableObject {
             load(source)
         }
         await waitForSourceReady()
+        if Task.isCancelled {
+            // A cancellation can arrive before a root musicUrl request exists,
+            // while top-level source initialization is still doing HTTP/timer
+            // work. Discard that generation without changing source selection
+            // or invalidating the reusable URLSession.
+            cancelPendingRequests(invalidateSession: false)
+            statusMessage = "音源加载已取消，下次使用时重新加载"
+            return false
+        }
         return loadedID == source.id && context != nil && !capabilities.isEmpty
     }
 
@@ -933,10 +1013,10 @@ final class LXUserAPIService: ObservableObject {
         _ revision: Int,
         source: LXSourceStore.Source? = nil
     ) throws {
-        let store = LXSourceStore.shared
-        guard store.configurationRevision == revision else { throw CancellationError() }
+        let snapshot = sourceSnapshot()
+        guard snapshot.revision == revision else { throw CancellationError() }
         if let source,
-           !store.playbackSources.contains(where: { $0.id == source.id && $0.script == source.script }) {
+           !snapshot.sources.contains(where: { $0.id == source.id && $0.script == source.script }) {
             throw CancellationError()
         }
     }
@@ -992,6 +1072,7 @@ final class LXUserAPIService: ObservableObject {
         for requestKey in Array(pending.keys) {
             cancelPendingRequest(with: requestKey)
         }
+        key = UUID().uuidString
         tasks.values.forEach { $0.cancel() }
         tasks.removeAll()
         scriptRequestKeys.removeAll()
@@ -1090,7 +1171,7 @@ final class LXUserAPIService: ObservableObject {
                 if platform == primaryPlatform {
                     qualityTrack = track
                 } else {
-                    guard let matched = await LXCatalogService.matchingTrack(track, on: platform) else { continue }
+                    guard let matched = await catalogueMatch(track, platform) else { continue }
                     guard !Task.isCancelled,
                           store.configurationRevision == sourceRevision,
                           store.playbackSources.contains(where: {
@@ -1180,8 +1261,13 @@ final class LXUserAPIService: ObservableObject {
     }
 
     private func isValidAudioURL(_ url: URL) -> Bool {
-        guard let scheme = url.scheme?.lowercased() else { return false }
-        return scheme == "http" || scheme == "https"
+        Self.validHTTPURL(url)
+    }
+
+    private static func validHTTPURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              url.host?.isEmpty == false, url.user == nil, url.password == nil else { return false }
+        return true
     }
 
     /// Return the qualities that can be requested for this track.
@@ -1194,7 +1280,8 @@ final class LXUserAPIService: ObservableObject {
     /// the actual file quality.
     private func supportedQualityNames(for track: Track, platform: String) -> [String] {
         let order = Self.qualityOrder
-        let declared = qualityCapabilities[platform, default: []]
+        let protocolPlatform = Self.protocolSource(platform, capabilities: capabilities)
+        let declared = qualityCapabilities[protocolPlatform, default: []]
             .map { Self.normalizedQuality($0) }
             .filter { order.contains($0) }
         let sourceNames = declared.isEmpty ? ["128k"] : order.filter(declared.contains)
@@ -1212,15 +1299,17 @@ final class LXUserAPIService: ObservableObject {
     /// exact token advertised by the active source.
     private func protocolQualityToken(_ quality: String, platform: String) -> String {
         let canonical = Self.normalizedQuality(quality)
-        return qualityCapabilities[platform, default: []].first {
+        let protocolPlatform = Self.protocolSource(platform, capabilities: capabilities)
+        return qualityCapabilities[protocolPlatform, default: []].first {
             Self.normalizedQuality($0) == canonical
         } ?? quality
     }
 
     private func musicInfo(for track: Track, platform: String,
-                           qualities requestedQualities: [String]? = nil) -> [String: Any] {
+                           qualities requestedQualities: [String]? = nil, action: String = "musicUrl") -> [String: Any] {
         // LX's User API receives the legacy MusicInfo object, not Kumone's
-        // internal Track. This mirrors LX Mobile's toOldMusicInfo() exactly.
+        // internal Track. The base shape follows LX Mobile's toOldMusicInfo();
+        // Qishui adapters additionally receive lossless string ID aliases.
         let songmid = track.sourceMetadata["songmid"]
             ?? track.sourceMetadata["songId"]
             ?? String(track.id)
@@ -1257,6 +1346,13 @@ final class LXUserAPIService: ObservableObject {
             "_types": qualityMap,
         ]
         switch platform {
+        case "sd":
+            // Community Qishui adapters use several names for the same 64-bit
+            // identity. Keep every alias a string: a JavaScript Number rounds
+            // real Qishui IDs and silently requests a different song.
+            let id = track.sourceMetadata["qishuiTrackID"] ?? songmid
+            info["source"] = Self.protocolSource(platform, capabilities: capabilities, action: action)
+            for key in ["id", "songmid", "songId", "track_id", "trackId"] { info[key] = id }
         case "kg":
             info["hash"] = track.sourceMetadata["hash"] ?? ""
             info["albumId"] = track.sourceMetadata["albumId"] ?? albumID

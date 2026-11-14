@@ -49,7 +49,6 @@ struct NowPlayingView: View {
     @State private var playPauseTrigger = 0
     #if os(iOS)
     @State private var showQueueOnMobile = false
-    @State private var showQueueSheet = false
     #endif
 
     /// Seed artwork and palette synchronously from memory so the very first
@@ -112,7 +111,7 @@ struct NowPlayingView: View {
         #if os(iOS)
         .background(PlayerMotionFrameRateAnchor(lease: motionFrameRate).frame(width: 0, height: 0))
         #endif
-        .task(id: player.currentTrack?.playbackKey) {
+        .task(id: player.currentTrack.map { "\($0.playbackKey)|\($0.album.picUrl ?? "")" }) {
             await loadArtwork()
         }
         .task(id: artworkPalette.revision) {
@@ -131,7 +130,7 @@ struct NowPlayingView: View {
             isUserScrolling = false
             resumeTask?.cancel()
             resumeTask = nil
-            if showLyricsOnMobile { scheduleLyricsControlsAutoHide() }
+            if showLyricsOnMobile, !queuePageVisible { scheduleLyricsControlsAutoHide() }
         }
         #endif
         .onChange(of: showLyricsOnMobile) { _, isShowing in
@@ -184,13 +183,6 @@ struct NowPlayingView: View {
                 AddToPlaylistSheet(track: track)
             }
         }
-        #if os(iOS)
-        .sheet(isPresented: $showQueueSheet) {
-            MinimalQueueSheet(backdrop: artworkPalette.colors)
-                .presentationDetents([.fraction(0.5), .large])
-                .presentationDragIndicator(.visible)
-        }
-        #endif
     }
 
     private func close() {
@@ -361,7 +353,7 @@ struct NowPlayingView: View {
         }
         let playbackKey = track.playbackKey
 #if os(iOS)
-        if IOSUITestMode.hasPlayerFixture, track.id == 27_000_001 {
+        if IOSUITestMode.hasPlayerFixture, [27_000_001, 27_000_004].contains(track.id) {
             let image = Self.makeUITestArtwork()
             artworkImage = image
             transitionArtworkPalette(to: ArtworkPalette.extract(from: image, cacheKey: "imusic-ui-test-artwork"))
@@ -369,7 +361,7 @@ struct NowPlayingView: View {
         }
 #endif
         var urlString = track.album.picUrl
-        if urlString == nil {
+        if urlString == nil, track.normalizedForLXPlayback().source != "sd" {
             let query = [track.name, track.artistNames].filter { !$0.isEmpty }.joined(separator: " ")
             let result = try? await NeteaseAPI.search(query, type: .songs, limit: 6)
             guard !Task.isCancelled, player.currentTrack?.playbackKey == playbackKey else { return }
@@ -423,7 +415,14 @@ struct NowPlayingView: View {
     private func phoneLandscapeLayout(size: CGSize) -> some View {
         ZStack(alignment: .bottom) {
             Group {
-                if showLyricsOnMobile {
+                if queuePageVisible {
+                    #if os(iOS)
+                    appleMusicQueuePage
+                        .padding(.bottom, 54)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("appleMusicQueuePage")
+                    #endif
+                } else if showLyricsOnMobile {
                     appleMusicLyricsPage()
                         .transition(Self.playerPageTransition)
                         .padding(.bottom, 54)
@@ -433,6 +432,8 @@ struct NowPlayingView: View {
                     let artworkSize = max(0, min(size.height - 124, 240))
                     HStack(spacing: 28) {
                         artworkView(size: artworkSize)
+                            .modifier(trackSwipe)
+                            .frame(width: artworkSize, height: artworkSize)
 
                         VStack(spacing: 8) {
                             Spacer(minLength: 0)
@@ -496,7 +497,7 @@ struct NowPlayingView: View {
     /// iPhone's primary player follows Apple's Now Playing hierarchy: artwork,
     /// one compact title/artist row, a timeline, three transport controls,
     /// volume, and a row for lyrics, output, and queue. Lyrics are the only
-    /// alternate page.
+    /// alternate page beside the inline queue.
     @ViewBuilder
     private func appleMusicCompactLayout(size: CGSize) -> some View {
         let isShortScreen = size.height < 680
@@ -504,15 +505,15 @@ struct NowPlayingView: View {
         // the lyrics page it hides completely (accessory row included) so the
         // lyrics run full screen, as in the system player; tapping the lower
         // part of the page brings it back.
-        let controlsHeight: CGFloat = 228
-        let deckVisible = !showLyricsOnMobile || lyricsControlsVisible
+        let controlsHeight: CGFloat = isShortScreen ? 242 : 292
+        let deckVisible = queuePageVisible || !showLyricsOnMobile || lyricsControlsVisible
         // Artwork takes the space left after the title row and deck, with the
         // same side margins as the controls (Apple's player keeps them equal).
         // Non-artwork content on the song page: top inset, spacers, the gap
         // below the artwork and the title row.
-        let songPageChrome: CGFloat = isShortScreen ? 130 : 170
+        let songPageChrome: CGFloat = (isShortScreen ? 112 : 120) + (player.playbackFailure == nil ? 0 : 40)
         let artworkSize = max(0, min(
-            size.width - 52,
+            size.width - 64,
             size.height - controlsHeight - songPageChrome,
             400
         ))
@@ -520,17 +521,23 @@ struct NowPlayingView: View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
                 Group {
-                    if showLyricsOnMobile {
+                    if queuePageVisible {
+                        #if os(iOS)
+                        appleMusicQueuePage
+                            .accessibilityElement(children: .contain)
+                            .accessibilityIdentifier("appleMusicQueuePage")
+                        #endif
+                    } else if showLyricsOnMobile {
                         appleMusicLyricsPage(revealRegionHeight: controlsHeight, usesSharedArtwork: true)
                             .transition(.identity)
                             .accessibilityElement(children: .contain)
                             .accessibilityIdentifier("appleMusicLyricsPage")
                     } else {
                         VStack(spacing: 0) {
-                            Spacer(minLength: isShortScreen ? 12 : 20)
+                            Spacer(minLength: isShortScreen ? 8 : 14)
 
                             artworkPlaceholder(size: artworkSize)
-                                .padding(.bottom, isShortScreen ? 22 : 34)
+                                .padding(.bottom, isShortScreen ? 22 : 40)
 
                             trackMetaView
                                 #if os(iOS)
@@ -539,8 +546,8 @@ struct NowPlayingView: View {
 
                             Spacer(minLength: isShortScreen ? 8 : 16)
                         }
-                        .padding(.horizontal, 26)
-                        .padding(.top, isShortScreen ? 24 : 34)
+                        .padding(.horizontal, 32)
+                        .padding(.top, isShortScreen ? 18 : 22)
                         .contentShape(Rectangle())
                         #if os(iOS)
                         .modifier(NativeNowPlayingDismissRequest())
@@ -569,8 +576,10 @@ struct NowPlayingView: View {
                     let rect = resolvedRect ?? portraitArtworkRect
                     artworkView(
                         size: rect.width,
-                        identifier: showLyricsOnMobile ? "lyricsHeaderArtwork" : "nowPlayingArtworkImage"
+                        identifier: (showLyricsOnMobile || queuePageVisible) ? "lyricsHeaderArtwork" : "nowPlayingArtworkImage"
                     )
+                    .scaleEffect(rect.width > 120 && !player.isPlaying ? 0.74 : 1)
+                    .animation(reduceMotion ? nil : (player.isPlaying ? NowPlayingMotion.artworkPlay : NowPlayingMotion.artworkPause), value: player.isPlaying)
                     .position(x: rect.midX, y: rect.midY)
                     .animation(portraitArtworkRect == .zero ? nil : pageAnimation, value: rect)
                     .onChange(of: resolvedRect, initial: true) { _, next in
@@ -582,7 +591,7 @@ struct NowPlayingView: View {
             // One recognizer owns the page AND its artwork overlay. Keeping it
             // outside the branches preserves its drag identity during reversal;
             // the sibling playback deck keeps its own slider gestures.
-            .modifier(pageSwipe)
+            .modifier(trackSwipe)
 
             ZStack {
                 if deckVisible {
@@ -615,7 +624,10 @@ struct NowPlayingView: View {
     }
 
     private func setLyricsPage(_ showLyrics: Bool) {
-        guard showLyricsOnMobile != showLyrics else { return }
+        guard showLyricsOnMobile != showLyrics || queuePageVisible else { return }
+        #if os(iOS)
+        showQueueOnMobile = false
+        #endif
         #if os(iOS)
         motionFrameRate.request()
         #endif
@@ -633,30 +645,97 @@ struct NowPlayingView: View {
         }
     }
 
-    /// Left shows lyrics, right returns to the song page; no finger transform.
-    private var pageSwipe: PlayerPageSwipe {
-        PlayerPageSwipe(
-            showsLyrics: showLyricsOnMobile,
+    /// Horizontal swipes on the song surface change tracks, not pages.
+    private var trackSwipe: PlayerTrackSwipe {
+        PlayerTrackSwipe(
             revision: pageRevision,
-            onCommit: { target, originRevision in
-                // A button or track change may have superseded this drag,
-                // including a song → lyrics → song (ABA) reversal.
-                guard originRevision == pageRevision else { return }
-                setLyricsPage(target)
+            enabled: !showLyricsOnMobile && !queuePageVisible,
+            canGoBack: !player.isFMMode && (player.currentIndex > 0 || (player.repeatMode == .all && !player.activeQueue.isEmpty)),
+            canGoForward: !player.upcomingTracks.isEmpty || player.repeatMode == .all || player.isFMMode,
+            onCommit: { direction in
+                if direction > 0 { player.next() }
+                else { player.skipToPreviousTrack() }
             }
         )
     }
+
+    private var queuePageVisible: Bool {
+        #if os(iOS)
+        showQueueOnMobile
+        #else
+        false
+        #endif
+    }
+
+    #if os(iOS)
+    /// The queue is a peer page, not an extra sheet above the player. Closing
+    /// it restores the song/lyrics mode that was visible before it opened.
+    private var appleMusicQueuePage: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                artworkPlaceholder(size: 56)
+                trackMeta(compact: true)
+            }
+
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("待播清单").font(.title2.weight(.semibold))
+                    Text(player.upcomingTracks.isEmpty ? "没有待播歌曲" : "接下来播放 \(player.upcomingTracks.count) 首")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                Spacer(minLength: 0)
+                if !player.isFMMode {
+                    Button { player.toggleShuffle() } label: {
+                        accessoryGlyph("shuffle", isActive: player.shuffleEnabled)
+                    }
+                    .frame(width: 44)
+                    .accessibilityLabel(player.shuffleEnabled ? "关闭随机播放" : "开启随机播放")
+                    .accessibilityIdentifier("queueShuffle")
+                    Button { player.cycleRepeatMode() } label: {
+                        accessoryGlyph(player.repeatMode == .one ? "repeat.1" : "repeat", isActive: player.repeatMode != .off)
+                    }
+                    .frame(width: 44)
+                    .accessibilityLabel(player.repeatMode == .off ? "开启循环播放" : "切换循环模式")
+                    .accessibilityIdentifier("queueRepeat")
+                }
+            }
+            .buttonStyle(.pressable)
+
+            ScrollView(showsIndicators: false) {
+                LazyVStack(spacing: 2) {
+                    ForEach(Array(player.upcomingTracks.enumerated()), id: \.offset) { index, track in
+                        MinimalQueueRow(track: track, upcomingIndex: index, isCurrent: false)
+                    }
+                    if player.upcomingTracks.isEmpty {
+                        Text("在资料库或搜索中选择歌曲，或使用“下一首播放”添加歌曲。")
+                            .font(.body)
+                            .foregroundStyle(.white.opacity(0.6))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 16)
+                    }
+                }
+            }
+            .accessibilityIdentifier("nowPlayingQueueScrollView")
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 32)
+        .padding(.top, 22)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    #endif
 
     private static let deckAccessoryHeight: CGFloat = 44
     private static let deckVerticalPadding: CGFloat = 8
     private static let deckRowSpacing: CGFloat = 4
 
     private func appleMusicPlaybackControls(height: CGFloat) -> some View {
-        let playbackControlsHeight: CGFloat = 164
+        let spacious = height > 260
+        let playbackControlsHeight: CGFloat = spacious ? 220 : 170
 
         return ZStack(alignment: .bottom) {
             VStack(spacing: Self.deckRowSpacing) {
-                VStack(spacing: 4) {
+                VStack(spacing: 0) {
                     NowPlayingScrubber(
                         onShowQuality: { showQualityPicker = true },
                         showsRemainingTime: true,
@@ -669,12 +748,16 @@ struct NowPlayingView: View {
                     )
                     .frame(height: 64)
 
+                    Spacer(minLength: spacious ? 10 : 0)
+
                     primaryTransportControls
-                        .frame(height: 64)
+                        .frame(height: spacious ? 80 : 64)
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier(
                             showLyricsOnMobile ? "lyricsTransportControls" : "nowPlayingTransportControls"
                         )
+
+                    Spacer(minLength: spacious ? 24 : 0)
 
                     CompactVolumeControl()
                         .frame(height: 28)
@@ -709,7 +792,7 @@ struct NowPlayingView: View {
             }
             .padding(.vertical, Self.deckVerticalPadding)
             .frame(maxWidth: 460)
-            .padding(.horizontal, 26)
+            .padding(.horizontal, 32)
             .frame(maxWidth: .infinity)
             .frame(height: height, alignment: .bottom)
         }
@@ -740,11 +823,27 @@ struct NowPlayingView: View {
 
                 lyricsColumn
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if hasLyricTranslation, lyricsControlsVisible {
+                    HStack {
+                        Button { settings.showLyricsTranslation.toggle() } label: {
+                            Image(systemName: "character.bubble.fill")
+                                .font(.system(size: 20, weight: .medium))
+                                .frame(width: 44, height: 44)
+                                .background(.white.opacity(0.2), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(settings.showLyricsTranslation ? "隐藏歌词翻译" : "显示歌词翻译")
+                        Spacer()
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.bottom, 8)
+                }
             }
             // Same side margin as the playback deck so lyrics, header and
             // controls share one leading edge.
-            .padding(.horizontal, 26)
-            .padding(.top, 28)
+            .padding(.horizontal, 32)
+            .padding(.top, 22)
             .frame(width: geometry.size.width, height: geometry.size.height)
             .contentShape(Rectangle())
             .coordinateSpace(name: "lyricsPage")
@@ -797,7 +896,7 @@ struct NowPlayingView: View {
                     arguments: CommandLine.arguments
                 )
             )
-            guard !Task.isCancelled, showLyricsOnMobile, !isLyricsDragActive else { return }
+            guard !Task.isCancelled, showLyricsOnMobile, !queuePageVisible, !isLyricsDragActive else { return }
             #if os(iOS)
             // VoiceOver users cannot find a hidden deck by tapping blind; keep
             // it visible for them.
@@ -813,14 +912,14 @@ struct NowPlayingView: View {
     private var songPageAccessoryControls: some View {
         HStack(spacing: 0) {
             Button {
-                setLyricsPage(!showLyricsOnMobile)
+                setLyricsPage(queuePageVisible || !showLyricsOnMobile)
             } label: {
-                accessoryGlyph(showLyricsOnMobile ? "quote.bubble.fill" : "quote.bubble",
-                               isActive: showLyricsOnMobile)
+                accessoryGlyph(showLyricsOnMobile && !queuePageVisible ? "quote.bubble.fill" : "quote.bubble",
+                               isActive: showLyricsOnMobile && !queuePageVisible)
             }
             .buttonStyle(.pressable)
-            .accessibilityLabel(showLyricsOnMobile ? "返回歌曲页" : "显示同步歌词")
-            .accessibilityAddTraits(showLyricsOnMobile ? .isSelected : [])
+            .accessibilityLabel(showLyricsOnMobile && !queuePageVisible ? "返回歌曲页" : "显示同步歌词")
+            .accessibilityAddTraits(showLyricsOnMobile && !queuePageVisible ? .isSelected : [])
             .accessibilityIdentifier("showSynchronizedLyrics")
 
             // The output picker is a plain glyph like its neighbours; a filled
@@ -828,40 +927,35 @@ struct NowPlayingView: View {
             RoutePickerButton(diameter: 44, glyphSize: 20, background: .clear)
                 .frame(maxWidth: .infinity)
 
-            if hasLyricTranslation {
-                Button {
-                    settings.showLyricsTranslation.toggle()
-                } label: {
-                    accessoryGlyph(settings.showLyricsTranslation ? "character.bubble.fill" : "character.bubble",
-                                   isActive: settings.showLyricsTranslation)
-                }
-                .buttonStyle(.pressable)
-                .accessibilityLabel(settings.showLyricsTranslation ? "隐藏歌词翻译" : "显示歌词翻译")
-                .accessibilityAddTraits(settings.showLyricsTranslation ? .isSelected : [])
-            }
-
             #if os(iOS)
-            Button { showQueueSheet = true } label: {
-                accessoryGlyph("list.bullet", isActive: false)
+            Button {
+                pageRevision &+= 1
+                lyricsControlsTask?.cancel()
+                lyricsControlsVisible = true
+                motionFrameRate.request()
+                withAnimation(pageAnimation) { showQueueOnMobile.toggle() }
+                if !showQueueOnMobile, showLyricsOnMobile { scheduleLyricsControlsAutoHide() }
+            } label: {
+                accessoryGlyph("list.bullet", isActive: showQueueOnMobile)
             }
             .buttonStyle(.pressable)
             .accessibilityLabel("播放队列")
+            .accessibilityIdentifier("showPlaybackQueue")
             #endif
         }
         .frame(maxWidth: 360)
     }
 
-    /// Active accessory toggles get a subtle rounded highlight rather than a
+    /// Active accessory toggles get a subtle circular highlight rather than a
     /// colour change, so the row stays monochrome over any artwork palette.
     private func accessoryGlyph(_ systemName: String, isActive: Bool) -> some View {
         Image(systemName: systemName)
             .font(.system(size: 20, weight: .medium))
             .foregroundStyle(.white.opacity(isActive ? 1 : 0.78))
-            .frame(width: 40, height: 34)
+            .frame(width: 44, height: 44)
             .background {
                 if isActive {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(.white.opacity(0.18))
+                    Circle().fill(.white.opacity(0.28))
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 44)
@@ -926,6 +1020,7 @@ struct NowPlayingView: View {
             if showLyricsOnMobile {
                 lyricsColumn
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+
                     .transition(.opacity)
             } else {
                 VStack(spacing: 20) {
@@ -1351,6 +1446,7 @@ struct NowPlayingView: View {
     /// Title row shared by the song page and the lyric header. The lyric
     /// header is a compact variant next to the 56pt thumbnail.
     private func trackMeta(compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: compact ? 1 : 2) {
                 Text(player.currentTrack?.name ?? "")
@@ -1374,7 +1470,6 @@ struct NowPlayingView: View {
                         .contentTransition(.symbolEffect(.replace))
                         .symbolEffect(.bounce, value: liked)
                         .frame(width: compact ? 30 : 34, height: compact ? 30 : 34)
-                        .background { playerControlCircle }
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
@@ -1435,7 +1530,6 @@ struct NowPlayingView: View {
                         .font(.system(size: compact ? 15 : 17, weight: .bold))
                         .foregroundStyle(.white.opacity(0.9))
                         .frame(width: compact ? 30 : 34, height: compact ? 30 : 34)
-                        .background { playerControlCircle }
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
@@ -1444,6 +1538,25 @@ struct NowPlayingView: View {
             }
         }
         .frame(maxWidth: 460)
+
+            if let failure = player.playbackFailure {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.circle")
+                    Text(failure)
+                        .font(.caption)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("重试") { player.retryCurrentTrack() }
+                        .font(.caption.weight(.semibold))
+                        .frame(minWidth: 44, minHeight: 44)
+                        .disabled(player.isResolvingSource)
+                        .accessibilityIdentifier("retryCurrentTrack")
+                }
+                .foregroundStyle(.white.opacity(0.85))
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("nowPlayingFailure")
+            }
+        }
     }
 
     /// Artist name opens that artist's aggregate-search page. With several
@@ -1481,12 +1594,6 @@ struct NowPlayingView: View {
         } else {
             label
         }
-    }
-
-    /// Neutral translucent fill. Glass over a saturated artwork palette tints
-    /// itself with that palette (the pink circles in red backdrops).
-    private var playerControlCircle: some View {
-        Circle().fill(.white.opacity(0.16))
     }
 
     private func leftColumn(artworkSize: CGFloat) -> some View {
@@ -1591,6 +1698,7 @@ struct NowPlayingView: View {
         .buttonStyle(PlayerTransportButtonStyle(highlightDiameter: 84))
         .sensoryFeedback(.impact(weight: .light), trigger: playPauseTrigger)
         .accessibilityLabel(player.isPlaying ? "暂停" : "播放")
+        .accessibilityIdentifier("nowPlayingPlayPause")
     }
 
     private func circleButton(icon: String, size: CGFloat,
@@ -1780,76 +1888,6 @@ struct NowPlayingView: View {
     }
 }
 
-/// Recognizes horizontal swipes without moving, scaling or fading the page
-/// under the finger. SwiftUI owns the transition when the gesture commits.
-private struct PlayerPageSwipe: ViewModifier {
-    let showsLyrics: Bool
-    let revision: UInt
-    let onCommit: (Bool, UInt) -> Void
-
-    private enum Axis { case undecided, horizontal, rejected }
-
-    /// Direction decided once per drag. `@GestureState` resets itself when a
-    /// gesture is cancelled (rotation, track change, scroll take-over), so a
-    /// stale "horizontal" lock can never leak into the next drag.
-    @GestureState private var axis: Axis = .undecided
-    @GestureState private var originRevision: UInt?
-    /// The start-of-drag lock, kept for `onEnded` (gesture state has already
-    /// reset by then).
-    @State private var lockedHorizontal = false
-    @State private var lockedRevision: UInt?
-
-    func body(content: Content) -> some View {
-        content
-            .contentShape(Rectangle())
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 14)
-                    .updating($originRevision) { _, state, _ in
-                        if state == nil { state = revision }
-                    }
-                    .updating($axis) { value, state, _ in
-                        guard state == .undecided else { return }
-                        let dx = abs(value.translation.width), dy = abs(value.translation.height)
-                        state = dx > dy * 1.4 ? .horizontal : .rejected
-                    }
-                    .onChanged { value in
-                        lockedRevision = originRevision ?? revision
-                        // Rewritten on every update, so each drag starts
-                        // from its own lock and a cancelled one can't leak.
-                        // The gesture state can trail by one update, so the
-                        // first event applies the same rule itself.
-                        let dx = value.translation.width
-                        switch axis {
-                        case .horizontal: lockedHorizontal = true
-                        case .rejected: lockedHorizontal = false
-                        case .undecided: lockedHorizontal = abs(dx) > abs(value.translation.height) * 1.4
-                        }
-                    }
-                    .onEnded { value in
-                        // Only a drag that locked horizontal at its start may
-                        // change page, however it ends.
-                        let wasHorizontal = lockedHorizontal
-                        let dragRevision = lockedRevision
-                        lockedHorizontal = false
-                        lockedRevision = nil
-                        guard wasHorizontal, let dragRevision,
-                              let target = NowPlayingPresentationMetrics.pageSwipeTarget(
-                            translation: value.translation.width,
-                            predictedTranslation: value.predictedEndTranslation.width,
-                            showsLyrics: showsLyrics
-                        ) else { return }
-                        onCommit(target, dragRevision)
-                    }
-            )
-            // Every onChanged rewrites the lock from this gesture's axis, so
-            // cancellation cannot leak a previous drag's lock into the next.
-            .onDisappear {
-                lockedHorizontal = false
-                lockedRevision = nil
-            }
-    }
-}
-
 /// Only the active portrait page supplies an anchor. No cached screen-space
 /// rectangles can survive a rotation, safe-area change or controls reveal.
 private struct PlayerArtworkAnchorKey: PreferenceKey {
@@ -2005,8 +2043,13 @@ private struct QualityPickerSheet: View {
                 }
             }
         }
-        .task {
-            available = await player.availableQualitiesForCurrentTrack()
+        .task(id: player.currentTrack?.playbackKey) {
+            let key = player.currentTrack?.playbackKey
+            loading = true
+            available = []
+            let result = await player.availableQualitiesForCurrentTrack()
+            guard !Task.isCancelled, key == player.currentTrack?.playbackKey else { return }
+            available = result
             loading = false
         }
     }
