@@ -954,6 +954,8 @@ enum LXCatalogService {
         case "tx", "qq", "qqmusic": return try await nativeQQLyrics(for: track)
         case "wy", "netease", "163": return try await nativeNeteaseLyrics(for: track)
         case "mg", "migu": return try await nativeMiguLyrics(for: track)
+        case "sd", "qs", "soda", "sodamusic", "soda-music", "qishui", "qishui-music":
+            return try await QishuiSearch.shared.nativeLyrics(for: track)
         default: throw LXCatalogError.unsupported
         }
     }
