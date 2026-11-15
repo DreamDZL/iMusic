@@ -5,6 +5,10 @@ struct LocalPlaylist: Codable, Hashable, Identifiable {
     let id: UUID
     var name: String
     var coverURL: String?
+    /// Small, user-selected local artwork. Optional so existing playlist JSON
+    /// decodes unchanged; the server cover URL remains the fallback.
+    var coverImageData: Data?
+    var usesTrackArtwork: Bool?
     var sourceName: String?
     var tracks: [Track]
     let createdAt: Date
@@ -23,7 +27,8 @@ struct LocalPlaylist: Codable, Hashable, Identifiable {
     /// background provider refresh. `nil` keeps old installs opted out.
     var providerSyncEnabled: Bool?
 
-    init(id: UUID = UUID(), name: String, coverURL: String? = nil,
+    init(id: UUID = UUID(), name: String, coverURL: String? = nil, coverImageData: Data? = nil,
+         usesTrackArtwork: Bool? = nil,
          sourceName: String? = nil, tracks: [Track] = [], createdAt: Date = .now,
          updatedAt: Date? = nil,
          remoteSource: String? = nil, remotePlaylistID: String? = nil,
@@ -32,6 +37,8 @@ struct LocalPlaylist: Codable, Hashable, Identifiable {
         self.id = id
         self.name = name
         self.coverURL = coverURL
+        self.coverImageData = coverImageData
+        self.usesTrackArtwork = usesTrackArtwork
         self.sourceName = sourceName
         self.tracks = tracks
         self.createdAt = createdAt
@@ -210,6 +217,7 @@ enum LocalPlaylistSyncPolicy {
         let preserved = preserveLocalEdits ? current : nil
         let coverURL = remote.iMusicCoverURL
             ?? remote.list.first(where: { $0.meta.picUrl != nil })?.meta.picUrl
+        let tracks = preserved?.tracks ?? remote.list.map { $0.track.normalizedForLXPlayback() }
         let updatedAt = remote.locationUpdateTime.map {
             Date(timeIntervalSince1970: TimeInterval($0) / 1_000)
         } ?? current?.updatedAt ?? current?.createdAt ?? .now
@@ -226,9 +234,12 @@ enum LocalPlaylistSyncPolicy {
         return LocalPlaylist(
             id: current?.id ?? UUID(),
             name: preserved?.name ?? remote.name,
-            coverURL: preserved != nil ? preserved?.coverURL : coverURL,
+            coverURL: current?.usesTrackArtwork == true ? tracks.first?.album.picUrl
+                : (preserved != nil ? preserved?.coverURL : coverURL),
+            coverImageData: current?.coverImageData,
+            usesTrackArtwork: current?.usesTrackArtwork,
             sourceName: preserved != nil ? preserved?.sourceName : (remote.iMusicSourceName ?? remote.source),
-            tracks: preserved?.tracks ?? remote.list.map { $0.track.normalizedForLXPlayback() },
+            tracks: tracks,
             createdAt: current?.createdAt ?? updatedAt,
             updatedAt: preserved != nil ? preserved?.updatedAt : updatedAt,
             remoteSource: preserved != nil ? preserved?.remoteSource : remote.source,
@@ -558,7 +569,7 @@ final class LocalPlaylistStore: ObservableObject {
     }
 
     @discardableResult
-    func create(name: String, tracks: [Track] = [], coverURL: String? = nil,
+    func create(name: String, tracks: [Track] = [], coverURL: String? = nil, coverImageData: Data? = nil,
                 sourceName: String? = nil,
                 remoteSource: String? = nil,
                 remotePlaylistID: String? = nil,
@@ -566,7 +577,9 @@ final class LocalPlaylistStore: ObservableObject {
                 isLocalCopy: Bool? = nil) -> UUID? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        let playlist = LocalPlaylist(name: trimmed, coverURL: coverURL,
+        let playlist = LocalPlaylist(name: trimmed, coverURL: coverURL ?? tracks.first?.album.picUrl,
+                                     coverImageData: coverImageData,
+                                     usesTrackArtwork: coverURL == nil && coverImageData == nil,
                                      sourceName: sourceName, tracks: tracks,
                                      remoteSource: remoteSource,
                                      remotePlaylistID: remotePlaylistID,
@@ -602,6 +615,7 @@ final class LocalPlaylistStore: ObservableObject {
         guard tracks != originalTracks else { return }
         markAsLocalCopyIfProviderPlaylist(at: index)
         playlists[index].tracks = tracks
+        refreshTrackArtwork(at: index)
         playlists[index].updatedAt = .now
         persist()
     }
@@ -628,6 +642,7 @@ final class LocalPlaylistStore: ObservableObject {
         markAsLocalCopyIfProviderPlaylist(at: index)
         // Newest first, like favourites: a song just saved leads the list.
         playlists[index].tracks.insert(track, at: 0)
+        refreshTrackArtwork(at: index)
         playlists[index].updatedAt = .now
         persist()
         ToastCenter.shared.show("已添加到「\(playlists[index].name)」")
@@ -660,6 +675,7 @@ final class LocalPlaylistStore: ObservableObject {
         if !newTracks.isEmpty {
             markAsLocalCopyIfProviderPlaylist(at: index)
             playlists[index].tracks.insert(contentsOf: newTracks, at: 0)
+            refreshTrackArtwork(at: index)
             playlists[index].updatedAt = .now
             persist()
         }
@@ -672,6 +688,7 @@ final class LocalPlaylistStore: ObservableObject {
         let originalCount = playlists[index].tracks.count
         playlists[index].tracks.removeAll { trackKey($0) == key }
         guard playlists[index].tracks.count != originalCount else { return }
+        refreshTrackArtwork(at: index)
         markAsLocalCopyIfProviderPlaylist(at: index)
         playlists[index].updatedAt = .now
         persist()
@@ -684,12 +701,18 @@ final class LocalPlaylistStore: ObservableObject {
         let originalCount = playlists[index].tracks.count
         playlists[index].tracks.removeAll { keys.contains(trackKey($0)) }
         guard playlists[index].tracks.count != originalCount else { return }
+        refreshTrackArtwork(at: index)
         markAsLocalCopyIfProviderPlaylist(at: index)
         playlists[index].updatedAt = .now
         persist()
     }
 
     @discardableResult
+    private func refreshTrackArtwork(at index: Int) {
+        guard playlists[index].usesTrackArtwork == true else { return }
+        playlists[index].coverURL = playlists[index].tracks.first?.album.picUrl
+    }
+
     func importPlaylist(from input: String) async throws -> UUID {
         let imported = try await PlaylistImportService.importPlaylist(from: input)
         if let remoteSource = imported.remoteSource,
