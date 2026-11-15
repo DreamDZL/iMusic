@@ -68,26 +68,6 @@ enum NowPlayingPresentationMetrics {
     /// After the reader stops scrolling, lyrics glide back to the sung line.
     static let lyricsBrowseResumeDelay = Duration.milliseconds(2500)
 
-    /// Direction that leads to the other page: left (-1) from the song page
-    /// to lyrics, right (+1) from lyrics back to the song page.
-    static func pageSwipeAllowedDirection(showsLyrics: Bool) -> CGFloat {
-        showsLyrics ? 1 : -1
-    }
-
-    /// Page to show after a horizontal swipe, or nil to stay. Commits on a
-    /// 60pt drag or a 200pt fling in the allowed direction.
-    static func pageSwipeTarget(
-        translation: CGFloat,
-        predictedTranslation: CGFloat,
-        showsLyrics: Bool
-    ) -> Bool? {
-        let direction = pageSwipeAllowedDirection(showsLyrics: showsLyrics)
-        let distance = translation * direction
-        let predicted = predictedTranslation * direction
-        guard distance >= 60 || (predicted >= 200 && distance > 0) else { return nil }
-        return !showsLyrics
-    }
-
     /// While lyric controls are hidden, a tap in the lower band where the
     /// playback deck appears reveals the controls instead of seeking.
     static func isLyricsControlsRevealTap(
@@ -192,7 +172,10 @@ enum NowPlayingPresentationMetrics {
             // Loaded CI accessibility snapshots can each take several
             // seconds. Only the extended inspection fixture gets this window;
             // the separate default-timing regression still uses three seconds.
-            return .seconds(45)
+            // XCUITest can spend over a minute rebuilding accessibility
+            // snapshots on hosted simulators; keep the test fixture visible
+            // across the complete lyrics-page interaction sequence.
+            return .seconds(180)
         }
         #endif
         return lyricsControlsAutoHideDelay
