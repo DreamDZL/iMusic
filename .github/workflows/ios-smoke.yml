@@ -55,6 +55,9 @@ jobs:
           xcrun simctl boot "$SIMULATOR_ID"
           xcrun simctl bootstatus "$SIMULATOR_ID" -b
           xcodebuild test \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testReselectingSearchTabStartsAnotherSearch \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testSongArtworkSwipesTracksWithoutOpeningLyrics \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testAppleMusicPlayerSongAndLyricsPages \
             -project KumoneIOS.xcodeproj \
             -scheme KumoneIOS \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
@@ -87,4 +90,12 @@ jobs:
           path: |
             platforms/ios/ios/smoke-tests.xcresult
             platforms/ios/ios/smoke-attachments
+          if-no-files-found: warn
+
+      - name: Upload player screenshots separately
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ios-player-screenshots
+          path: platforms/ios/ios/smoke-attachments
           if-no-files-found: warn
