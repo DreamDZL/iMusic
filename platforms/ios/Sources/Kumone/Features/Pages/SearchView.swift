@@ -404,6 +404,7 @@ struct SearchView: View {
     @StateObject private var history = SearchHistoryStore.shared
     @State private var searchText: String = ""
     @State private var searchDebounceTask: Task<Void, Never>?
+    @FocusState private var isSearchFocused: Bool
 
     init(query: String) {
         _model = StateObject(wrappedValue: SearchViewModel(query: query))
@@ -437,10 +438,27 @@ struct SearchView: View {
         // until the first scroll gesture caused a layout pass.
         #if os(iOS)
         .searchable(text: $searchText, prompt: "搜索歌曲、歌手、专辑、歌单")
+        .searchFocused($isSearchFocused)
         .onSubmit(of: .search) {
             submitSearchAfterInputMethodCommits()
         }
         #endif
+        .toolbar {
+            if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        searchDebounceTask?.cancel()
+                        searchText = ""
+                        model.setQuery("")
+                        isSearchFocused = true
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .accessibilityLabel("搜索其他歌曲")
+                    .accessibilityIdentifier("searchAnotherSong")
+                }
+            }
+        }
         .onChange(of: searchText) { newValue in
             model.setQuery(newValue)
             searchDebounceTask?.cancel()
