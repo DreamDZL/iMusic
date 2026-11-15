@@ -6,6 +6,33 @@ import UIKit
 @MainActor
 final class NativeNowPlayingSource: ObservableObject {
     weak var view: UIView?
+
+    func frame(in reference: UIView) -> CGRect? {
+        let referenceWindow = (reference as? UIWindow) ?? reference.window
+        guard let view, let window = view.window, window === referenceWindow,
+              !view.isHidden, PlayerCollapseGeometry.isUsableFrame(view.bounds) else { return nil }
+        return view.convert(view.bounds, to: reference)
+    }
+}
+
+@MainActor
+enum NativeNowPlayingCoordinates {
+    /// Uniform player scale commutes with the container's transform. Translation
+    /// is a vector, so convert two points and subtract, rather than mixing
+    /// window distances with a scaled/offset presentation container's units.
+    static func transform(_ transform: CGAffineTransform, from source: UIView, to target: UIView) -> CGAffineTransform? {
+        let sourceWindow = (source as? UIWindow) ?? source.window
+        let targetWindow = (target as? UIWindow) ?? target.window
+        guard let sourceWindow, sourceWindow === targetWindow,
+              transform.a.isFinite, transform.a > 0, transform.a == transform.d,
+              transform.b == 0, transform.c == 0,
+              transform.tx.isFinite, transform.ty.isFinite else { return nil }
+        let origin = source.convert(CGPoint.zero, to: target)
+        let endpoint = source.convert(CGPoint(x: transform.tx, y: transform.ty), to: target)
+        let offset = CGPoint(x: endpoint.x - origin.x, y: endpoint.y - origin.y)
+        guard offset.x.isFinite, offset.y.isFinite else { return nil }
+        return CGAffineTransform(translationX: offset.x, y: offset.y).scaledBy(x: transform.a, y: transform.a)
+    }
 }
 
 @MainActor
@@ -93,6 +120,10 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
         private var interaction = false
         private var interactionEnding = false
         private var rebound: UIViewPropertyAnimator?
+        private var collapseGeometry: PlayerCollapseGeometry?
+        private weak var collapseWindow: UIWindow?
+        private var clippingBeforePull: Bool?
+        private var initialCornerRadius: CGFloat = 0
         private let frameRate = PlayerMotionFrameRateLease()
         private var childDismissalInFlight = false
 
@@ -204,24 +235,56 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
             guard active, translation.isFinite else { return }
             if !interaction {
                 guard translation > 0, phase == .presented,
-                      host?.presentedViewController == nil else { return }
+                      let host, host.presentedViewController == nil,
+                      let view = host.viewIfLoaded, let window = view.window,
+                      let superview = view.superview else { return }
+                if collapseGeometry == nil { clippingBeforePull = view.clipsToBounds }
                 stopRebound()
+                guard let layoutFrame = PlayerCollapseGeometry.untransformedFrame(bounds: view.bounds, center: view.center),
+                      let initialTransform = NativeNowPlayingCoordinates.transform(view.transform, from: superview, to: window),
+                      let geometry = PlayerCollapseGeometry(
+                        baseFrame: superview.convert(layoutFrame, to: window), viewport: window.bounds,
+                        sourceFrame: value.source.frame(in: window), grabY: host.panOriginY,
+                        initialTransform: initialTransform) else {
+                    interactionEnding = true
+                    restoreAfterPull()
+                    host.cancelDismissPan()
+                    return
+                }
+                collapseGeometry = geometry
+                collapseWindow = window
+                initialCornerRadius = view.layer.cornerRadius
                 interaction = true
             }
-            guard let view = host?.view else { return }
+            guard let view = host?.view, let geometry = collapseGeometry,
+                  let window = collapseWindow, view.window === window,
+                  let superview = view.superview,
+                  let layoutFrame = PlayerCollapseGeometry.untransformedFrame(bounds: view.bounds, center: view.center),
+                  geometry.canContinue(baseFrame: superview.convert(layoutFrame, to: window), viewport: window.bounds) else {
+                cancelInteraction()
+                host?.cancelDismissPan()
+                return
+            }
             frameRate.window = view.window
             frameRate.request()
-            let progress = NativeNowPlayingDismissPolicy.interactiveProgress(
-                translation: translation, height: host?.view.bounds.height ?? 0
-            )
+            let reduced = UIAccessibility.isReduceMotionEnabled
+            let pose = geometry.pose(translation: translation, reduceMotion: reduced)
+            guard let transform = NativeNowPlayingCoordinates.transform(pose.transform, from: window, to: superview) else {
+                cancelInteraction()
+                host?.cancelDismissPan()
+                return
+            }
             // Do not begin a UIKit dismissal here. That sends viewWillDisappear
             // and can cancel the gesture which is still driving this motion.
-            view.transform = CGAffineTransform(translationX: 0,
-                y: NativeNowPlayingDismissPolicy.interactiveOffset(translation: translation, height: view.bounds.height))
-                .scaledBy(x: 1 - 0.12 * progress, y: 1 - 0.12 * progress)
+            // Only the stable bounds/center rect is measured, never the already
+            // transformed view's window frame. Each sample is absolute, not an
+            // accumulation that would drift when the finger reverses direction.
+            view.transform = transform
             view.clipsToBounds = true
             view.layer.cornerCurve = .continuous
-            view.layer.cornerRadius = NowPlayingPresentationMetrics.dismissCornerRadius(progress: progress)
+            view.layer.cornerRadius = reduced ? 0
+                : initialCornerRadius + (40 - initialCornerRadius) * min(1, pose.progress * 4)
+            view.alpha = reduced ? 1 : 1 - pose.progress * 0.2
         }
 
         private func dragEnded(_ translation: CGFloat, predicted: CGFloat) {
@@ -265,23 +328,32 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
         private func restoreAfterPull() {
             guard let view = host?.view else {
                 interactionEnding = false
+                collapseGeometry = nil
+                collapseWindow = nil
+                clippingBeforePull = nil
                 frameRate.stop()
                 return
             }
             frameRate.window = view.window
             frameRate.request()
-            let animator = UIViewPropertyAnimator(
-                duration: UIAccessibility.isReduceMotionEnabled ? 0.22 : 0.48, dampingRatio: 0.9)
+            let animator = UIAccessibility.isReduceMotionEnabled
+                ? UIViewPropertyAnimator(duration: 0.22, curve: .easeOut)
+                : UIViewPropertyAnimator(duration: 0.42, dampingRatio: 0.78)
             rebound = animator
             animator.addAnimations {
                 view.transform = .identity
                 view.layer.cornerRadius = 0
+                view.alpha = 1
             }
             animator.addCompletion { [weak self, weak animator] _ in
                 guard let self, let animator, self.rebound === animator else { return }
                 self.rebound = nil
                 self.interactionEnding = false
-                view.clipsToBounds = false
+                view.clipsToBounds = self.clippingBeforePull ?? false
+                self.collapseGeometry = nil
+                self.collapseWindow = nil
+                self.clippingBeforePull = nil
+                view.superview?.setNeedsLayout()
                 self.frameRate.stop()
                 self.reconcile()
             }
@@ -292,6 +364,9 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
             guard host === dismissed else { return }
             interaction = false
             interactionEnding = false
+            collapseGeometry = nil
+            collapseWindow = nil
+            clippingBeforePull = nil
             frameRate.stop()
             guard completed else {
                 phase = .presented
@@ -324,7 +399,9 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
         }
 
         func animationController(forDismissed dismissed: UIViewController) -> UIViewControllerAnimatedTransitioning? {
-            NativeNowPlayingAnimator(opening: false, source: value.source) { [self, weak host] completed in
+            NativeNowPlayingAnimator(opening: false, source: value.source,
+                                     collapseGeometry: collapseGeometry, collapseWindow: collapseWindow,
+                                     clippingBeforePull: clippingBeforePull) { [self, weak host] completed in
                 guard let host else { return }
                 dismissalEnded(host, completed: completed)
             }
@@ -364,6 +441,7 @@ private final class NativeNowPlayingHost<Content: View>: UIHostingController<Con
     private var regions: [Region] = []
     private var pan: UIPanGestureRecognizer!
     private var tap: UITapGestureRecognizer!
+    private(set) var panOriginY: CGFloat?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -379,6 +457,14 @@ private final class NativeNowPlayingHost<Content: View>: UIHostingController<Con
     func registerRegion(_ view: UIView, acceptsTap: Bool, excluded: Bool) {
         regions.removeAll { $0.view == nil || $0.view === view }
         regions.append(Region(view, acceptsTap: acceptsTap, excluded: excluded))
+    }
+
+    func cancelDismissPan() {
+        guard let pan, pan.state == .began || pan.state == .changed else { return }
+        // A rotation/layout invalidation must end this touch sequence, not
+        // restart a new collapse from its old accumulated translation.
+        pan.isEnabled = false
+        pan.isEnabled = true
     }
 
     func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
@@ -414,7 +500,10 @@ private final class NativeNowPlayingHost<Content: View>: UIHostingController<Con
         // Window coordinates stay fixed while the hosting view follows the finger.
         let translation = recognizer.translation(in: view.window)
         switch recognizer.state {
-        case .began, .changed:
+        case .began:
+            panOriginY = recognizer.location(in: view.window).y - translation.y
+            onDragChanged?(max(0, translation.y))
+        case .changed:
             onDragChanged?(max(0, translation.y))
         case .ended:
             let velocity = recognizer.velocity(in: view.window)
@@ -423,8 +512,10 @@ private final class NativeNowPlayingHost<Content: View>: UIHostingController<Con
             let accepted = NativeNowPlayingDismissPolicy.shouldRequestDismiss(
                 translation: CGSize(width: translation.x, height: translation.y), predicted: predicted)
             onDragEnded?(accepted ? translation.y : 0, accepted ? predicted.height : 0)
+            panOriginY = nil
         case .cancelled, .failed:
             onDragEnded?(0, 0)
+            panOriginY = nil
         default: break
         }
     }
@@ -436,6 +527,15 @@ private final class NativeNowPlayingHost<Content: View>: UIHostingController<Con
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         onDragEnded?(0, 0)
+        cancelDismissPan()
+        panOriginY = nil
+    }
+
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        onDragEnded?(0, 0)
+        cancelDismissPan()
+        panOriginY = nil
+        super.viewWillTransition(to: size, with: coordinator)
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -460,23 +560,32 @@ private final class NativeNowPlayingRetainedPresentation: UIPresentationControll
 }
 
 /// A public UIKit spring, not a reproduction of Apple's private Music animator.
-/// One interruptible timeline supports forward motion, scrubbing and rebound.
+/// The terminal timeline inherits the gesture's live transform without a reset.
 @MainActor
 private final class NativeNowPlayingAnimator: NSObject, UIViewControllerAnimatedTransitioning {
     private let opening: Bool
     private let source: NativeNowPlayingSource
+    private let collapseGeometry: PlayerCollapseGeometry?
+    private weak var collapseWindow: UIWindow?
+    private let clippingBeforePull: Bool?
     private let completion: ((Bool) -> Void)?
     private var animator: UIViewPropertyAnimator?
     private let frameRate = PlayerMotionFrameRateLease()
 
-    init(opening: Bool, source: NativeNowPlayingSource, completion: ((Bool) -> Void)? = nil) {
+    init(opening: Bool, source: NativeNowPlayingSource,
+         collapseGeometry: PlayerCollapseGeometry? = nil, collapseWindow: UIWindow? = nil,
+         clippingBeforePull: Bool? = nil,
+         completion: ((Bool) -> Void)? = nil) {
         self.opening = opening
         self.source = source
+        self.collapseGeometry = collapseGeometry
+        self.collapseWindow = collapseWindow
+        self.clippingBeforePull = clippingBeforePull
         self.completion = completion
     }
 
     func transitionDuration(using transitionContext: UIViewControllerContextTransitioning?) -> TimeInterval {
-        UIAccessibility.isReduceMotionEnabled ? 0.22 : 0.48
+        UIAccessibility.isReduceMotionEnabled ? 0.22 : 0.54
     }
 
     func animateTransition(using transitionContext: UIViewControllerContextTransitioning) {
@@ -494,10 +603,9 @@ private final class NativeNowPlayingAnimator: NSObject, UIViewControllerAnimated
             animator = fallback
             return fallback
         }
+        let layoutFrame = PlayerCollapseGeometry.untransformedFrame(bounds: player.bounds, center: player.center)
         let frame = opening ? context.finalFrame(for: controller)
-            : CGRect(x: player.center.x - player.bounds.width / 2,
-                     y: player.center.y - player.bounds.height / 2,
-                     width: player.bounds.width, height: player.bounds.height)
+            : layoutFrame.map { player.superview?.convert($0, to: container) ?? $0 } ?? container.bounds
         if opening {
             player.transform = .identity
             player.frame = frame
@@ -511,40 +619,47 @@ private final class NativeNowPlayingAnimator: NSObject, UIViewControllerAnimated
 
         // Convert directly between views in the same window, never via global
         // screen coordinates or an unrelated scene's root controller.
-        let sourceFrame: CGRect? = source.view.flatMap { anchor in
-            guard anchor.window != nil, anchor.window === container.window else { return nil }
-            let rect = anchor.convert(anchor.bounds, to: container)
-            guard rect.origin.x.isFinite, rect.origin.y.isFinite,
-                  rect.width.isFinite, rect.height.isFinite,
-                  rect.width > 0, rect.height > 0, rect.intersects(container.bounds) else { return nil }
-            return rect
+        let frozenTarget: CGRect? = collapseGeometry.flatMap { geometry in
+            guard let window = collapseWindow, window === container.window,
+                  window.bounds == geometry.viewport else { return nil }
+            return container.convert(geometry.targetFrame, from: window)
         }
-        let target = sourceFrame ?? CGRect(x: frame.minX, y: container.bounds.maxY,
-                                          width: frame.width, height: max(1, frame.height * 0.12))
+        let geometry = PlayerCollapseGeometry(baseFrame: frame, viewport: container.bounds,
+                                              sourceFrame: frozenTarget ?? source.frame(in: container))
         let reduceMotion = UIAccessibility.isReduceMotionEnabled
         // Preserve artwork/text proportions. Independent x/y scaling flattened
         // the whole player into a strip instead of giving it iOS card motion.
-        let scale = min(target.width / max(1, frame.width), target.height / max(1, frame.height))
-        let collapsed = reduceMotion
-            ? CGAffineTransform(translationX: 0, y: 24)
-            : CGAffineTransform(translationX: target.midX - frame.midX, y: target.midY - frame.midY)
-                .scaledBy(x: scale, y: scale)
-        let originalClipping = player.clipsToBounds
+        let containerTransform = geometry?.collapsedTransform(reduceMotion: reduceMotion)
+            ?? CGAffineTransform(translationX: 0, y: 24)
+        let collapsed = NativeNowPlayingCoordinates.transform(containerTransform, from: container, to: player.superview ?? container)
+            ?? CGAffineTransform(translationX: 0, y: 24)
+        let originalClipping = clippingBeforePull ?? player.clipsToBounds
         player.clipsToBounds = true
         player.layer.cornerCurve = .continuous
         if opening {
             player.transform = collapsed
+            // Keep the real mini-player visible underneath until the full
+            // surface has started to grow from its artwork anchor. Scaling the
+            // complete player controls down to thumbnail size looks unlike the
+            // system transition; fading them in avoids exposing that squeeze.
+            player.alpha = 0
             player.layer.cornerRadius = reduceMotion ? 0 : 18
         }
-        let spring = UIViewPropertyAnimator(duration: transitionDuration(using: context), dampingRatio: 0.9)
+        let spring = reduceMotion
+            ? UIViewPropertyAnimator(duration: transitionDuration(using: context), curve: .easeOut)
+            : UIViewPropertyAnimator(duration: transitionDuration(using: context), dampingRatio: 0.9)
         spring.addAnimations {
             player.transform = self.opening ? .identity : collapsed
             player.layer.cornerRadius = self.opening || reduceMotion ? 0 : 18
+            if self.opening {
+                player.alpha = 1
+            }
         }
         if !opening {
-            // Reveal the real mini-player only at the end of the geometric
-            // collapse, rather than showing compressed full-player controls.
-            spring.addAnimations({ player.alpha = 0 }, delayFactor: reduceMotion ? 0 : 0.72)
+            // The retained mini-player is already visible underneath. Fade the
+            // full player before it reaches thumbnail scale, rather than
+            // shrinking its controls into an unreadable strip.
+            spring.addAnimations({ player.alpha = 0 }, delayFactor: reduceMotion ? 0 : 0.35)
         }
         spring.addCompletion { _ in
             let completed = !context.transitionWasCancelled
