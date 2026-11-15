@@ -28,6 +28,7 @@ public struct IOSMainWindow: View {
     @State private var radioPath = NavigationPath()
     @State private var searchPath = NavigationPath()
     @State private var libraryPath = NavigationPath()
+    @State private var searchFocusRequest: UInt = 0
     @StateObject private var router = AppRouter.shared
 
     public init() {}
@@ -88,6 +89,10 @@ public struct IOSMainWindow: View {
                     await MusicSessionRefreshCoordinator.shared.refreshIfNeeded()
                     await LXSyncService.shared.reconnectIfConfigured()
                 }
+            }
+            .onChange(of: selectedTab) { _, tab in
+                guard tab == .search else { return }
+                requestSearchFocus()
             }
             .onChange(of: router.pending) { _, request in
                 guard let request else { return }
@@ -206,7 +211,7 @@ public struct IOSMainWindow: View {
             // The search role pins the magnifying-glass tab at the trailing
             // edge, matching Music's separated search control.
             Tab("搜索", systemImage: "magnifyingglass", value: .search, role: .search) {
-                tabStack(.search) { SearchView(query: "") }
+                tabStack(.search) { SearchView(query: "", focusRequest: searchFocusRequest) }
             }
         }
         .toolbarBackground(.hidden, for: .tabBar)
@@ -223,8 +228,7 @@ public struct IOSMainWindow: View {
 
             VStack(spacing: 8) {
                 if player.hasCurrentTrack {
-                    IOSMiniPlayerBar(presentation: .legacyOverlay)
-                        .background(NativeNowPlayingSourceAnchor(source: nowPlayingSource))
+                    IOSMiniPlayerBar(presentation: .legacyOverlay, transitionSource: nowPlayingSource)
                         .padding(.horizontal, 12)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -248,7 +252,7 @@ public struct IOSMainWindow: View {
         case .radio:
             tabStack(.radio) { FMView() }
         case .search:
-            tabStack(.search) { SearchView(query: "") }
+            tabStack(.search) { SearchView(query: "", focusRequest: searchFocusRequest) }
         case .library:
             tabStack(.library) { LocalPlaylistsView() }
         }
@@ -272,6 +276,14 @@ public struct IOSMainWindow: View {
         case .search: searchPath = NavigationPath()
         case .library: libraryPath = NavigationPath()
         }
+        if tab == .search {
+            requestSearchFocus()
+        }
+    }
+
+    private func requestSearchFocus() {
+        // The durable request survives lazy mounting of the search-role tab.
+        searchFocusRequest &+= 1
     }
 
     @ViewBuilder
@@ -349,8 +361,7 @@ private struct IOSMiniPlayerAccessory: View {
     let transitionSource: NativeNowPlayingSource
 
     var body: some View {
-        IOSMiniPlayerBar(presentation: presentation)
-            .background(NativeNowPlayingSourceAnchor(source: transitionSource))
+        IOSMiniPlayerBar(presentation: presentation, transitionSource: transitionSource)
     }
 
     private var presentation: IOSMiniPlayerBar.Presentation {
@@ -380,6 +391,12 @@ struct IOSMiniPlayerBar: View {
     @EnvironmentObject private var player: PlayerService
     @State private var swipeTrackKey: String?
     let presentation: Presentation
+    let transitionSource: NativeNowPlayingSource?
+
+    init(presentation: Presentation, transitionSource: NativeNowPlayingSource? = nil) {
+        self.presentation = presentation
+        self.transitionSource = transitionSource
+    }
 
     var body: some View {
         playerBarSurface
@@ -454,6 +471,11 @@ struct IOSMiniPlayerBar: View {
                     width: artworkSize,
                     height: artworkSize
                 )
+                .background {
+                    if let transitionSource {
+                        NativeNowPlayingSourceAnchor(source: transitionSource)
+                    }
+                }
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
                 .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
 
