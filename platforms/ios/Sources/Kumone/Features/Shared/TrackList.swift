@@ -702,7 +702,6 @@ struct AddToPlaylistSheet: View {
     @StateObject private var localStore = LocalPlaylistStore.shared
     @State private var query = ""
     @State private var showCreate = false
-    @State private var newName = ""
     /// Bumped on every row toggle, for the selection haptic.
     @State private var toggleCount = 0
 
@@ -711,7 +710,6 @@ struct AddToPlaylistSheet: View {
             List {
                 Section {
                     Button {
-                        newName = ""
                         showCreate = true
                     } label: {
                         newPlaylistRow
@@ -765,13 +763,18 @@ struct AddToPlaylistSheet: View {
                 }
             }
             .sensoryFeedback(.selection, trigger: toggleCount)
-            .alert("新建歌单", isPresented: $showCreate) {
-                TextField("歌单名称", text: $newName)
-                Button("创建") { createAndAdd() }
-                    .disabled(trimmedNewName.isEmpty)
-                Button("取消", role: .cancel) {}
-            } message: {
-                Text(tracks.count == 1 ? "这首歌会添加到新歌单。" : "这些歌曲会添加到新歌单。")
+            .sheet(isPresented: $showCreate) {
+                NavigationStack {
+                    NewLocalPlaylistSheet(
+                        create: { name, artwork in
+                            localStore.create(name: name, tracks: tracks, coverImageData: artwork)
+                        },
+                        onCreated: { name, _ in
+                            ToastCenter.shared.show("已收藏到「\(name)」")
+                            dismiss()
+                        }
+                    )
+                }
             }
         }
         #if os(iOS)
@@ -859,10 +862,6 @@ struct AddToPlaylistSheet: View {
         }
     }
 
-    private var trimmedNewName: String {
-        newName.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     private func isSaved(in playlist: LocalPlaylist) -> Bool {
         localStore.containsAll(tracks, in: playlist.id)
     }
@@ -879,10 +878,4 @@ struct AddToPlaylistSheet: View {
         toggleCount += 1
     }
 
-    private func createAndAdd() {
-        let name = trimmedNewName
-        guard !name.isEmpty, localStore.create(name: name, tracks: tracks) != nil else { return }
-        ToastCenter.shared.show("已收藏到「\(name)」")
-        dismiss()
-    }
 }
