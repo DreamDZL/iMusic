@@ -2,8 +2,9 @@ import Foundation
 
 /// Public Qishui playlist importer.
 ///
-/// Qishui is intentionally not an audio, lyric, quality, or playback source
-/// in Moumusic. This type only reads public playlist metadata. Imported tracks
+/// Qishui is intentionally not a native audio, quality, or playback source.
+/// This type reads public playlist metadata; QishuiSearch owns public track
+/// metadata and lyrics. Imported tracks
 /// are resolved later by the user's enabled LX User API sources.
 actor QishuiAPI {
     static let shared = QishuiAPI()
@@ -465,7 +466,9 @@ actor QishuiAPI {
         return trackValue(track)
     }
 
-    private static func track(from value: [String: Any]) -> Track? {
+    static func track(from value: [String: Any]) -> Track? {
+        if let track = QishuiSearch.track(value) { return track }
+        let value = value["track"] as? [String: Any] ?? value
         guard let id = text(in: value, keys: ["id", "track_id"]), !id.isEmpty,
               let name = text(in: value, keys: ["name", "title"]), !name.isEmpty else {
             return nil
