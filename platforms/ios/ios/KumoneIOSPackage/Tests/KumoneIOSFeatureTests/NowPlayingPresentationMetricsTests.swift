@@ -23,7 +23,7 @@ final class NowPlayingPresentationMetricsTests: XCTestCase {
             }
             let expected: Duration
             #if DEBUG
-            expected = mask == (1 << required.count) - 1 ? .seconds(45) : .seconds(3)
+            expected = mask == (1 << required.count) - 1 ? .seconds(180) : .seconds(3)
             #else
             expected = .seconds(3)
             #endif
@@ -34,22 +34,6 @@ final class NowPlayingPresentationMetricsTests: XCTestCase {
                 "Unexpected auto-hide delay for argument combination mask \(mask)"
             )
         }
-    }
-
-    /// Left swipe on the song page opens lyrics, right swipe on lyrics goes
-    /// back; short drags and the opposite direction stay put.
-    func testPageSwipeDirectionAndThreshold() {
-        XCTAssertEqual(NowPlayingPresentationMetrics.pageSwipeTarget(
-            translation: -80, predictedTranslation: -120, showsLyrics: false), true)
-        XCTAssertEqual(NowPlayingPresentationMetrics.pageSwipeTarget(
-            translation: 80, predictedTranslation: 120, showsLyrics: true), false)
-        XCTAssertNil(NowPlayingPresentationMetrics.pageSwipeTarget(
-            translation: 80, predictedTranslation: 300, showsLyrics: false))
-        XCTAssertNil(NowPlayingPresentationMetrics.pageSwipeTarget(
-            translation: -20, predictedTranslation: -40, showsLyrics: false))
-        // A quick flick commits even with little travel.
-        XCTAssertEqual(NowPlayingPresentationMetrics.pageSwipeTarget(
-            translation: -25, predictedTranslation: -260, showsLyrics: false), true)
     }
 
     /// The pulled-down player is a rounded card; at rest it is square.

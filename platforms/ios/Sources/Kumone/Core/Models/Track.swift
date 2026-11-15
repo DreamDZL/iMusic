@@ -58,8 +58,8 @@ struct Track: Codable, Hashable, Identifiable, Sendable {
     let id: Int
     let name: String
     let artists: [ArtistRef]
-    let album: AlbumRef
-    let durationMS: Int
+    private(set) var album: AlbumRef
+    private(set) var durationMS: Int
     let alias: [String]
     let transNames: [String]
     let fee: Int
@@ -155,6 +155,24 @@ struct Track: Codable, Hashable, Identifiable, Sendable {
         var copy = self
         copy.source = source
         copy.sourceMetadata = metadata.isEmpty ? sourceMetadata : metadata
+        return copy
+    }
+
+    /// Old saved Qishui items can have a bare CDN URL or no album. Enrich only
+    /// display fields: title/artists/source IDs are part of playback identity,
+    /// and replacing them would invalidate queues, favourites and async guards.
+    func mergingQishuiMetadata(_ catalogue: Track) -> Track? {
+        let original = normalizedForLXPlayback()
+        let updated = catalogue.normalizedForLXPlayback()
+        guard original.source == "sd", updated.source == "sd",
+              original.sourceMetadata["songmid"] == updated.sourceMetadata["songmid"] else { return nil }
+        var copy = self
+        copy.album = AlbumRef(
+            id: catalogue.album.id > 0 ? catalogue.album.id : album.id,
+            name: catalogue.album.name.isEmpty ? album.name : catalogue.album.name,
+            picUrl: catalogue.album.picUrl ?? album.picUrl
+        )
+        if catalogue.durationMS > 0 { copy.durationMS = catalogue.durationMS }
         return copy
     }
 

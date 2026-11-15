@@ -156,6 +156,16 @@ final class KumoneIOSUITests: XCTestCase {
                               "Search landing shows trending searches")
                 XCTAssertFalse(app.staticTexts["快速浏览"].exists,
                                "Search landing no longer shows category tiles")
+                XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5),
+                              "Selecting the search tab should focus its input")
+                let searchField = app.searchFields.firstMatch
+                XCTAssertTrue(searchField.exists)
+                searchField.typeText("test")
+                button.tap()
+                XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5),
+                              "Reselecting search from results should focus a fresh search")
+                XCTAssertNotEqual(searchField.value as? String, "test",
+                                   "Reselecting search should clear the prior query")
             }
             if destination.tab == "资料库" {
                 XCTAssertTrue(
@@ -194,6 +204,32 @@ final class KumoneIOSUITests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
         }
+    }
+
+    @MainActor
+    func testSearchToolbarCanStartAnotherSongSearch() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing"]
+        app.launch()
+
+        let searchTab = app.tabBars.buttons["搜索"]
+        XCTAssertTrue(searchTab.waitForExistence(timeout: 15))
+        searchTab.tap()
+
+        let field = app.searchFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10),
+                      "Selecting the search tab should expose its search field")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5),
+                      "Selecting the search tab should focus its search field")
+        field.typeText("测试歌曲")
+        app.keyboards.buttons["search"].tap()
+
+        let searchAnother = app.buttons["searchAnotherSong"]
+        XCTAssertTrue(searchAnother.waitForExistence(timeout: 10))
+        searchAnother.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5),
+                      "The new-search action should return focus to the search field")
+        XCTAssertEqual(field.value as? String, "")
     }
 
     @MainActor
@@ -327,9 +363,9 @@ final class KumoneIOSUITests: XCTestCase {
         let songTransportControls = app.descendants(matching: .any)["nowPlayingTransportControls"]
         // Full-screen lyrics: after the initial auto-hide the whole deck,
         // accessory row included, leaves the screen like the system player.
-        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 60),
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 240),
                       "Lyrics transport controls must initially auto-hide")
-        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 60),
+        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 240),
                       "Lyrics volume control must initially auto-hide")
         XCTAssertTrue(accessoryControls.waitForNonExistence(timeout: 5),
                       "Full-screen lyrics must hide the bottom accessory row too")
@@ -345,15 +381,14 @@ final class KumoneIOSUITests: XCTestCase {
                       "Revealing controls must bring the accessory row back")
         assertSettles(accessoryControls, atMidY: songAccessoryMidY,
                       message: "The accessory row must reappear at the song page's position")
-        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 60),
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 240),
                       "Lyrics transport controls must be removed from the accessibility tree when hidden")
-        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 60),
+        XCTAssertTrue(volumeControl.waitForNonExistence(timeout: 240),
                       "Lyrics volume control must be removed from the accessibility tree when hidden")
         XCTAssertTrue(accessoryControls.waitForNonExistence(timeout: 5),
                       "The accessory row must hide again with the controls")
 
-        // Swiping toward the song page's side is the only horizontal swipe
-        // that changes page; the opposite direction stays on lyrics.
+        // Lyrics browsing never doubles as track/page navigation.
         lyricsScroll.swipeLeft()
         XCTAssertTrue(lyricsPage.exists, "A left swipe on lyrics must not leave the lyrics page")
         XCTAssertFalse(songTransportControls.exists)
@@ -384,7 +419,7 @@ final class KumoneIOSUITests: XCTestCase {
         // Start a fresh reveal window for the separate navigation action;
         // inspecting state and navigating are independent timed interactions.
         // Auto-hide and simultaneous playback-state assertions remain above.
-        XCTAssertTrue(accessoryControls.waitForNonExistence(timeout: 60),
+        XCTAssertTrue(accessoryControls.waitForNonExistence(timeout: 240),
                       "The playback toolbar must still auto-hide after state inspection")
         lyricsPage.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
         XCTAssertTrue(accessoryControls.waitForExistence(timeout: 5))
@@ -392,17 +427,18 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(songTransportControls.waitForExistence(timeout: 5))
         XCTAssertTrue(songPage.waitForExistence(timeout: 5))
         XCTAssertTrue(lyricsPage.waitForNonExistence(timeout: 5))
-        // Besides the button, a left swipe on the song page opens lyrics and
-        // a right swipe on lyrics returns to the song page.
+        // A single-item queue has no adjacent track; swipes must neither
+        // navigate to lyrics nor close the player at its boundary.
         artwork.swipeLeft()
-        XCTAssertTrue(lyricsPage.waitForExistence(timeout: 5), "A left swipe on the song page must open lyrics")
-        XCTAssertTrue(songPage.waitForNonExistence(timeout: 5))
-        lyricsScroll.swipeRight()
-        XCTAssertTrue(songPage.waitForExistence(timeout: 5), "A right swipe on lyrics must return to the song page")
-        XCTAssertTrue(lyricsPage.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(songPage.exists)
+        XCTAssertFalse(lyricsPage.exists, "A cover swipe must never open lyrics")
+        artwork.swipeRight()
+        XCTAssertTrue(songPage.exists)
         app.buttons["showSynchronizedLyrics"].tap()
         XCTAssertTrue(lyricsPage.waitForExistence(timeout: 5))
-        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 60),
+        lyricsScroll.swipeRight()
+        XCTAssertTrue(lyricsPage.exists, "A right swipe on lyrics must not return to the song page")
+        XCTAssertTrue(transportControls.waitForNonExistence(timeout: 240),
                       "Lyrics transport controls must auto-hide after returning from the song page")
 
         let lyricsAttachment = XCTAttachment(screenshot: app.screenshot())
@@ -813,6 +849,94 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["iMusic 下一首测试曲目"].waitForExistence(timeout: 10))
         XCTAssertTrue(lyrics.exists, "Track transitions must preserve the open lyrics page")
         XCTAssertFalse(app.descendants(matching: .any)["appleMusicSongPage"].exists)
+        XCTAssertTrue(app.staticTexts["下一首第1句同步歌词"].waitForExistence(timeout: 5),
+                      "The lyrics must belong to the newly selected track, not the previous fixture")
+    }
+
+    @MainActor
+    func testSongArtworkSwipesTracksWithoutOpeningLyrics() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture", "-imusic-ui-next-track-fixture"]
+        app.launch()
+        let mini = app.buttons["miniPlayerOpenNowPlaying"]
+        XCTAssertTrue(mini.waitForExistence(timeout: 15))
+        mini.tap()
+        let song = app.descendants(matching: .any)["appleMusicSongPage"]
+        XCTAssertTrue(song.waitForExistence(timeout: 10))
+        let artwork = app.descendants(matching: .any)["nowPlayingArtworkImage"]
+        XCTAssertTrue(artwork.waitForExistence(timeout: 5))
+        artwork.swipeLeft()
+        XCTAssertTrue(app.staticTexts["iMusic 下一首测试曲目"].waitForExistence(timeout: 5))
+        XCTAssertTrue(song.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["appleMusicLyricsPage"].exists)
+        artwork.swipeRight()
+        XCTAssertTrue(app.staticTexts["iMusic 测试曲目"].waitForExistence(timeout: 5))
+        XCTAssertTrue(song.exists)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "iMusic-横滑切歌后歌曲页"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor
+    func testInlineQueueReturnsToPreviousPlayerPage() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture", "-imusic-ui-next-track-fixture", "-imusic-ui-extended-lyrics-controls"]
+        app.launch()
+        let mini = app.buttons["miniPlayerOpenNowPlaying"]
+        XCTAssertTrue(mini.waitForExistence(timeout: 15))
+        mini.tap()
+        let lyricsToggle = app.buttons["showSynchronizedLyrics"]
+        XCTAssertTrue(lyricsToggle.waitForExistence(timeout: 10))
+        lyricsToggle.tap()
+        let lyrics = app.descendants(matching: .any)["appleMusicLyricsPage"]
+        XCTAssertTrue(lyrics.waitForExistence(timeout: 5))
+        let queueToggle = app.buttons["showPlaybackQueue"]
+        queueToggle.tap()
+        let queue = app.descendants(matching: .any)["appleMusicQueuePage"]
+        XCTAssertTrue(queue.waitForExistence(timeout: 5))
+        XCTAssertFalse(lyrics.exists)
+        XCTAssertTrue(app.buttons["queueShuffle"].exists)
+        XCTAssertTrue(app.buttons["queueRepeat"].exists)
+        XCTAssertTrue(app.staticTexts["iMusic 下一首测试曲目"].exists)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "iMusic-内联待播清单"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        queueToggle.tap()
+        XCTAssertTrue(lyrics.waitForExistence(timeout: 5))
+        XCTAssertFalse(queue.exists)
+        lyricsToggle.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["appleMusicSongPage"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testPausedArtworkGrowsWhenPlaybackResumes() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-ui-player-fixture"]
+        app.launch()
+        let mini = app.buttons["miniPlayerOpenNowPlaying"]
+        XCTAssertTrue(mini.waitForExistence(timeout: 15))
+        mini.tap()
+        let artwork = app.descendants(matching: .any)["nowPlayingArtworkImage"]
+        XCTAssertTrue(artwork.waitForExistence(timeout: 10))
+        let pausedWidth = artwork.frame.width
+        let play = app.buttons["nowPlayingPlayPause"]
+        play.tap()
+        let expanded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            artwork.frame.width > pausedWidth * 1.2
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 5), .completed)
+        XCTAssertEqual(play.label, "暂停")
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "iMusic-播放状态大封面"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        play.tap()
+        XCTAssertEqual(play.label, "播放")
     }
 
     @MainActor
