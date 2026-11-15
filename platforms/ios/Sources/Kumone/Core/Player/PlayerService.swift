@@ -267,6 +267,9 @@ final class PlayerService: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var isBuffering = false
     @Published private(set) var isResolvingSource = false
+    /// Safe, persistent failure text. Never publish a source's raw exception,
+    /// which may contain a signed audio URL or a user's source credential.
+    @Published private(set) var playbackFailure: String?
     @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var servedQuality: String?
     /// Resolved request tier when a source does not report actual audio metadata.
@@ -372,7 +375,7 @@ final class PlayerService: ObservableObject {
         let available = AudioQuality.allCases.filter {
             names.contains($0.lxType) && seenTypes.insert($0.lxType).inserted
         }
-        return available.isEmpty ? [.standard] : available
+        return available
 #else
         return AudioQuality.allCases
 #endif
@@ -514,19 +517,7 @@ final class PlayerService: ObservableObject {
             durationMS: 180_000,
             source: "wy"
         )
-        let lyrics = ParsedLyrics(lines: (0..<14).map { index in
-            let start = Double(index * 4)
-            let first = "第\(index + 1)句"
-            return LyricLine(
-                id: index,
-                time: start,
-                text: "\(first)同步歌词",
-                words: [
-                    LyricWord(text: first, start: start, duration: 1.2),
-                    LyricWord(text: "同步歌词", start: start + 1.2, duration: 1.4),
-                ]
-            )
-        })
+        let lyrics = Self.uiFixtureLyrics(for: track)
 
         let nextTrack = Track(
             id: 27_000_004,
@@ -550,6 +541,7 @@ final class PlayerService: ObservableObject {
         isPlaying = false
         isBuffering = false
         isResolvingSource = false
+        playbackFailure = nil
         duration = track.duration
         progress = 14
         requestedQuality = "320k"
@@ -559,6 +551,17 @@ final class PlayerService: ObservableObject {
         showNowPlaying = false
         NowPlayingManager.shared.updateMetadata(for: track, duration: track.duration)
         NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+    }
+
+    private static func uiFixtureLyrics(for track: Track) -> ParsedLyrics {
+        ParsedLyrics(lines: (0..<14).map { index in
+            let start = Double(index * 4)
+            let first = "\(track.id == 27_000_004 ? "下一首" : "")第\(index + 1)句"
+            return LyricLine(id: index, time: start, text: "\(first)同步歌词", words: [
+                LyricWord(text: first, start: start, duration: 1.2),
+                LyricWord(text: "同步歌词", start: start + 1.2, duration: 1.4),
+            ])
+        })
     }
 #endif
 
@@ -860,6 +863,12 @@ final class PlayerService: ObservableObject {
 
     func togglePlayPause() {
         guard let track = currentTrack else { return }
+        #if os(iOS)
+        if IOSUITestMode.hasPlayerFixture, [27_000_001, 27_000_004].contains(track.id) {
+            isPlaying.toggle()
+            return // Silent fixture: no network, audio session or real media.
+        }
+        #endif
         if isPlaying {
             engine.pause()
             snapshotPausedPlaybackPosition()
@@ -975,6 +984,21 @@ final class PlayerService: ObservableObject {
             )
         }
         #endif
+    }
+
+    /// A cover swipe selects the preceding queue item even after four seconds;
+    /// the transport button retains its familiar restart-current-track action.
+    func skipToPreviousTrack() {
+        guard !isFMMode, !activeQueue.isEmpty else { return }
+        let previousIndex = currentIndex > 0 ? currentIndex - 1 : (repeatMode == .all ? activeQueue.count - 1 : -1)
+        guard activeQueue.indices.contains(previousIndex) else { return }
+        currentIndex = previousIndex
+        startPlaying(activeQueue[previousIndex])
+    }
+
+    func retryCurrentTrack() {
+        guard !isResolvingSource, let currentTrack else { return }
+        startPlaying(currentTrack, indexUnchanged: true, resumeAt: progress)
     }
 
     func refreshLyricsCursor() {
@@ -1363,6 +1387,7 @@ final class PlayerService: ObservableObject {
     private func startPlaying(_ track: Track, indexUnchanged: Bool = false,
                               resumeAt: TimeInterval? = nil) {
         let track = track.normalizedForLXPlayback()
+        playbackFailure = nil
         isScrubbing = false
         isResolvingSource = true
         // Stop and detach the previous item before starting an asynchronous
@@ -1384,7 +1409,11 @@ final class PlayerService: ObservableObject {
         itemStatusObservation = nil
         scrobbleIfNeeded(completed: false)
         currentTrack = track
+        #if os(iOS)
+        if !IOSUITestMode.hasPlayerFixture { LocalPlaylistStore.shared.recordRecent(track) }
+        #else
         LocalPlaylistStore.shared.recordRecent(track)
+        #endif
         progress = seekCoordinator.initialPlaybackPosition
         isScrubbing = seekCoordinator.pendingPosition != nil
         duration = track.duration
@@ -1410,6 +1439,17 @@ final class PlayerService: ObservableObject {
 
         NowPlayingManager.shared.updateMetadata(for: track, duration: track.duration)
         persistState()
+
+        #if os(iOS)
+        if IOSUITestMode.hasPlayerFixture, [27_000_001, 27_000_004].contains(track.id) {
+            isPlaying = false
+            isResolvingSource = false
+            lyrics = Self.uiFixtureLyrics(for: track)
+            updateLyricsCursor(at: progress)
+            AudioSpectrum.shared.markIdle()
+            return
+        }
+        #endif
 
         sourceResolutionTask = Task { [weak self] in
             guard let self else { return }
@@ -1453,8 +1493,9 @@ final class PlayerService: ObservableObject {
             resolvedRequestQuality = local.quality
         } else {
             guard !LXSourceStore.shared.playbackSources.isEmpty else {
-                guard generation == resolveGeneration else { return }
-                ToastCenter.shared.show("请先在设置 → LX 音源中启用第三方音源")
+                guard !Task.isCancelled, generation == resolveGeneration else { return }
+                playbackFailure = "请先在设置 → LX 音源中启用第三方音源"
+                ToastCenter.shared.show(playbackFailure!)
                 settlePlaybackAsPaused()
                 return
             }
@@ -1474,6 +1515,8 @@ final class PlayerService: ObservableObject {
                     } catch {
                         guard generation == resolveGeneration, !Task.isCancelled else { return }
                         lastError = error
+                        if let lxError = error as? LXUserAPIService.LXError,
+                           case .missingCapability = lxError { break }
                         if attempt == 0 {
                             try? await Task.sleep(for: .milliseconds(350))
                         }
@@ -1486,9 +1529,11 @@ final class PlayerService: ObservableObject {
                 servedByLXQuality = resolved.qualityIsVerified ? resolved.quality : nil
                 resolvedRequestQuality = resolved.quality
             } catch {
-                guard generation == resolveGeneration else { return }
+                guard !Task.isCancelled, generation == resolveGeneration else { return }
                 consecutiveFailures += 1
-                ToastCenter.shared.show("《\(track.name)》播放失败：\(error.localizedDescription)")
+                let message = PlaybackFailureMessage.source(error)
+                playbackFailure = message
+                ToastCenter.shared.show("《\(track.name)》播放失败：\(message)")
                 // A source-level error is not fixed by immediately trying five
                 // more queue entries. Keep the current song visible so the user
                 // can adjust the source or retry after reading the real error.
@@ -1666,7 +1711,9 @@ final class PlayerService: ObservableObject {
               let currentItem = engine.currentItem,
               ObjectIdentifier(currentItem) == itemID,
               isPlaying else { return }
-        ToastCenter.shared.show("音频源无法播放\(reason.map { "：\($0)" } ?? "")")
+        // AVFoundation's localizedDescription may embed the full provider URL.
+        playbackFailure = PlaybackFailureMessage.unplayableMedia
+        ToastCenter.shared.show(PlaybackFailureMessage.unplayableMedia)
         settlePlaybackAsPaused()
     }
 
@@ -1690,6 +1737,37 @@ final class PlayerService: ObservableObject {
     private func loadLyrics(for track: Track, generation: Int) async {
 #if os(iOS)
         let sourceKey = (track.source ?? track.sourceMetadata["source"] ?? "").lowercased()
+        let isQishui = track.normalizedForLXPlayback().source == "sd"
+        if isQishui {
+            // Metadata/lyrics must remain usable even when the selected source
+            // has no Qishui audio capability. One detail fetch populates both.
+            if let catalogue = try? await QishuiSearch.shared.metadata(for: track) {
+                guard !Task.isCancelled, generation == resolveGeneration,
+                      let current = currentTrack, current.playbackKey == track.playbackKey else { return }
+                if let enriched = current.mergingQishuiMetadata(catalogue) {
+                    currentTrack = enriched
+                    queue = queue.map { $0.playbackKey == track.playbackKey ? ($0.mergingQishuiMetadata(catalogue) ?? $0) : $0 }
+                    shuffledQueue = shuffledQueue.map { $0.playbackKey == track.playbackKey ? ($0.mergingQishuiMetadata(catalogue) ?? $0) : $0 }
+                    playNextList = playNextList.map { $0.playbackKey == track.playbackKey ? ($0.mergingQishuiMetadata(catalogue) ?? $0) : $0 }
+                    if duration <= 0 { duration = enriched.duration }
+                    NowPlayingManager.shared.updateMetadata(for: enriched, duration: duration)
+                    NowPlayingManager.shared.updateElapsed(progress, rate: isPlaying && !isResolvingSource ? Double(playbackRate) : 0)
+                    persistState()
+                }
+            }
+            guard !Task.isCancelled, generation == resolveGeneration else { return }
+            if let native = try? await LXCatalogService.nativeLyrics(for: track) {
+                guard !Task.isCancelled, generation == resolveGeneration else { return }
+                let parsed = LyricsParser.parseLX(lyric: native.lyric, tlyric: native.tlyric,
+                                                  rlyric: native.rlyric, lxlyric: native.lxlyric)
+                if !parsed.isEmpty {
+                    publishLyrics(parsed, for: track, generation: generation)
+                    return
+                }
+            }
+        }
+
+        guard !Task.isCancelled, generation == resolveGeneration else { return }
         if ["wy", "netease", "163"].contains(sourceKey),
            let response = try? await NeteaseAPI.lyric(id: track.id) {
             guard generation == resolveGeneration else { return }
@@ -1717,7 +1795,7 @@ final class PlayerService: ObservableObject {
 
         // Catalogue lyrics are metadata only. Playback is still resolved by
         // the selected LX User API source in resolveAndLoad(_:generation:).
-        if !sourceKey.isEmpty,
+        if !isQishui, !sourceKey.isEmpty,
            let native = try? await LXCatalogService.nativeLyrics(for: track) {
             guard generation == resolveGeneration else { return }
             let parsed = LyricsParser.parseLX(lyric: native.lyric, tlyric: native.tlyric,
@@ -1733,6 +1811,7 @@ final class PlayerService: ObservableObject {
         // across platforms, so a matched track is required before fetching.
         let fallbackPlatforms = ["tx", "wy", "kw", "kg", "mg"]
         for platform in fallbackPlatforms where platform != sourceKey {
+            guard !Task.isCancelled, generation == resolveGeneration else { return }
             guard let matched = await LXCatalogService.matchingTrack(track, on: platform),
                   let native = try? await LXCatalogService.nativeLyrics(for: matched) else {
                 continue
@@ -1765,7 +1844,7 @@ final class PlayerService: ObservableObject {
 
         // Do not leave the lyric panel in a permanent loading state when no
         // provider has lyrics for this track.
-        guard generation == resolveGeneration else { return }
+        guard !Task.isCancelled, generation == resolveGeneration else { return }
         lyrics = ParsedLyrics()
         updateLyricsCursor(at: progress)
         return
@@ -2007,6 +2086,9 @@ final class PlayerService: ObservableObject {
     }
 
     private func persistState() {
+        #if os(iOS)
+        guard !IOSUITestMode.hasPlayerFixture else { return }
+        #endif
         let persistedQueue = Array(queue.prefix(1000))
         let persistedQueueItemIDs = Array(queueItemIDs.prefix(1000))
         let persistedItemIDSet = Set(persistedQueueItemIDs)
