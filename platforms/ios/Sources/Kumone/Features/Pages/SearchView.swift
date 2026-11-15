@@ -404,16 +404,31 @@ struct SearchView: View {
     @StateObject private var history = SearchHistoryStore.shared
     @State private var searchText: String = ""
     @State private var searchDebounceTask: Task<Void, Never>?
+    @FocusState private var isSearchFocused: Bool
+    @State private var isSearchPresented = false
+    private let focusRequest: UInt
 
-    init(query: String) {
+    init(query: String, focusRequest: UInt = 0) {
         _model = StateObject(wrappedValue: SearchViewModel(query: query))
         _searchText = State(initialValue: query)
+        self.focusRequest = focusRequest
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    HStack {
+                        Spacer()
+                        Button(action: beginNewSearch) {
+                            Label("搜索其他歌曲", systemImage: "magnifyingglass")
+                                .font(.subheadline.weight(.medium))
+                                .frame(minHeight: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("searchAnotherSong")
+                    }
                     platformPicker
                     tabPicker
 
@@ -436,9 +451,16 @@ struct SearchView: View {
         // A second safe-area field here was being composited over the tab bar
         // until the first scroll gesture caused a layout pass.
         #if os(iOS)
-        .searchable(text: $searchText, prompt: "搜索歌曲、歌手、专辑、歌单")
+        .searchable(text: $searchText, isPresented: $isSearchPresented, prompt: "搜索歌曲、歌手、专辑、歌单")
+        .searchFocused($isSearchFocused)
         .onSubmit(of: .search) {
             submitSearchAfterInputMethodCommits()
+        }
+        #endif
+        #if os(iOS)
+        .task(id: focusRequest) {
+            guard focusRequest > 0 else { return }
+            beginNewSearch()
         }
         #endif
         .onChange(of: searchText) { newValue in
@@ -484,11 +506,27 @@ struct SearchView: View {
         let query = (submittedText ?? searchText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
         searchText = query
+        isSearchFocused = false
+        isSearchPresented = false
         resignSearchInput()
         history.add(query)
         model.setQuery(query)
         guard !IOSUITestMode.isEnabled else { return }
         Task { await model.load(tab: model.tab, force: true) }
+    }
+
+    private func beginNewSearch() {
+        searchDebounceTask?.cancel()
+        searchText = ""
+        model.setQuery("")
+        isSearchPresented = true
+        isSearchFocused = false
+        Task { @MainActor in
+            // Re-arm focus after the searchable presentation has received the
+            // cleared query and become visible.
+            await Task.yield()
+            isSearchFocused = true
+        }
     }
 
     private var searchContextTaskID: String {
