@@ -1,4 +1,5 @@
 #if os(iOS)
+import Observation
 import SwiftUI
 import UIKit
 
@@ -17,6 +18,13 @@ final class NativeNowPlayingSource: ObservableObject {
 
 @MainActor
 enum NativeNowPlayingCoordinates {
+    static func interpolate(from start: CGRect, to end: CGRect, progress: CGFloat) -> CGRect {
+        CGRect(x: start.minX + (end.minX - start.minX) * progress,
+               y: start.minY + (end.minY - start.minY) * progress,
+               width: start.width + (end.width - start.width) * progress,
+               height: start.height + (end.height - start.height) * progress)
+    }
+
     /// Uniform player scale commutes with the container's transform. Translation
     /// is a vector, so convert two points and subtract, rather than mixing
     /// window distances with a scaled/offset presentation container's units.
@@ -67,6 +75,135 @@ struct NativeNowPlayingSourceAnchor: UIViewRepresentable {
 
 private final class NativeNowPlayingPassthroughView: UIView {
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool { false }
+}
+
+@MainActor
+@Observable
+final class NativeNowPlayingArtworkSource {
+    @ObservationIgnored fileprivate weak var marker: NativeNowPlayingArtworkAnchor.Marker?
+    fileprivate var isLifted = false
+}
+
+extension EnvironmentValues {
+    @Entry var nativeNowPlayingArtworkSource: NativeNowPlayingArtworkSource? = nil
+}
+
+struct NativeNowPlayingArtwork: ViewModifier {
+    @Environment(\.nativeNowPlayingArtworkSource) private var source
+    let image: UIImage?
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(source?.isLifted == true ? 0 : 1)
+            .animation(nil, value: source?.isLifted)
+            .background {
+                if let source {
+                    NativeNowPlayingArtworkAnchor(source: source, image: image, cornerRadius: cornerRadius)
+                }
+            }
+    }
+}
+
+fileprivate struct NativeNowPlayingArtworkAnchor: UIViewRepresentable {
+    let source: NativeNowPlayingArtworkSource
+    let image: UIImage?
+    let cornerRadius: CGFloat
+
+    final class Marker: UIView {
+        weak var source: NativeNowPlayingArtworkSource?
+        var image: UIImage?
+        var cornerRadius: CGFloat = 0
+
+        override func point(inside point: CGPoint, with event: UIEvent?) -> Bool { false }
+    }
+
+    func makeUIView(context: Context) -> Marker { Marker() }
+
+    func updateUIView(_ view: Marker, context: Context) {
+        view.source = source
+        view.image = image
+        view.cornerRadius = cornerRadius
+        source.marker = view
+    }
+
+    static func dismantleUIView(_ view: Marker, coordinator: Void) {
+        if let source = view.source, source.marker === view { source.marker = nil }
+    }
+}
+
+@MainActor
+private final class NativeNowPlayingArtworkFlight {
+    private let source: NativeNowPlayingArtworkSource
+    private let imageView: UIImageView
+    private let restFrame: CGRect
+    private let restRadius: CGFloat
+    private let targetFrame: CGRect
+    private var startFrame: CGRect
+    private var startRadius: CGFloat
+
+    init?(source: NativeNowPlayingArtworkSource, player: UIView, window: UIWindow, target: CGRect) {
+        guard let marker = source.marker, marker.window === window, marker.isDescendant(of: player),
+              let image = marker.image, let container = player.superview else { return nil }
+        let rest = marker.convert(marker.bounds, to: container)
+        let end = window.convert(target, to: container)
+        guard PlayerCollapseGeometry.isUsableFrame(rest), PlayerCollapseGeometry.isUsableFrame(end),
+              marker.bounds.width > 1 else { return nil }
+
+        self.source = source
+        restFrame = rest
+        targetFrame = end
+        restRadius = marker.cornerRadius * rest.width / marker.bounds.width
+        startFrame = rest
+        startRadius = restRadius
+        let imageView = UIImageView(image: image)
+        imageView.contentMode = .scaleAspectFill
+        imageView.clipsToBounds = true
+        imageView.layer.cornerCurve = .continuous
+        imageView.isUserInteractionEnabled = false
+        imageView.accessibilityElementsHidden = true
+        self.imageView = imageView
+        move(to: rest, radius: restRadius)
+        // A sibling of the player stays opaque as the player and controls fade.
+        container.insertSubview(imageView, aboveSubview: player)
+        source.isLifted = true
+    }
+
+    func follow(progress: CGFloat) {
+        move(to: NativeNowPlayingCoordinates.interpolate(from: startFrame, to: targetFrame, progress: progress),
+             radius: startRadius + (Theme.Radius.small - startRadius) * progress)
+    }
+
+    func land(at frame: CGRect?, in window: UIWindow?) {
+        let liveTarget = frame.flatMap { frame -> CGRect? in
+            guard let window, let container = imageView.superview, container.window === window else { return nil }
+            return window.convert(frame, to: container)
+        }
+        move(to: liveTarget ?? targetFrame, radius: Theme.Radius.small)
+    }
+
+    func rebound() { move(to: restFrame, radius: restRadius) }
+
+    func presentationPose() -> (frame: CGRect, radius: CGFloat)? {
+        imageView.layer.presentation().map { ($0.frame, $0.cornerRadius) }
+    }
+
+    func resume(from pose: (frame: CGRect, radius: CGFloat)) {
+        startFrame = pose.frame
+        startRadius = pose.radius
+        move(to: pose.frame, radius: pose.radius)
+    }
+
+    func finish() {
+        source.isLifted = false
+        imageView.removeFromSuperview()
+    }
+
+    private func move(to frame: CGRect, radius: CGFloat) {
+        imageView.bounds = CGRect(origin: .zero, size: frame.size)
+        imageView.center = CGPoint(x: frame.midX, y: frame.midY)
+        imageView.layer.cornerRadius = radius
+    }
 }
 
 /// Install as a stable, zero-size background of app content. Content owns its opaque backdrop.
@@ -122,8 +259,11 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
         private var rebound: UIViewPropertyAnimator?
         private var collapseGeometry: PlayerCollapseGeometry?
         private weak var collapseWindow: UIWindow?
+        private var artworkSource = NativeNowPlayingArtworkSource()
+        private var artworkFlight: NativeNowPlayingArtworkFlight?
         private var clippingBeforePull: Bool?
         private var initialCornerRadius: CGFloat = 0
+        private var initialPullAlpha: CGFloat = 1
         private let frameRate = PlayerMotionFrameRateLease()
         private var childDismissalInFlight = false
 
@@ -150,6 +290,7 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
                       presenter.presentedViewController == nil else { return }
                 let id = UUID()
                 presentationID = id
+                artworkSource = NativeNowPlayingArtworkSource()
                 let close: () -> Void = { [weak self] in
                     guard let self, self.presentationID == id else { return }
                     self.close()
@@ -167,6 +308,7 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
                 let root = AnyView(value.content
                     .environment(\.dismissNowPlayingAction, close)
                     .environment(\.dismissNowPlayingDragAction, drag)
+                    .environment(\.nativeNowPlayingArtworkSource, artworkSource)
                     .environment(\.nowPlayingDismissRegion, { [weak self] view, tap, excluded in
                         guard let self, self.presentationID == id else { return }
                         self.host?.registerRegion(view, acceptsTap: tap, excluded: excluded)
@@ -223,6 +365,7 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
             requestedDismissal = requested
             dismissalRevision = revision
             phase = .dismissing
+            if !active { finishArtworkFlight() }
             owner.dismiss(animated: active)
         }
 
@@ -254,6 +397,11 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
                 collapseGeometry = geometry
                 collapseWindow = window
                 initialCornerRadius = view.layer.cornerRadius
+                initialPullAlpha = view.alpha
+                if !UIAccessibility.isReduceMotionEnabled, !geometry.usesFallback, artworkFlight == nil {
+                    artworkFlight = NativeNowPlayingArtworkFlight(source: artworkSource, player: view,
+                                                                  window: window, target: geometry.targetFrame)
+                }
                 interaction = true
             }
             guard let view = host?.view, let geometry = collapseGeometry,
@@ -261,6 +409,7 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
                   let superview = view.superview,
                   let layoutFrame = PlayerCollapseGeometry.untransformedFrame(bounds: view.bounds, center: view.center),
                   geometry.canContinue(baseFrame: superview.convert(layoutFrame, to: window), viewport: window.bounds) else {
+                finishArtworkFlight()
                 cancelInteraction()
                 host?.cancelDismissPan()
                 return
@@ -268,6 +417,7 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
             frameRate.window = view.window
             frameRate.request()
             let reduced = UIAccessibility.isReduceMotionEnabled
+            if reduced { finishArtworkFlight() }
             let pose = geometry.pose(translation: translation, reduceMotion: reduced)
             guard let transform = NativeNowPlayingCoordinates.transform(pose.transform, from: window, to: superview) else {
                 cancelInteraction()
@@ -284,7 +434,9 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
             view.layer.cornerCurve = .continuous
             view.layer.cornerRadius = reduced ? 0
                 : initialCornerRadius + (40 - initialCornerRadius) * min(1, pose.progress * 4)
-            view.alpha = reduced ? 1 : 1 - pose.progress * 0.2
+            let fade = min(1, pose.progress * (artworkFlight == nil ? 0.2 : 1.55))
+            view.alpha = reduced ? 1 : initialPullAlpha * (1 - fade)
+            artworkFlight?.follow(progress: pose.progress)
         }
 
         private func dragEnded(_ translation: CGFloat, predicted: CGFloat) {
@@ -305,14 +457,20 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
         }
 
         private func stopRebound() {
-            if rebound != nil, let view = host?.view, let layer = view.layer.presentation() {
-                let transform = layer.affineTransform()
-                let radius = layer.cornerRadius
-                rebound?.stopAnimation(true)
-                view.transform = transform
-                view.layer.cornerRadius = radius
-            } else {
-                rebound?.stopAnimation(true)
+            if let rebound {
+                let view = host?.view
+                let layer = view?.layer.presentation()
+                let transform = layer?.affineTransform()
+                let radius = layer?.cornerRadius
+                let opacity = layer?.opacity
+                let artworkPose = artworkFlight?.presentationPose()
+                rebound.stopAnimation(true)
+                if let transform, let radius, let opacity {
+                    view?.transform = transform
+                    view?.layer.cornerRadius = radius
+                    view?.alpha = CGFloat(opacity)
+                }
+                if let artworkPose { artworkFlight?.resume(from: artworkPose) }
             }
             rebound = nil
             interactionEnding = false
@@ -327,6 +485,7 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
 
         private func restoreAfterPull() {
             guard let view = host?.view else {
+                finishArtworkFlight()
                 interactionEnding = false
                 collapseGeometry = nil
                 collapseWindow = nil
@@ -341,15 +500,18 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
                 : UIViewPropertyAnimator(duration: 0.40,
                                          dampingRatio: NowPlayingPresentationMetrics.transitionSpringDamping)
             rebound = animator
+            let artwork = artworkFlight
             animator.addAnimations {
                 view.transform = .identity
                 view.layer.cornerRadius = 0
                 view.alpha = 1
+                artwork?.rebound()
             }
             animator.addCompletion { [weak self, weak animator] _ in
                 guard let self, let animator, self.rebound === animator else { return }
                 self.rebound = nil
                 self.interactionEnding = false
+                self.finishArtworkFlight()
                 view.clipsToBounds = self.clippingBeforePull ?? false
                 self.collapseGeometry = nil
                 self.collapseWindow = nil
@@ -361,8 +523,14 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
             animator.startAnimation()
         }
 
+        private func finishArtworkFlight() {
+            artworkFlight?.finish()
+            artworkFlight = nil
+        }
+
         private func dismissalEnded(_ dismissed: NativeNowPlayingHost<AnyView>, completed: Bool) {
             guard host === dismissed else { return }
+            finishArtworkFlight()
             interaction = false
             interactionEnding = false
             collapseGeometry = nil
@@ -401,8 +569,9 @@ struct NativeNowPlayingCover<Content: View>: UIViewControllerRepresentable {
 
         func animationController(forDismissed dismissed: UIViewController) -> UIViewControllerAnimatedTransitioning? {
             NativeNowPlayingAnimator(opening: false, source: value.source,
-                                     collapseGeometry: collapseGeometry, collapseWindow: collapseWindow,
-                                     clippingBeforePull: clippingBeforePull) { [self, weak host] completed in
+                                      collapseGeometry: collapseGeometry, collapseWindow: collapseWindow,
+                                      clippingBeforePull: clippingBeforePull, artworkSource: artworkSource,
+                                      artworkFlight: artworkFlight) { [self, weak host] completed in
                 guard let host else { return }
                 dismissalEnded(host, completed: completed)
             }
@@ -512,6 +681,7 @@ private final class NativeNowPlayingHost<Content: View>: UIHostingController<Con
                                    height: translation.y + velocity.y * 0.2)
             let accepted = NativeNowPlayingDismissPolicy.shouldRequestDismiss(
                 translation: CGSize(width: translation.x, height: translation.y), predicted: predicted)
+            if accepted { onDragChanged?(max(0, translation.y)) }
             onDragEnded?(accepted ? translation.y : 0, accepted ? predicted.height : 0)
             panOriginY = nil
         case .cancelled, .failed:
@@ -569,6 +739,8 @@ private final class NativeNowPlayingAnimator: NSObject, UIViewControllerAnimated
     private let collapseGeometry: PlayerCollapseGeometry?
     private weak var collapseWindow: UIWindow?
     private let clippingBeforePull: Bool?
+    private let artworkSource: NativeNowPlayingArtworkSource?
+    private let artworkFlight: NativeNowPlayingArtworkFlight?
     private let completion: ((Bool) -> Void)?
     private var animator: UIViewPropertyAnimator?
     private let frameRate = PlayerMotionFrameRateLease()
@@ -576,12 +748,16 @@ private final class NativeNowPlayingAnimator: NSObject, UIViewControllerAnimated
     init(opening: Bool, source: NativeNowPlayingSource,
          collapseGeometry: PlayerCollapseGeometry? = nil, collapseWindow: UIWindow? = nil,
          clippingBeforePull: Bool? = nil,
+         artworkSource: NativeNowPlayingArtworkSource? = nil,
+         artworkFlight: NativeNowPlayingArtworkFlight? = nil,
          completion: ((Bool) -> Void)? = nil) {
         self.opening = opening
         self.source = source
         self.collapseGeometry = collapseGeometry
         self.collapseWindow = collapseWindow
         self.clippingBeforePull = clippingBeforePull
+        self.artworkSource = artworkSource
+        self.artworkFlight = artworkFlight
         self.completion = completion
     }
 
@@ -631,6 +807,24 @@ private final class NativeNowPlayingAnimator: NSObject, UIViewControllerAnimated
         let geometry = PlayerCollapseGeometry(baseFrame: frame, viewport: container.bounds,
                                               sourceFrame: frozenTarget ?? source.frame(in: container))
         let reduceMotion = UIAccessibility.isReduceMotionEnabled
+        let window = opening || reduceMotion ? nil : container.window
+        let liveTarget = window.flatMap { window -> CGRect? in
+            let geometry = PlayerCollapseGeometry(baseFrame: container.convert(frame, to: window),
+                                                  viewport: window.bounds, sourceFrame: source.frame(in: window))
+            guard let geometry, !geometry.usesFallback else { return nil }
+            return geometry.targetFrame
+        }
+        let artwork: NativeNowPlayingArtworkFlight?
+        if opening || reduceMotion {
+            artworkFlight?.finish()
+            artwork = nil
+        } else if let artworkFlight {
+            artwork = artworkFlight
+        } else if let artworkSource, let window, let liveTarget {
+            artwork = NativeNowPlayingArtworkFlight(source: artworkSource, player: player, window: window, target: liveTarget)
+        } else {
+            artwork = nil
+        }
         // Preserve artwork/text proportions. Independent x/y scaling flattened
         // the whole player into a strip instead of giving it iOS card motion.
         let containerTransform = geometry?.collapsedTransform(reduceMotion: reduceMotion)
@@ -658,6 +852,7 @@ private final class NativeNowPlayingAnimator: NSObject, UIViewControllerAnimated
         spring.addAnimations {
             player.transform = self.opening ? .identity : collapsed
             player.layer.cornerRadius = self.opening || reduceMotion ? 0 : 18
+            artwork?.land(at: liveTarget, in: window)
         }
         if opening {
             // Let the retained mini-player lead the motion by a beat, then
@@ -672,7 +867,7 @@ private final class NativeNowPlayingAnimator: NSObject, UIViewControllerAnimated
             // the album-art tile at the end of the collapse.
             spring.addAnimations(
                 { player.alpha = 0 },
-                delayFactor: reduceMotion ? 0 : NowPlayingPresentationMetrics.dismissFadeDelay
+                delayFactor: (reduceMotion || artwork != nil) ? 0 : NowPlayingPresentationMetrics.dismissFadeDelay
             )
         }
         spring.addCompletion { _ in
@@ -683,6 +878,7 @@ private final class NativeNowPlayingAnimator: NSObject, UIViewControllerAnimated
             player.clipsToBounds = originalClipping
             if self.opening && !completed { player.removeFromSuperview() }
             context.completeTransition(completed)
+            artwork?.finish()
             self.frameRate.stop()
             self.animator = nil
             self.completion?(completed)

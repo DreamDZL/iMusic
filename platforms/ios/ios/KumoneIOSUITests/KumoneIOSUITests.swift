@@ -158,14 +158,8 @@ final class KumoneIOSUITests: XCTestCase {
                                "Search landing no longer shows category tiles")
                 XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5),
                               "Selecting the search tab should focus its input")
-                let searchField = app.searchFields.firstMatch
+                let searchField = app.textFields["tabSearchInput"]
                 XCTAssertTrue(searchField.exists)
-                searchField.typeText("test")
-                button.tap()
-                XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5),
-                              "Reselecting search should focus the existing search field")
-                XCTAssertEqual(searchField.value as? String, "test",
-                               "Refocusing search must preserve the current query")
             }
             if destination.tab == "资料库" {
                 XCTAssertTrue(
@@ -216,7 +210,7 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(searchTab.waitForExistence(timeout: 15))
         searchTab.tap()
 
-        let field = app.searchFields.firstMatch
+        let field = app.textFields["tabSearchInput"]
         XCTAssertTrue(field.waitForExistence(timeout: 10),
                       "Selecting the search tab should expose its search field")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5),
@@ -224,6 +218,17 @@ final class KumoneIOSUITests: XCTestCase {
         field.typeText("test")
         XCTAssertEqual(field.value as? String, "test",
                        "The focused search field should accept input immediately")
+        field.typeText("\n")
+        let hiddenKeyboard = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
+                                                       object: app.keyboards.firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for: [hiddenKeyboard], timeout: 5), .completed)
+        XCTAssertEqual(field.value as? String, "test")
+
+        XCTAssertTrue(searchTab.isHittable)
+        searchTab.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        field.typeText("next")
+        XCTAssertEqual(field.value as? String, "next", "Reselecting Search should select the existing query for replacement")
     }
 
     @MainActor
@@ -244,6 +249,42 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
         cancel.tap()
         XCTAssertTrue(app.navigationBars["资料库"].waitForExistence(timeout: 10))
+    }
+
+    @MainActor
+    func testTabSearchInputIsOnlyOnSearchTab() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing"]
+        app.launch()
+
+        let tabs = app.tabBars.firstMatch
+        XCTAssertTrue(tabs.waitForExistence(timeout: 15))
+        for title in ["主页", "新发现", "电台", "资料库"] {
+            let tab = tabs.buttons[title]
+            XCTAssertTrue(tab.exists, title)
+            tab.tap()
+            XCTAssertFalse(app.textFields["tabSearchInput"].exists, title)
+            XCTAssertFalse(app.searchFields.firstMatch.exists, title)
+        }
+    }
+
+    @MainActor
+    func testRecommendedPlaylistBadgesDoNotChangeCoverLayout() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-imusic-ui-testing", "-imusic-test-home-covers"]
+        app.launch()
+
+        let withBadge = app.staticTexts["带播放量的歌单"]
+        let withoutBadge = app.staticTexts["无播放量的歌单"]
+        for _ in 0..<3 where !withBadge.isHittable { app.swipeUp() }
+        XCTAssertTrue(withBadge.waitForExistence(timeout: 5))
+        XCTAssertTrue(withoutBadge.waitForExistence(timeout: 5))
+        XCTAssertEqual(withBadge.frame.minY, withoutBadge.frame.minY, accuracy: 1)
+
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Home recommended covers with and without play counts"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     @MainActor

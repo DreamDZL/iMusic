@@ -29,9 +29,7 @@ public struct IOSMainWindow: View {
     @State private var searchPath = NavigationPath()
     @State private var libraryPath = NavigationPath()
     @State private var searchFocusRequest: UInt = 0
-    @State private var nativeSearchText = ""
-    @State private var nativeSearchSubmit: UInt = 0
-    @FocusState private var nativeSearchFocused: Bool
+    @State private var previousSearchTab: IOSTab = .home
     @StateObject private var router = AppRouter.shared
 
     public init() {}
@@ -93,10 +91,10 @@ public struct IOSMainWindow: View {
                     await LXSyncService.shared.reconnectIfConfigured()
                 }
             }
-            .onChange(of: selectedTab) { _, tab in
+            .onChange(of: selectedTab) { previous, tab in
                 guard tab == .search else { return }
-                if #available(iOS 26.0, *) { return }
-                requestSearchFocus()
+                previousSearchTab = previous
+                popToRoot(.search)
             }
             .onChange(of: router.pending) { _, request in
                 guard let request else { return }
@@ -212,22 +210,10 @@ public struct IOSMainWindow: View {
                 tabStack(.library) { LocalPlaylistsView() }
             }
 
-            // The search role pins the magnifying-glass tab at the trailing
-            // edge, matching Music's separated search control.
-            Tab("搜索", systemImage: "magnifyingglass", value: .search, role: .search) {
-                tabStack(.search) {
-                    SearchView(query: nativeSearchText, nativeSearchText: $nativeSearchText,
-                               nativeSearchSubmit: nativeSearchSubmit) { nativeSearchFocused = false }
-                }
+            Tab("搜索", systemImage: "magnifyingglass", value: .search) {
+                tabStack(.search) { searchPage }
             }
         }
-        .searchable(text: $nativeSearchText, prompt: "搜索艺人、歌曲、专辑和歌单")
-        .searchFocused($nativeSearchFocused)
-        .onSubmit(of: .search) {
-            guard selectedTab == .search else { return }
-            nativeSearchSubmit &+= 1
-        }
-        .tabViewSearchActivation(.searchTabSelection)
         .toolbarBackground(.hidden, for: .tabBar)
         .background(NativeTabReselectionObserver {
             popToRoot(selectedTab)
@@ -266,9 +252,16 @@ public struct IOSMainWindow: View {
         case .radio:
             tabStack(.radio) { FMView() }
         case .search:
-            tabStack(.search) { SearchView(query: "", focusRequest: searchFocusRequest) }
+            tabStack(.search) { searchPage }
         case .library:
             tabStack(.library) { LocalPlaylistsView() }
+        }
+    }
+
+    private var searchPage: some View {
+        SearchView(query: "", focusRequest: searchFocusRequest) {
+            guard selectedTab == .search, searchPath.isEmpty else { return }
+            selectedTab = previousSearchTab
         }
     }
 
@@ -290,15 +283,7 @@ public struct IOSMainWindow: View {
         case .search: searchPath = NavigationPath()
         case .library: libraryPath = NavigationPath()
         }
-        if tab == .search {
-            if #available(iOS 26.0, *) { return }
-            requestSearchFocus()
-        }
-    }
-
-    private func requestSearchFocus() {
-        // The durable request survives lazy mounting of the search-role tab.
-        searchFocusRequest &+= 1
+        if tab == .search { searchFocusRequest &+= 1 }
     }
 
     @ViewBuilder
@@ -862,6 +847,15 @@ private struct NativeTabReselectionObserver: UIViewControllerRepresentable {
         func tabBarController(_ tabBarController: UITabBarController, shouldSelect viewController: UIViewController) -> Bool {
             let allowed = originalDelegate?.tabBarController?(tabBarController, shouldSelect: viewController) ?? true
             if allowed, tabBarController.selectedViewController === viewController {
+                onReselect()
+            }
+            return allowed
+        }
+
+        @available(iOS 18.0, *)
+        func tabBarController(_ tabBarController: UITabBarController, shouldSelectTab tab: UITab) -> Bool {
+            let allowed = originalDelegate?.tabBarController?(tabBarController, shouldSelectTab: tab) ?? true
+            if allowed, tabBarController.selectedTab === tab {
                 onReselect()
             }
             return allowed

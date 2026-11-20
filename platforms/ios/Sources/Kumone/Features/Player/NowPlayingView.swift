@@ -433,7 +433,7 @@ struct NowPlayingView: View {
                 } else {
                     let artworkSize = max(0, min(size.height - 124, 240))
                     HStack(spacing: 28) {
-                        artworkView(size: artworkSize)
+                        artworkView(size: artworkSize, anchorsCollapse: true)
                             .scaleEffect(player.isPlaying ? 1 : 0.74)
                             .animation(reduceMotion ? nil : (player.isPlaying ? NowPlayingMotion.artworkPlay : NowPlayingMotion.artworkPause), value: player.isPlaying)
                             .modifier(trackSwipe)
@@ -590,7 +590,8 @@ struct NowPlayingView: View {
                     let rect = resolvedRect ?? portraitArtworkRect
                     artworkView(
                         size: rect.width,
-                        identifier: (showLyricsOnMobile || queuePageVisible) ? "lyricsHeaderArtwork" : "nowPlayingArtworkImage"
+                        identifier: (showLyricsOnMobile || queuePageVisible) ? "lyricsHeaderArtwork" : "nowPlayingArtworkImage",
+                        anchorsCollapse: true
                     )
                     .scaleEffect(rect.width > 120 && !player.isPlaying ? 0.74 : 1)
                     .animation(reduceMotion ? nil : (player.isPlaying ? NowPlayingMotion.artworkPlay : NowPlayingMotion.artworkPause), value: player.isPlaying)
@@ -848,7 +849,7 @@ struct NowPlayingView: View {
                     if usesSharedArtwork {
                         artworkPlaceholder(size: 56)
                     } else {
-                        artworkView(size: 56, identifier: "lyricsHeaderArtwork")
+                        artworkView(size: 56, identifier: "lyricsHeaderArtwork", anchorsCollapse: true)
                     }
                     trackMeta(compact: true)
                 }
@@ -1396,14 +1397,17 @@ struct NowPlayingView: View {
         #endif
     }
 
+    @ViewBuilder
     private func artworkView(
         size: CGFloat,
-        identifier: String = "nowPlayingArtworkImage"
+        identifier: String = "nowPlayingArtworkImage",
+        anchorsCollapse: Bool = false
     ) -> some View {
+        let cornerRadius = min(14, max(6, size * 0.045))
         // A flexible square canvas with the image as an overlay: the fill
         // image is cropped to the canvas, so non-square covers never spill
         // past the rounded clip while the frame animates.
-        Color.clear
+        let artwork = Color.clear
             .overlay {
                 if let artworkImage {
                     // A new identity per image lets the swap cross-fade.
@@ -1427,13 +1431,21 @@ struct NowPlayingView: View {
             .clipped()
         // Radius and shadow scale with the artwork, so the 56pt lyric header
         // thumbnail does not get the same 18pt corners as the hero artwork.
-        .clipShape(RoundedRectangle(cornerRadius: min(14, max(6, size * 0.045)), style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .shadow(color: .black.opacity(size > 120 ? 0.32 : 0.2), radius: size > 120 ? 22 : 6, y: size > 120 ? 12 : 3)
         .frame(width: size, height: size)
         .accessibilityLabel("专辑封面")
         .accessibilityIdentifier(identifier)
         #if os(iOS)
-        .modifier(NativeNowPlayingDismissRequest())
+        if anchorsCollapse {
+            artwork
+                .modifier(NativeNowPlayingArtwork(image: artworkImage, cornerRadius: cornerRadius))
+                .modifier(NativeNowPlayingDismissRequest())
+        } else {
+            artwork.modifier(NativeNowPlayingDismissRequest())
+        }
+        #else
+        artwork
         #endif
     }
 

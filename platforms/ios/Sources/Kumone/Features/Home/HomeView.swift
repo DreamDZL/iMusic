@@ -438,6 +438,18 @@ struct HomeView: View {
 
     @ViewBuilder
     private var standardHomeBody: some View {
+        if IOSUITestMode.isEnabled && ProcessInfo.processInfo.arguments.contains("-imusic-test-home-covers") {
+            Shelf(title: "推荐歌单", rowHeight: Theme.Layout.coverShelfHeight) {
+                CoverCardBody(coverURL: nil, title: "带播放量的歌单", playCount: 128_000)
+                CoverCardBody(coverURL: nil, title: "无播放量的歌单", subtitle: "推荐歌单测试")
+            }
+        } else {
+            homeFeed
+        }
+    }
+
+    @ViewBuilder
+    private var homeFeed: some View {
         switch model.state {
         case .idle, .loading:
             EmptyView()
@@ -888,23 +900,23 @@ struct CoverCardBody: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .bottomLeading) {
-                artwork
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
-                            .strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
-                    )
-                if playCount > 0 {
-                    PlayCountBadge(count: playCount)
-                        .padding(6)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            artwork
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
+                        .strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
+                        .allowsHitTesting(false)
                 }
-                if let onPlay {
-                    PlayOverlayButton(visible: isHovering, action: onPlay)
-                        .padding(8)
+                .overlay(alignment: .topTrailing) {
+                    if playCount > 0 {
+                        PlayCountBadge(count: playCount).padding(6)
+                    }
                 }
-            }
+                .overlay(alignment: .bottomLeading) {
+                    if let onPlay {
+                        PlayOverlayButton(visible: isHovering, action: onPlay).padding(8)
+                    }
+                }
 
             // Semantic type (Dynamic Type) instead of fixed 13/11pt.
             Text(title)

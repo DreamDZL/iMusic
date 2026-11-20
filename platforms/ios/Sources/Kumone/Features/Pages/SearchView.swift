@@ -489,49 +489,76 @@ private struct SearchSuggestionLabelStyle: LabelStyle {
 struct SearchView: View {
     @StateObject private var model: SearchViewModel
     @StateObject private var history = SearchHistoryStore.shared
-    @State private var localSearchText: String
+    @State private var searchText: String
     @State private var searchDebounceTask: Task<Void, Never>?
     @FocusState private var isSearchFocused: Bool
-    @State private var isSearchPresented = false
+    @State private var searchSelection: TextSelection?
+    @State private var handledFocusRequest: UInt = 0
     private let focusRequest: UInt
-    private let nativeSearchText: Binding<String>?
-    private let nativeSearchSubmit: UInt
-    private let resignNativeSearch: () -> Void
+    private let onCancel: (() -> Void)?
 
-    private var searchBinding: Binding<String> { nativeSearchText ?? $localSearchText }
-    private var searchText: String {
-        get { searchBinding.wrappedValue }
-        nonmutating set { searchBinding.wrappedValue = newValue }
-    }
-
-    init(query: String, focusRequest: UInt = 0, nativeSearchText: Binding<String>? = nil,
-         nativeSearchSubmit: UInt = 0, resignNativeSearch: @escaping () -> Void = {}) {
+    init(query: String, focusRequest: UInt = 0, onCancel: (() -> Void)? = nil) {
         _model = StateObject(wrappedValue: SearchViewModel(query: query))
-        _localSearchText = State(initialValue: query)
+        _searchText = State(initialValue: query)
         self.focusRequest = focusRequest
-        self.nativeSearchText = nativeSearchText
-        self.nativeSearchSubmit = nativeSearchSubmit
-        self.resignNativeSearch = resignNativeSearch
+        self.onCancel = onCancel
     }
 
     var body: some View {
         #if os(iOS)
-        if nativeSearchText != nil {
-            searchContent.onChange(of: nativeSearchSubmit) { _, _ in submitSearchAfterInputMethodCommits() }
+        if let onCancel {
+            searchContent.safeAreaInset(edge: .top, spacing: 0) {
+                tabSearchInput(onCancel: onCancel)
+            }
         } else {
             searchContent
-                .searchable(text: searchBinding, isPresented: $isSearchPresented, prompt: "搜索艺人、歌曲、专辑和歌单")
+                .searchable(text: $searchText, prompt: "搜索艺人、歌曲、专辑和歌单")
                 .searchFocused($isSearchFocused)
                 .onSubmit(of: .search) { submitSearchAfterInputMethodCommits() }
-                .task(id: focusRequest) {
-                    guard focusRequest > 0 else { return }
-                    beginNewSearch()
-                }
         }
         #else
         searchContent
         #endif
     }
+
+    #if os(iOS)
+    private func tabSearchInput(onCancel: @escaping () -> Void) -> some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                TextField("搜索艺人、歌曲、专辑和歌单", text: $searchText, selection: $searchSelection)
+                    .focused($isSearchFocused)
+                    .submitLabel(.search)
+                    .textInputAutocapitalization(.never)
+                    .accessibilityIdentifier("tabSearchInput")
+                    .onSubmit { submitSearchAfterInputMethodCommits() }
+            }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 44)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: Theme.Radius.standard))
+            if isSearchFocused {
+                Button("取消") {
+                    isSearchFocused = false
+                    onCancel()
+                }
+                .frame(minHeight: 44)
+            }
+        }
+        .padding(.horizontal, Theme.Layout.contentInset)
+        .padding(.vertical, 6)
+        .background(.bar)
+        .task(id: focusRequest) {
+            guard focusRequest != handledFocusRequest else { return }
+            isSearchFocused = true
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            searchSelection = TextSelection(range: searchText.startIndex..<searchText.endIndex)
+            handledFocusRequest = focusRequest
+        }
+    }
+    #endif
 
     private var searchContent: some View {
         ScrollView {
@@ -584,9 +611,9 @@ struct SearchView: View {
             }
             #endif
         }
-        .navigationTitle(searchText.isEmpty ? "搜索" : searchText)
+        .navigationTitle(onCancel != nil || searchText.isEmpty ? "搜索" : searchText)
         #if os(iOS)
-        .navigationBarTitleDisplayMode(searchText.isEmpty ? .large : .inline)
+        .navigationBarTitleDisplayMode(onCancel != nil || !searchText.isEmpty ? .inline : .large)
         #endif
         .task(id: searchContextTaskID) {
             searchDebounceTask?.cancel()
@@ -608,12 +635,7 @@ struct SearchView: View {
         guard !query.isEmpty else { return }
         searchText = query
         isSearchFocused = false
-        if nativeSearchText != nil {
-            resignNativeSearch()
-        } else {
-            isSearchPresented = false
-            resignSearchInput()
-        }
+        resignSearchInput()
         history.add(query)
         model.setQuery(query)
         startSearchLoad()
@@ -629,16 +651,6 @@ struct SearchView: View {
         searchDebounceTask = Task { @MainActor in
             guard !Task.isCancelled, model.query == query, model.tab == tab, model.platform == platform else { return }
             await model.load(tab: tab, force: force)
-        }
-    }
-
-    private func beginNewSearch() {
-        isSearchPresented = true
-        isSearchFocused = false
-        Task { @MainActor in
-            // Re-arm focus after the searchable presentation is visible.
-            await Task.yield()
-            isSearchFocused = true
         }
     }
 
@@ -939,6 +951,8 @@ struct SearchView: View {
 
     private func resignSearchInput() {
         #if os(iOS)
+        isSearchFocused = false
+        guard onCancel == nil else { return }
         UIApplication.shared.sendAction(
             #selector(UIResponder.resignFirstResponder),
             to: nil,

@@ -3,11 +3,13 @@
 ## Product scope
 - This repository's active product target is the native iOS IPA in `platforms/ios/`.
 - Do not implement or expand desktop or Android features unless the maintainer explicitly reopens that scope.
+- The iOS catalogue and LX playback support QQ Music, NetEase Cloud Music, Kuwo, and Kugou. Aggregate search queries these four providers. Preserve source identifiers on existing library entries even when their provider is no longer supported.
 - Treat this as a long-lived product: preserve user data, backward compatibility, clear ownership, and reproducible releases.
 
 ## Product and interface standard
 - The reference is Apple Music on iOS 27: native navigation, system Liquid Glass, restrained system typography, consistent spacing, accessible controls, and familiar music-library/player interactions.
 - Reuse shared design-system components. Do not introduce one-off colors, radii, row styles, or navigation behaviors without a documented reason.
+- Keep Search in the standard bottom tab group. Show the search field only on the Search page, and focus it on selection and reselection.
 - Do not copy Apple branding, proprietary assets, or imply affiliation. Reproduce interaction and visual conventions using iMusic identity and lawful assets.
 - Every screen must define loading, empty, error/retry, and populated states where applicable.
 
@@ -21,7 +23,8 @@
 
 ## Validation and delivery
 - Before changes: inspect `git status`; never overwrite unrelated user work.
-- Run relevant Swift package tests and iOS simulator/UI tests on macOS when available. On other platforms, state the validation limitation explicitly.
+- Use GitHub Actions in `DreamDZL/iMusic` for iOS compilation, simulator tests, and Release IPA builds. The build and packaging entry point is `.github/workflows/ios-release.yml`.
+- For pre-release validation, dispatch the workflow on an isolated CI branch and download the unsigned IPA from its Actions artifacts. Use the version-tag workflow for the formal GitHub Release.
 - Validate release version, bundle identifier, signing configuration, IPA contents, and update/download links before release.
 - Do not claim a build or test passed unless it was actually run and its result observed.
 - Keep generated IPA, DerivedData, simulator results, and local build artifacts out of Git.
