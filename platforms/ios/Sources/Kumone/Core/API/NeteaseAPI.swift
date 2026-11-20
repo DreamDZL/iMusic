@@ -75,8 +75,9 @@ enum NeteaseAPI {
     }
 
     static func logout() async {
-        _ = try? await client.weapi("/logout")
+        let cookies = client.scopedCookies()
         client.clearAuthCookies()
+        if let cookies { _ = try? await client.weapi("/logout", scoped: cookies) }
     }
 
     static func refreshLogin() async {
@@ -90,6 +91,11 @@ enum NeteaseAPI {
 
     static func userAccount() async throws -> UserProfile? {
         try await weapi(AccountResponse.self, "/w/nuser/account/get").profile
+    }
+
+    static func userAccount(using cookies: NeteaseClient.ScopedCookies) async throws -> UserProfile? {
+        let data = try await client.weapi("/w/nuser/account/get", scoped: cookies)
+        return try client.decoded(AccountResponse.self, from: data).profile
     }
 
     // MARK: - User library
@@ -182,21 +188,29 @@ enum NeteaseAPI {
     /// (as before) bumped the listening ranking but never wrote 最近播放 (#33).
     @discardableResult
     static func scrobbleStart(trackID: Int, sourceID: Int) async -> Bool {
-        await sendWeblog([[
+        await sendWeblog([startWeblog(trackID: trackID, sourceID: sourceID)])
+    }
+
+    private static func startWeblog(trackID: Int, sourceID: Int) -> [String: Any] {
+        [
             "action": "startplay",
             "json": [
                 "id": trackID, "type": "song",
                 "mainsite": "1", "mainsiteWeb": "1",
                 "content": "id=\(sourceID)",
             ],
-        ]])
+        ]
     }
 
     /// `play` weblog — increments the listening-ranking play count and time.
     @discardableResult
     static func scrobbleFinish(trackID: Int, sourceID: Int, seconds: Int) async -> Bool {
         guard seconds > 0 else { return false }
-        return await sendWeblog([[
+        return await sendWeblog([playWeblog(trackID: trackID, sourceID: sourceID, seconds: seconds)])
+    }
+
+    private static func playWeblog(trackID: Int, sourceID: Int, seconds: Int) -> [String: Any] {
+        [
             "action": "play",
             "json": [
                 "download": 0, "end": "playend", "id": trackID,
@@ -205,7 +219,29 @@ enum NeteaseAPI {
                 "mainsite": "1", "mainsiteWeb": "1",
                 "content": "id=\(sourceID)",
             ],
-        ]])
+        ]
+    }
+
+    static func submitListening(_ event: ListeningSyncEvent, trackID: Int,
+                                using cookies: NeteaseClient.ScopedCookies) async -> ListeningSubmissionResult {
+        let events = [startWeblog(trackID: trackID, sourceID: event.sourceID),
+                      playWeblog(trackID: trackID, sourceID: event.sourceID, seconds: event.seconds)]
+        guard let data = try? JSONSerialization.data(withJSONObject: events),
+              let logs = String(data: data, encoding: .utf8) else { return .uncertain }
+        do {
+            let reply = try await client.eapi("/feedback/weblog", ["logs": logs],
+                                              cookieOverrides: ["os": "osx"], scoped: cookies)
+            let code = try JSONDecoder().decode(CodeOnly.self, from: reply).code
+            switch code {
+            case 200: return .accepted
+            case 301, 401: return .retryable
+            default: return .uncertain
+            }
+        } catch NeteaseAPIError.http(401) {
+            return .retryable
+        } catch {
+            return ListeningSubmissionResult.transportFailure(error)
+        }
     }
 
     /// Routed via eapi with the desktop-client cookie (`os=osx`) to match the
@@ -871,6 +907,17 @@ enum NeteaseAPI {
 
     struct SearchResponse: Decodable {
         let result: SearchResult?
+    }
+
+    static func matchListeningTrack(_ track: ListeningTrackIdentity,
+                                    using cookies: NeteaseClient.ScopedCookies) async throws -> Int? {
+        guard track.durationMS > 0, !track.artists.isEmpty else { return nil }
+        let query = ([track.title] + track.artists).joined(separator: " ")
+        let data = try await client.eapi("/cloudsearch/pc", [
+            "s": query, "type": SearchType.songs.rawValue, "limit": 30, "offset": 0, "total": true
+        ], scoped: cookies)
+        let result = try client.decoded(SearchResponse.self, from: data)
+        return track.uniqueMatch(in: result.result?.songs ?? [])
     }
 
     static func search(_ keywords: String, type: SearchType,

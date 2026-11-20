@@ -58,8 +58,8 @@ struct Track: Codable, Hashable, Identifiable, Sendable {
     let id: Int
     let name: String
     let artists: [ArtistRef]
-    let album: AlbumRef
-    let durationMS: Int
+    private(set) var album: AlbumRef
+    private(set) var durationMS: Int
     let alias: [String]
     let transNames: [String]
     let fee: Int
@@ -179,7 +179,7 @@ struct Track: Codable, Hashable, Identifiable, Sendable {
         case "kugou": normalized = "kg"
         case "qq", "qqmusic", "qq-music": normalized = "tx"
         case "migu": normalized = "mg"
-        case "sd", "soda", "sodamusic", "soda-music", "qishui", "qishui-music": normalized = "sd"
+        case "sd", "qs", "soda", "sodamusic", "soda-music", "qishui", "qishui-music": normalized = "sd"
         default: normalized = rawSource.lowercased()
         }
         var copy = self

@@ -98,7 +98,7 @@ struct SourceDashboardView: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("纯音源播放", systemImage: "lock.shield")
                 .font(.headline)
-            Text("不会登录网易云，也不会请求软件预置的网易云、QQ、酷我、酷狗或咪咕目录接口。导入歌曲 JSON 后，播放地址、歌词和封面只由你选择的 LX 音源返回。")
+            Text("不会登录网易云，也不会请求软件预置的网易云、QQ、酷我或酷狗目录接口。导入歌曲 JSON 后，播放地址、歌词和封面只由你选择的 LX 音源返回。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

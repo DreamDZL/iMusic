@@ -328,7 +328,7 @@ struct LXSourceManagerView: View {
 
     private var activeCapabilitiesText: String {
         lxAPI.capabilities
-            .filter { !$0.value.isEmpty && $0.key != "sd" }
+            .filter { !$0.value.isEmpty }
             .map { "\(LXCatalogPlatform.displayName(for: $0.key))：\($0.value.joined(separator: ", "))" }
             .sorted()
             .joined(separator: "\n")

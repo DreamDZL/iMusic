@@ -91,7 +91,7 @@ struct PlaylistSummary: Decodable, Hashable, Identifiable {
 
 /// LX catalogue playlist. Unlike a NetEase playlist, its identifier is a
 /// source-owned string and must travel with the platform that returned it.
-struct LXPlaylistSummary: Hashable, Identifiable {
+struct LXPlaylistSummary: Hashable, Identifiable, Sendable {
     let id: String
     let name: String
     let coverURL: String?
@@ -100,6 +100,7 @@ struct LXPlaylistSummary: Hashable, Identifiable {
     let description: String?
     let author: String?
     let source: LXCatalogPlatform
+    var catalogueKey: String { "\(source.rawValue):\(id)" }
 }
 
 struct LXPlaylistDetail: Hashable {

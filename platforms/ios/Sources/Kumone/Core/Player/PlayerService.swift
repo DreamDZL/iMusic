@@ -267,6 +267,9 @@ final class PlayerService: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var isBuffering = false
     @Published private(set) var isResolvingSource = false
+    /// Safe, persistent failure text. Never publish a source's raw exception,
+    /// which may contain a signed audio URL or a user's source credential.
+    @Published private(set) var playbackFailure: String?
     @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var servedQuality: String?
     /// Resolved request tier when a source does not report actual audio metadata.
@@ -326,7 +329,13 @@ final class PlayerService: ObservableObject {
             }
             UserDefaults.standard.set(Double(playbackRate), forKey: "player.playbackRate")
             guard isPlaying else { return }
+#if os(iOS)
+            sampleListeningPlayback(stopping: true)
+#endif
             engine.rate = playbackRate
+#if os(iOS)
+            sampleListeningPlayback()
+#endif
             NowPlayingManager.shared.updateElapsed(progress, rate: Double(playbackRate))
         }
     }
@@ -372,7 +381,7 @@ final class PlayerService: ObservableObject {
         let available = AudioQuality.allCases.filter {
             names.contains($0.lxType) && seenTypes.insert($0.lxType).inserted
         }
-        return available.isEmpty ? [.standard] : available
+        return available
 #else
         return AudioQuality.allCases
 #endif
@@ -409,13 +418,20 @@ final class PlayerService: ObservableObject {
     private var lyricsResolutionTask: Task<Void, Never>?
     private var seekCoordinator = PlaybackSeekCoordinator()
     private var consecutiveFailures = 0
-    private var scrobbled = false
-    private var startScrobbled = false
 #if os(iOS)
     private var audioSessionActive = false
-    private var pendingNeteaseTrackIDs: [String: Int] = [:]
-
+    private var listeningPlayback: ListeningPlayback?
+    private var listeningSession: ListeningSyncSession?
+    private var listeningSourceID = 0
+    private var listeningSeekInProgress = false
+#else
+    private var scrobbled = false
+    private var startScrobbled = false
 #endif
+    private var fmHistory = PersonalFMTrackHistory()
+    private var fmSessionID = UUID()
+    private var fmAccountID: Int?
+    private var fmAdvanceTask: Task<Void, Never>?
     private var runtimeStarted = false
 
     private init() {
@@ -487,6 +503,9 @@ final class PlayerService: ObservableObject {
         statusObservation = engine.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
             Task { @MainActor in
                 self?.isBuffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+#if os(iOS)
+                self?.sampleListeningPlayback()
+#endif
             }
         }
 
@@ -514,22 +533,19 @@ final class PlayerService: ObservableObject {
             durationMS: 180_000,
             source: "wy"
         )
-        let lyrics = ParsedLyrics(lines: (0..<14).map { index in
-            let start = Double(index * 4)
-            let first = "第\(index + 1)句"
-            return LyricLine(
-                id: index,
-                time: start,
-                text: "\(first)同步歌词",
-                words: [
-                    LyricWord(text: first, start: start, duration: 1.2),
-                    LyricWord(text: "同步歌词", start: start + 1.2, duration: 1.4),
-                ]
-            )
-        })
+        let lyrics = Self.uiFixtureLyrics(for: track)
 
-        queue = [track]
-        queueItemIDs = [UUID().uuidString]
+        let nextTrack = Track(
+            id: 27_000_004,
+            name: "iMusic 下一首测试曲目",
+            artists: [ArtistRef(id: 27_000_002, name: "测试歌手")],
+            album: AlbumRef(id: 27_000_003, name: "测试专辑", picUrl: nil),
+            durationMS: 180_000,
+            source: "wy"
+        )
+        queue = ProcessInfo.processInfo.arguments.contains("-imusic-ui-next-track-fixture")
+            ? [track, nextTrack] : [track]
+        queueItemIDs = queue.map { _ in UUID().uuidString }
         shuffledQueue = []
         shuffledQueueItemIDs = []
         shuffleEnabled = false
@@ -541,6 +557,7 @@ final class PlayerService: ObservableObject {
         isPlaying = false
         isBuffering = false
         isResolvingSource = false
+        playbackFailure = nil
         duration = track.duration
         progress = 14
         requestedQuality = "320k"
@@ -550,6 +567,17 @@ final class PlayerService: ObservableObject {
         showNowPlaying = false
         NowPlayingManager.shared.updateMetadata(for: track, duration: track.duration)
         NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+    }
+
+    private static func uiFixtureLyrics(for track: Track) -> ParsedLyrics {
+        ParsedLyrics(lines: (0..<14).map { index in
+            let start = Double(index * 4)
+            let first = "\(track.id == 27_000_004 ? "下一首" : "")第\(index + 1)句"
+            return LyricLine(id: index, time: start, text: "\(first)同步歌词", words: [
+                LyricWord(text: first, start: start, duration: 1.2),
+                LyricWord(text: "同步歌词", start: start + 1.2, duration: 1.4),
+            ])
+        })
     }
 #endif
 
@@ -623,6 +651,9 @@ final class PlayerService: ObservableObject {
             ), queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
+#if os(iOS)
+                self?.sampleListeningPlayback()
+#endif
                 guard let self, !self.isScrubbing, !self.isResolvingSource,
                       let item = self.engine.currentItem else { return }
                 let seconds = item.currentTime().seconds
@@ -689,6 +720,9 @@ final class PlayerService: ObservableObject {
     /// Stop every playback surface when a track cannot start or the queue ends.
     /// Keep the selected track and elapsed position available for retry.
     private func settlePlaybackAsPaused(preservingCurrentItemForRetry: Bool = false) {
+#if os(iOS)
+        sampleListeningPlayback(stopping: true)
+#endif
         engine.pause()
         isScrubbing = false
         snapshotPausedPlaybackPosition()
@@ -733,6 +767,7 @@ final class PlayerService: ObservableObject {
             wasPlayingBeforeInterruption = isPlaying
             if isPlaying {
                 // The system already silenced us; sync our state and UI.
+                sampleListeningPlayback(stopping: true)
                 engine.pause()
                 snapshotPausedPlaybackPosition()
                 isPlaying = false
@@ -795,7 +830,7 @@ final class PlayerService: ObservableObject {
               context: PlayContext? = nil) {
         guard !tracks.isEmpty else { return }
         if let context { recordRecent(context) }
-        isFMMode = false
+        leaveFM()
         queue = tracks
         queueItemIDs = tracks.map { _ in UUID().uuidString }
         self.source = source
@@ -823,12 +858,13 @@ final class PlayerService: ObservableObject {
     func playShuffled(tracks: [Track], source: PlaySource, context: PlayContext? = nil) {
         guard !tracks.isEmpty else { return }
         // `toggleShuffle` is a no-op in FM mode; `play` leaves FM anyway.
-        isFMMode = false
+        leaveFM()
         if !shuffleEnabled { toggleShuffle() }
         play(tracks: tracks, source: source, context: context)
     }
 
     func playTrack(_ track: Track) {
+        leaveFM()
         if let idx = activeQueue.firstIndex(where: { $0.playbackKey == track.playbackKey }) {
             currentIndex = idx
             startPlaying(track)
@@ -851,7 +887,16 @@ final class PlayerService: ObservableObject {
 
     func togglePlayPause() {
         guard let track = currentTrack else { return }
+        #if os(iOS)
+        if IOSUITestMode.hasPlayerFixture, [27_000_001, 27_000_004].contains(track.id) {
+            isPlaying.toggle()
+            return // Silent fixture: no network, audio session or real media.
+        }
+        #endif
         if isPlaying {
+#if os(iOS)
+            sampleListeningPlayback(stopping: true)
+#endif
             engine.pause()
             snapshotPausedPlaybackPosition()
 #if os(iOS)
@@ -881,6 +926,9 @@ final class PlayerService: ObservableObject {
     }
 
     func pause() {
+#if os(iOS)
+        sampleListeningPlayback(stopping: true)
+#endif
         if sourceResolutionTask != nil {
             sourceResolutionTask?.cancel()
             sourceResolutionTask = nil
@@ -914,6 +962,15 @@ final class PlayerService: ObservableObject {
     }
 
     func next() {
+        #if os(iOS)
+        // The deterministic UI fixture exercises the same queue transition as
+        // an item-end notification without requiring real audio or a timer.
+        if ProcessInfo.processInfo.arguments.contains("-imusic-ui-testing"),
+           ProcessInfo.processInfo.arguments.contains("-imusic-ui-next-track-fixture") {
+            advanceToNext(userInitiated: false)
+            return
+        }
+        #endif
         advanceToNext(userInitiated: true)
     }
 
@@ -957,6 +1014,21 @@ final class PlayerService: ObservableObject {
             )
         }
         #endif
+    }
+
+    /// A cover swipe selects the preceding queue item even after four seconds;
+    /// the transport button retains its familiar restart-current-track action.
+    func skipToPreviousTrack() {
+        guard !isFMMode, !activeQueue.isEmpty else { return }
+        let previousIndex = currentIndex > 0 ? currentIndex - 1 : (repeatMode == .all ? activeQueue.count - 1 : -1)
+        guard activeQueue.indices.contains(previousIndex) else { return }
+        currentIndex = previousIndex
+        startPlaying(activeQueue[previousIndex])
+    }
+
+    func retryCurrentTrack() {
+        guard !isResolvingSource, let currentTrack else { return }
+        startPlaying(currentTrack, indexUnchanged: true, resumeAt: progress)
     }
 
     func refreshLyricsCursor() {
@@ -1011,6 +1083,10 @@ final class PlayerService: ObservableObject {
         let target = seconds.isFinite ? max(0, seconds) : 0
         seekRevision &+= 1
         let itemAvailable = !isResolvingSource && engine.currentItem != nil
+#if os(iOS)
+        sampleListeningPlayback(stopping: true)
+        listeningSeekInProgress = itemAvailable || isResolvingSource
+#endif
         let generation = seekCoordinator.beginSeek(to: target, itemAvailable: itemAvailable)
         isScrubbing = itemAvailable || isResolvingSource
         progress = target
@@ -1044,6 +1120,10 @@ final class PlayerService: ObservableObject {
                 self.progress = settledPosition
                 self.updateLyricsCursor(at: settledPosition)
                 self.isScrubbing = false
+#if os(iOS)
+                self.listeningSeekInProgress = false
+                self.sampleListeningPlayback()
+#endif
                 NowPlayingManager.shared.updateElapsed(
                     settledPosition,
                     rate: self.isPlaying ? Double(self.playbackRate) : 0
@@ -1198,10 +1278,22 @@ final class PlayerService: ObservableObject {
     // MARK: - Personal FM
 
     func startFM() {
-        guard !isFMMode || !isPlaying else { return }
+        let accountID = AccountStore.shared.profile?.userId
+        if isFMMode, fmAccountID != accountID { leaveFM() }
+        if isFMMode {
+            guard fmAdvanceTask == nil, !isPlaying else { return }
+            if let currentTrack, fmHistory.contains(currentTrack), engine.currentItem?.status == .readyToPlay {
+                togglePlayPause()
+            } else {
+                requestFMAdvance()
+            }
+            return
+        }
         recordRecent(.fm)
         isFMMode = true
-        fmUpcoming.removeAll()
+        fmSessionID = UUID()
+        fmAccountID = accountID
+        fmHistory = PersonalFMTrackHistory()
         shuffleEnabled = false
         repeatMode = .off
         queue = []
@@ -1211,52 +1303,74 @@ final class PlayerService: ObservableObject {
         playNextList = []
         playNextItemIDs = []
         currentIndex = -1
-        source = .none
-        Task { await fmAdvance() }
+        requestFMAdvance()
     }
 
     func fmNext() {
-        guard isFMMode else { return }
-        Task { await fmAdvance() }
+        requestFMAdvance()
     }
 
     func fmTrash() {
-        guard isFMMode, let track = currentTrack else { return }
-        Task {
-            try? await NeteaseAPI.fmTrash(id: track.id)
-            await fmAdvance()
+        guard isFMMode, let track = currentTrack, fmHistory.contains(track) else { return }
+        requestFMAdvance(trashing: track.id)
+    }
+
+    private func leaveFM() {
+        guard isFMMode else { return }
+        isFMMode = false
+        fmSessionID = UUID()
+        fmAccountID = nil
+        fmAdvanceTask?.cancel()
+        fmAdvanceTask = nil
+        fmUpcoming.removeAll()
+    }
+
+    private func requestFMAdvance(trashing trackID: Int? = nil) {
+        guard isFMMode, fmAdvanceTask == nil else { return }
+        guard fmAccountID == AccountStore.shared.profile?.userId else {
+            leaveFM()
+            return
+        }
+        let session = fmSessionID
+        fmAdvanceTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.fmSessionID == session { self.fmAdvanceTask = nil } }
+            guard self.isCurrentFMSession(session) else { return }
+            if let trackID { try? await NeteaseAPI.fmTrash(id: trackID) }
+            guard self.isCurrentFMSession(session) else { return }
+            await self.fmAdvance(session: session)
         }
     }
 
-    private func fmAdvance() async {
-        if fmUpcoming.isEmpty {
-            for attempt in 0..<3 {
-                if let tracks = try? await NeteaseAPI.personalFM(), !tracks.isEmpty {
-                    fmUpcoming = tracks
-                    break
-                }
-                if attempt == 2 {
-                    ToastCenter.shared.show(String(localized: "获取电台数据失败"))
-                    return
-                }
-                try? await Task.sleep(for: .seconds(1))
+    private func fmAdvance(session: UUID) async {
+        for attempt in 0..<3 where fmUpcoming.isEmpty {
+            let tracks = try? await NeteaseAPI.personalFM()
+            guard isCurrentFMSession(session) else { return }
+            fmUpcoming = fmHistory.unseen(tracks ?? [])
+            if fmUpcoming.isEmpty, attempt < 2 {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
             }
         }
-        guard !fmUpcoming.isEmpty else { return }
+        guard isCurrentFMSession(session) else { return }
+        guard !fmUpcoming.isEmpty else {
+            ToastCenter.shared.show(String(localized: "暂时没有新的电台歌曲，请重试"))
+            if engine.timeControlStatus != .playing { settlePlaybackAsPaused() }
+            return
+        }
         let track = fmUpcoming.removeFirst()
+        source = .none
         startPlaying(track, indexUnchanged: true)
-        if fmUpcoming.count < 1 {
-            if let more = try? await NeteaseAPI.personalFM() {
-                fmUpcoming.append(contentsOf: more)
-            }
-        }
+    }
+
+    private func isCurrentFMSession(_ session: UUID) -> Bool {
+        !Task.isCancelled && isFMMode && fmSessionID == session && fmAccountID == AccountStore.shared.profile?.userId
     }
 
     // MARK: - Advancing
 
     private func advanceToNext(userInitiated: Bool) {
         if isFMMode {
-            Task { await fmAdvance() }
+            requestFMAdvance()
             return
         }
         if !playNextList.isEmpty {
@@ -1313,7 +1427,11 @@ final class PlayerService: ObservableObject {
 
     private func handleItemEnded() {
         guard isPlaying else { return }
+#if os(iOS)
+        finishListeningPlayback()
+#else
         scrobbleIfNeeded(completed: true)
+#endif
         if sleepTimer.consumeEndOfCurrentTrack() {
             progress = duration
             updateLyricsCursor(at: duration)
@@ -1323,7 +1441,11 @@ final class PlayerService: ObservableObject {
             return
         }
         if repeatMode == .one, !isFMMode, playNextList.isEmpty {
+#if os(iOS)
+            listeningPlayback = ListeningPlayback()
+#else
             scrobbled = false
+#endif
             seek(to: 0)
 #if os(iOS)
             guard activateAudioSession() else {
@@ -1345,6 +1467,17 @@ final class PlayerService: ObservableObject {
     private func startPlaying(_ track: Track, indexUnchanged: Bool = false,
                               resumeAt: TimeInterval? = nil) {
         let track = track.normalizedForLXPlayback()
+#if os(iOS)
+        if resumeAt == nil || currentTrack?.playbackKey != track.playbackKey {
+            finishListeningPlayback()
+            listeningPlayback = ListeningPlayback()
+        } else {
+            sampleListeningPlayback(stopping: true)
+            if listeningPlayback == nil { listeningPlayback = ListeningPlayback() }
+        }
+        listeningSeekInProgress = false
+#endif
+        playbackFailure = nil
         isScrubbing = false
         isResolvingSource = true
         // Stop and detach the previous item before starting an asynchronous
@@ -1364,9 +1497,15 @@ final class PlayerService: ObservableObject {
         }
         itemStatusObservation?.invalidate()
         itemStatusObservation = nil
+#if !os(iOS)
         scrobbleIfNeeded(completed: false)
+#endif
         currentTrack = track
+        #if os(iOS)
+        if !IOSUITestMode.hasPlayerFixture { LocalPlaylistStore.shared.recordRecent(track) }
+        #else
         LocalPlaylistStore.shared.recordRecent(track)
+        #endif
         progress = seekCoordinator.initialPlaybackPosition
         isScrubbing = seekCoordinator.pendingPosition != nil
         duration = track.duration
@@ -1377,8 +1516,10 @@ final class PlayerService: ObservableObject {
         lyrics = nil
         lastPublishedSystemLyric = nil
         installLyricCursorObserver()
+#if !os(iOS)
         scrobbled = false
         startScrobbled = false
+#endif
         isPlaying = true
         lyricsCursor.activeIndex = nil
         // Before the URL is even resolved: holds the bars still rather than
@@ -1392,6 +1533,17 @@ final class PlayerService: ObservableObject {
 
         NowPlayingManager.shared.updateMetadata(for: track, duration: track.duration)
         persistState()
+
+        #if os(iOS)
+        if IOSUITestMode.hasPlayerFixture, [27_000_001, 27_000_004].contains(track.id) {
+            isPlaying = false
+            isResolvingSource = false
+            lyrics = Self.uiFixtureLyrics(for: track)
+            updateLyricsCursor(at: progress)
+            AudioSpectrum.shared.markIdle()
+            return
+        }
+        #endif
 
         sourceResolutionTask = Task { [weak self] in
             guard let self else { return }
@@ -1413,6 +1565,9 @@ final class PlayerService: ObservableObject {
         defer {
             if generation == resolveGeneration {
                 isResolvingSource = false
+#if os(iOS)
+                sampleListeningPlayback()
+#endif
             }
         }
         let quality = SettingsManager.shared.audioQuality.rawValue
@@ -1435,8 +1590,9 @@ final class PlayerService: ObservableObject {
             resolvedRequestQuality = local.quality
         } else {
             guard !LXSourceStore.shared.playbackSources.isEmpty else {
-                guard generation == resolveGeneration else { return }
-                ToastCenter.shared.show("请先在设置 → LX 音源中启用第三方音源")
+                guard !Task.isCancelled, generation == resolveGeneration else { return }
+                playbackFailure = "请先在设置 → LX 音源中启用第三方音源"
+                ToastCenter.shared.show(playbackFailure!)
                 settlePlaybackAsPaused()
                 return
             }
@@ -1456,6 +1612,8 @@ final class PlayerService: ObservableObject {
                     } catch {
                         guard generation == resolveGeneration, !Task.isCancelled else { return }
                         lastError = error
+                        if let lxError = error as? LXUserAPIService.LXError,
+                           case .missingCapability = lxError { break }
                         if attempt == 0 {
                             try? await Task.sleep(for: .milliseconds(350))
                         }
@@ -1468,9 +1626,11 @@ final class PlayerService: ObservableObject {
                 servedByLXQuality = resolved.qualityIsVerified ? resolved.quality : nil
                 resolvedRequestQuality = resolved.quality
             } catch {
-                guard generation == resolveGeneration else { return }
+                guard !Task.isCancelled, generation == resolveGeneration else { return }
                 consecutiveFailures += 1
-                ToastCenter.shared.show("《\(track.name)》播放失败：\(error.localizedDescription)")
+                let message = PlaybackFailureMessage.source(error)
+                playbackFailure = message
+                ToastCenter.shared.show("《\(track.name)》播放失败：\(message)")
                 // A source-level error is not fixed by immediately trying five
                 // more queue entries. Keep the current song visible so the user
                 // can adjust the source or retry after reading the real error.
@@ -1551,11 +1711,15 @@ final class PlayerService: ObservableObject {
         if let old = endObserver {
             NotificationCenter.default.removeObserver(old)
         }
+        let endedItemID = ObjectIdentifier(item)
         endObserver = NotificationCenter.default.addObserver(
             forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.handleItemEnded()
+                guard let self, generation == self.resolveGeneration,
+                      let currentItem = self.engine.currentItem,
+                      ObjectIdentifier(currentItem) == endedItemID else { return }
+                self.handleItemEnded()
             }
         }
         engine.replaceCurrentItem(with: item)
@@ -1571,6 +1735,9 @@ final class PlayerService: ObservableObject {
         }
         let seekPosition = seekCoordinator.takePendingPosition()
         if let seekPosition {
+#if os(iOS)
+            listeningSeekInProgress = true
+#endif
             let initialSeekGeneration = seekCoordinator.beginResolvedItemSeek()
             engine.seek(to: CMTime(seconds: seekPosition, preferredTimescale: 600),
                         toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
@@ -1588,6 +1755,10 @@ final class PlayerService: ObservableObject {
                     self.progress = settledPosition
                     self.updateLyricsCursor(at: settledPosition)
                     self.isScrubbing = false
+#if os(iOS)
+                    self.listeningSeekInProgress = false
+                    self.sampleListeningPlayback()
+#endif
                     NowPlayingManager.shared.updateElapsed(
                         settledPosition,
                         rate: self.isPlaying && finished ? Double(self.playbackRate) : 0
@@ -1610,16 +1781,14 @@ final class PlayerService: ObservableObject {
         }
         isPlaying = true
 
+#if !os(iOS)
         if !startScrobbled {
             startScrobbled = true
-#if os(iOS)
-            syncListeningStart(track: track, sourceID: source.sourceID)
-#else
             let tid = track.id
             let sid = source.sourceID
             Task.detached { await NeteaseAPI.scrobbleStart(trackID: tid, sourceID: sid) }
-#endif
         }
+#endif
 
         // A local file or signed provider URL may resolve successfully while
         // AVFoundation rejects the actual resource. Check once after playback
@@ -1648,7 +1817,9 @@ final class PlayerService: ObservableObject {
               let currentItem = engine.currentItem,
               ObjectIdentifier(currentItem) == itemID,
               isPlaying else { return }
-        ToastCenter.shared.show("音频源无法播放\(reason.map { "：\($0)" } ?? "")")
+        // AVFoundation's localizedDescription may embed the full provider URL.
+        playbackFailure = PlaybackFailureMessage.unplayableMedia
+        ToastCenter.shared.show(PlaybackFailureMessage.unplayableMedia)
         settlePlaybackAsPaused()
     }
 
@@ -1672,6 +1843,7 @@ final class PlayerService: ObservableObject {
     private func loadLyrics(for track: Track, generation: Int) async {
 #if os(iOS)
         let sourceKey = (track.source ?? track.sourceMetadata["source"] ?? "").lowercased()
+        guard !Task.isCancelled, generation == resolveGeneration else { return }
         if ["wy", "netease", "163"].contains(sourceKey),
            let response = try? await NeteaseAPI.lyric(id: track.id) {
             guard generation == resolveGeneration else { return }
@@ -1713,8 +1885,9 @@ final class PlayerService: ObservableObject {
         // If this platform has no lyric endpoint or no result, search every
         // supported catalogue platform by metadata. IDs are never reused
         // across platforms, so a matched track is required before fetching.
-        let fallbackPlatforms = ["tx", "wy", "kw", "kg", "mg"]
+        let fallbackPlatforms = ["tx", "wy", "kw", "kg"]
         for platform in fallbackPlatforms where platform != sourceKey {
+            guard !Task.isCancelled, generation == resolveGeneration else { return }
             guard let matched = await LXCatalogService.matchingTrack(track, on: platform),
                   let native = try? await LXCatalogService.nativeLyrics(for: matched) else {
                 continue
@@ -1747,7 +1920,7 @@ final class PlayerService: ObservableObject {
 
         // Do not leave the lyric panel in a permanent loading state when no
         // provider has lyrics for this track.
-        guard generation == resolveGeneration else { return }
+        guard !Task.isCancelled, generation == resolveGeneration else { return }
         lyrics = ParsedLyrics()
         updateLyricsCursor(at: progress)
         return
@@ -1775,7 +1948,7 @@ final class PlayerService: ObservableObject {
 #if os(iOS)
         // LX Mobile's built-in catalogue adapters own online lyrics. The
         // imported User API normally exposes only `musicUrl`, so asking it
-        // for `lyric` cannot work for kw/kg/tx/mg sources.
+        // for `lyric` cannot work for kw/kg/tx sources.
         if track.source != nil,
            let native = try? await LXCatalogService.nativeLyrics(for: track) {
             let parsed = LyricsParser.parseLX(lyric: native.lyric,
@@ -1814,86 +1987,44 @@ final class PlayerService: ObservableObject {
     // MARK: - Scrobble
 
 #if os(iOS)
-    private func neteaseTrackID(for track: Track) async -> Int? {
-        if track.source == nil && track.sourceMetadata["source"] == nil {
-            return track.id
+    private func sampleListeningPlayback(stopping: Bool = false) {
+        guard listeningPlayback != nil, !listeningSeekInProgress, !isResolvingSource,
+              let item = engine.currentItem else { return }
+        let currentSession = AccountStore.shared.listeningSession
+        let activelyPlaying = !stopping && isPlaying && engine.timeControlStatus == .playing
+        if listeningSession == nil, activelyPlaying,
+           let currentSession {
+            listeningSession = currentSession
+            listeningSourceID = source.sourceID
         }
-        let matched = try? await NeteaseAPI.matchingSong(
-            for: track, limit: 12, requireDuration: false
-        )
-        return matched?.id
-    }
-
-    private func syncListeningStart(track: Track, sourceID: Int) {
-        // Listening history only needs the NetEase auth cookie. Requiring the
-        // profile here made a temporary account/profile request failure look
-        // like a logged-out account and silently skipped the sync.
-        guard NeteaseClient.shared.isLoggedIn else { return }
-        let key = track.playbackKey
-        Task { [weak self] in
-            guard let trackID = await self?.neteaseTrackID(for: track) else { return }
-            // Keep the match available immediately. A very short track or a
-            // fast user skip can finish before the startplay request returns.
-            self?.pendingNeteaseTrackIDs[key] = trackID
-            // This is an account history event only. The actual audio URL was
-            // already resolved through the selected LX User API source.
-            for attempt in 0..<3 {
-                if await NeteaseAPI.scrobbleStart(trackID: trackID, sourceID: sourceID) {
-                    guard !Task.isCancelled else { return }
-                    return
-                }
-                guard attempt < 2, !Task.isCancelled else { return }
-                try? await Task.sleep(for: .seconds(Double(attempt + 1)))
-            }
-        }
-    }
-
-    private func syncListeningFinish(track: Track, sourceID: Int, seconds: Int) {
-        guard seconds > 0 else { return }
-        guard NeteaseClient.shared.isLoggedIn else {
-            ListeningSyncStore.shared.recordFailure()
+        guard let listeningSession else { return }
+        guard listeningSession == currentSession else {
+            // Finish the original owner's interval without counting audio
+            // played since the account changed.
+            listeningPlayback?.discontinuity()
             return
         }
-        let key = track.playbackKey
-        let knownID = pendingNeteaseTrackIDs[key]
-        Task { [weak self] in
-            let trackID: Int?
-            if let knownID {
-                trackID = knownID
-            } else {
-                trackID = await self?.neteaseTrackID(for: track)
-            }
-            guard let trackID else {
-                ListeningSyncStore.shared.recordFailure()
-                return
-            }
-
-            // A failed request must not be presented as a successful local
-            // sync. Retry transient cookie/network/API failures before giving
-            // up; the next track can still use its own independent event.
-            for attempt in 0..<3 {
-                if await NeteaseAPI.scrobbleFinish(trackID: trackID,
-                                                   sourceID: sourceID,
-                                                   seconds: seconds) {
-                    guard !Task.isCancelled else { return }
-                    ListeningSyncStore.shared.record(seconds: seconds)
-                    self?.pendingNeteaseTrackIDs.removeValue(forKey: key)
-                    return
-                }
-                if attempt == 0 {
-                    await NeteaseAPI.refreshLogin()
-                }
-                guard attempt < 2, !Task.isCancelled else { return }
-                try? await Task.sleep(for: .seconds(Double(attempt + 1)))
-            }
-
-            guard !Task.isCancelled else { return }
-            ListeningSyncStore.shared.recordFailure()
-            ToastCenter.shared.show("网易云听歌时长同步失败，本次未计入同步时长")
-        }
+        listeningPlayback?.sample(position: item.currentTime().seconds,
+                                  uptime: ProcessInfo.processInfo.systemUptime,
+                                  rate: Double(playbackRate), isPlaying: activelyPlaying)
     }
-#endif
 
+    private func finishListeningPlayback() {
+        sampleListeningPlayback(stopping: true)
+        let playback = listeningPlayback
+        let owner = listeningSession
+        listeningPlayback = nil
+        listeningSession = nil
+        guard let playback, let owner, let track = currentTrack else { return }
+        let duration = engine.currentItem?.duration.seconds ?? 0
+        guard playback.qualifiesForSync(trackDuration: duration.isFinite && duration > 0 ? duration : track.duration) else { return }
+        let identity = ListeningTrackIdentity(track: track, observedDuration: duration)
+        let event = ListeningSyncEvent(id: playback.id, track: identity,
+                                       sourceID: identity.neteaseID == nil ? 0 : listeningSourceID,
+                                       seconds: playback.reportableSeconds)
+        ListeningSyncStore.shared.enqueue(event, accountID: owner.accountID)
+    }
+#else
     private func scrobbleIfNeeded(completed: Bool) {
         guard let track = currentTrack, !scrobbled, progress > 1 else { return }
         scrobbled = true
@@ -1902,14 +2033,11 @@ final class PlayerService: ObservableObject {
         // interval into a zero-second weblog event.
         let seconds = completed ? max(Int(duration), Int(progress)) : Int(progress)
         let sourceID = source.sourceID
-#if os(iOS)
-        syncListeningFinish(track: track, sourceID: sourceID, seconds: seconds)
-#else
         Task.detached {
             await NeteaseAPI.scrobbleFinish(trackID: track.id, sourceID: sourceID, seconds: seconds)
         }
-#endif
     }
+#endif
 
     // MARK: - Shuffle helpers
 
@@ -1989,6 +2117,9 @@ final class PlayerService: ObservableObject {
     }
 
     private func persistState() {
+        #if os(iOS)
+        guard !IOSUITestMode.hasPlayerFixture else { return }
+        #endif
         let persistedQueue = Array(queue.prefix(1000))
         let persistedQueueItemIDs = Array(queueItemIDs.prefix(1000))
         let persistedItemIDSet = Set(persistedQueueItemIDs)

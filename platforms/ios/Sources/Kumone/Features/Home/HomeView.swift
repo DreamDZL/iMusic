@@ -41,7 +41,6 @@ final class HomeViewModel: ObservableObject {
         let loggedIn: Bool
         let mode: HomeRecommendationMode
         let platform: LXCatalogPlatform
-        let qishuiSessionRevision: Int
     }
 
     private var activeRequest: LoadRequest?
@@ -55,8 +54,7 @@ final class HomeViewModel: ObservableObject {
         HomeRecommendationCache.Key(
             loggedIn: request.loggedIn,
             mode: request.mode.rawValue,
-            platform: request.platform.rawValue,
-            qishuiSessionRevision: request.qishuiSessionRevision
+            platform: request.platform.rawValue
         )
     }
 
@@ -102,10 +100,8 @@ final class HomeViewModel: ObservableObject {
     }
 
     func load(loggedIn: Bool, mode: HomeRecommendationMode,
-              platform: LXCatalogPlatform,
-              qishuiSessionRevision: Int = 0) async {
-        let request = LoadRequest(loggedIn: loggedIn, mode: mode, platform: platform,
-                                  qishuiSessionRevision: qishuiSessionRevision)
+              platform: LXCatalogPlatform) async {
+        let request = LoadRequest(loggedIn: loggedIn, mode: mode, platform: platform)
         let requestKey = cacheKey(for: request)
 
         // Apply a source-specific snapshot before starting a request. This is
@@ -269,8 +265,7 @@ final class HomeViewModel: ObservableObject {
     }
 
     func reload(loggedIn: Bool, mode: HomeRecommendationMode,
-                platform: LXCatalogPlatform,
-                qishuiSessionRevision: Int = 0) async {
+                platform: LXCatalogPlatform) async {
         if let activeRequest {
             recommendationCache.invalidate(cacheKey(for: activeRequest))
         }
@@ -281,8 +276,7 @@ final class HomeViewModel: ObservableObject {
         resetContent()
         lastLoadedAt = nil
         state = .idle
-        await load(loggedIn: loggedIn, mode: mode, platform: platform,
-                   qishuiSessionRevision: qishuiSessionRevision)
+        await load(loggedIn: loggedIn, mode: mode, platform: platform)
     }
 
     private func loadRadarPlaylists() async {
@@ -466,13 +460,11 @@ struct HomeView: View {
         if force {
             await model.reload(loggedIn: account.isLoggedIn,
                                mode: settings.homeRecommendationMode,
-                               platform: settings.homeRecommendationPlatform,
-                               qishuiSessionRevision: 0)
+                               platform: settings.homeRecommendationPlatform)
         } else {
             await model.load(loggedIn: account.isLoggedIn,
                              mode: settings.homeRecommendationMode,
-                             platform: settings.homeRecommendationPlatform,
-                             qishuiSessionRevision: 0)
+                             platform: settings.homeRecommendationPlatform)
         }
     }
 
@@ -502,7 +494,7 @@ struct HomeView: View {
     }
 
     private var homePlatforms: [LXCatalogPlatform] {
-        LXCatalogPlatform.catalogueCases.filter { $0 != .aggregate }
+        LXCatalogPlatform.discoveryCases
     }
 
     private var homeSourceTitle: String {

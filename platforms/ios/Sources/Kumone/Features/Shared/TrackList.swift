@@ -23,6 +23,8 @@ struct TrackRow: View {
     var onRemoved: (() -> Void)?
     /// Hairline under the text column, inset like system list separators.
     var showsSeparator = false
+    var sourceAlternatives: [Track] = []
+    var onPlayFromSource: ((Track) -> Void)?
     let onPlay: () -> Void
 
     @EnvironmentObject private var player: PlayerService
@@ -302,6 +304,15 @@ struct TrackRow: View {
     @ViewBuilder
     private var contextMenuItems: some View {
         Button("播放") { onPlay() }
+        if !sourceAlternatives.isEmpty, let onPlayFromSource {
+            Menu("选择播放来源") {
+                ForEach([track] + sourceAlternatives, id: \.playbackKey) { candidate in
+                    Button(LXCatalogPlatform.displayName(for: SearchRecordingGroups.source(of: candidate))) {
+                        onPlayFromSource(candidate)
+                    }
+                }
+            }
+        }
         Button("下一首播放") {
             player.addToPlayNext(track)
         }
@@ -578,6 +589,7 @@ struct TrackListView: View {
     /// Footer with song count and total length; for playlist/album pages,
     /// not for short song shelves inside feeds.
     var showsSummary = true
+    var sourceAlternatives: [String: [Track]] = [:]
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
@@ -620,8 +632,27 @@ struct TrackListView: View {
                         playability: playability(of: track),
                         removableFromPlaylistID: removableFromPlaylistID,
                         onRemoved: { onRemoved?(track) },
-                        showsSeparator: showsSeparators && index < tracks.count - 1
+                        showsSeparator: showsSeparators && index < tracks.count - 1,
+                        sourceAlternatives: sourceAlternatives[track.playbackKey] ?? [],
+                        onPlayFromSource: { alternate in
+                            guard playability(of: alternate) == .playable else {
+                                ToastCenter.shared.show(String(localized: "所选来源暂不可播放"))
+                                return
+                            }
+                            let queue = tracks.map { $0.playbackKey == track.playbackKey ? alternate : $0 }
+                            var groups = sourceAlternatives
+                            if track.playbackKey != alternate.playbackKey {
+                                let group = [track] + (groups.removeValue(forKey: track.playbackKey) ?? [])
+                                groups[alternate.playbackKey] = group.filter { $0.playbackKey != alternate.playbackKey }
+                            }
+                            SearchPlaybackAlternatives.remember(for: queue, groups: groups)
+                            player.play(tracks: queue.filter { playability(of: $0) == .playable },
+                                        source: source, startAt: alternate, context: context)
+                        }
                     ) {
+                        if !sourceAlternatives.isEmpty {
+                            SearchPlaybackAlternatives.remember(for: tracks, groups: sourceAlternatives)
+                        }
                         player.play(tracks: playableTracks, source: source, startAt: track,
                                     context: context)
                     }
@@ -702,7 +733,6 @@ struct AddToPlaylistSheet: View {
     @StateObject private var localStore = LocalPlaylistStore.shared
     @State private var query = ""
     @State private var showCreate = false
-    @State private var newName = ""
     /// Bumped on every row toggle, for the selection haptic.
     @State private var toggleCount = 0
 
@@ -711,7 +741,6 @@ struct AddToPlaylistSheet: View {
             List {
                 Section {
                     Button {
-                        newName = ""
                         showCreate = true
                     } label: {
                         newPlaylistRow
@@ -765,13 +794,18 @@ struct AddToPlaylistSheet: View {
                 }
             }
             .sensoryFeedback(.selection, trigger: toggleCount)
-            .alert("新建歌单", isPresented: $showCreate) {
-                TextField("歌单名称", text: $newName)
-                Button("创建") { createAndAdd() }
-                    .disabled(trimmedNewName.isEmpty)
-                Button("取消", role: .cancel) {}
-            } message: {
-                Text(tracks.count == 1 ? "这首歌会添加到新歌单。" : "这些歌曲会添加到新歌单。")
+            .sheet(isPresented: $showCreate) {
+                NavigationStack {
+                    NewLocalPlaylistSheet(
+                        create: { name, artwork in
+                            localStore.create(name: name, tracks: tracks, coverImageData: artwork)
+                        },
+                        onCreated: { name, _ in
+                            ToastCenter.shared.show("已收藏到「\(name)」")
+                            dismiss()
+                        }
+                    )
+                }
             }
         }
         #if os(iOS)
@@ -859,10 +893,6 @@ struct AddToPlaylistSheet: View {
         }
     }
 
-    private var trimmedNewName: String {
-        newName.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     private func isSaved(in playlist: LocalPlaylist) -> Bool {
         localStore.containsAll(tracks, in: playlist.id)
     }
@@ -879,10 +909,4 @@ struct AddToPlaylistSheet: View {
         toggleCount += 1
     }
 
-    private func createAndAdd() {
-        let name = trimmedNewName
-        guard !name.isEmpty, localStore.create(name: name, tracks: tracks) != nil else { return }
-        ToastCenter.shared.show("已收藏到「\(name)」")
-        dismiss()
-    }
 }

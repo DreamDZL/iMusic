@@ -70,4 +70,37 @@ final class LocalPlaylistMembershipTests: XCTestCase {
         XCTAssertFalse(store.containsAll([], in: id))
         XCTAssertFalse(store.containsAll([track("a", name: "First")], in: UUID()))
     }
+
+    func testNewPlaylistUsesFirstTrackArtworkAndKeepsItCurrent() throws {
+        let store = makeStore()
+        let first = Track(
+            id: 1, name: "First", artists: [ArtistRef(id: 2, name: "Artist")],
+            album: AlbumRef(id: 3, name: "Album", picUrl: "https://example.com/first.jpg"),
+            durationMS: 200_000, source: "tx", sourceMetadata: ["songmid": "first"]
+        )
+        let id = try XCTUnwrap(store.create(name: "Mix", tracks: [first]))
+        XCTAssertEqual(store.playlist(id: id)?.coverURL, first.album.picUrl)
+
+        let next = Track(
+            id: 4, name: "Next", artists: [ArtistRef(id: 2, name: "Artist")],
+            album: AlbumRef(id: 5, name: "Next Album", picUrl: "https://example.com/next.jpg"),
+            durationMS: 200_000, source: "tx", sourceMetadata: ["songmid": "next"]
+        )
+        store.add(next, to: id)
+        XCTAssertEqual(store.playlist(id: id)?.coverURL, next.album.picUrl,
+                       "The default artwork follows the first track after newest-first insertion.")
+    }
+
+    func testCustomPlaylistArtworkIsPersistedAndOverridesTrackArtwork() throws {
+        let store = makeStore()
+        let custom = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        let track = Track(
+            id: 1, name: "First", artists: [ArtistRef(id: 2, name: "Artist")],
+            album: AlbumRef(id: 3, name: "Album", picUrl: "https://example.com/album.jpg"),
+            durationMS: 200_000, source: "tx", sourceMetadata: ["songmid": "first"]
+        )
+        let id = try XCTUnwrap(store.create(name: "Mix", tracks: [track], coverImageData: custom))
+        XCTAssertEqual(store.playlist(id: id)?.coverImageData, custom)
+        XCTAssertEqual(store.playlist(id: id)?.coverURL, track.album.picUrl)
+    }
 }

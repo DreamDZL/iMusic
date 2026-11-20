@@ -1,5 +1,9 @@
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(iOS)
+import PhotosUI
+import UIKit
+#endif
 
 struct LocalPlaylistsView: View {
     @StateObject private var store = LocalPlaylistStore.shared
@@ -11,7 +15,6 @@ struct LocalPlaylistsView: View {
     @State private var isSelectingPlaylists = false
     @State private var selectedPlaylistIDs = Set<UUID>()
     @State private var showDeleteSelectedPlaylists = false
-    @State private var newName = ""
 
     var body: some View {
         List {
@@ -196,13 +199,12 @@ struct LocalPlaylistsView: View {
         .sheet(isPresented: $showImport) {
             ImportPlaylistSheet()
         }
-        .alert("新建本地歌单", isPresented: $showCreate) {
-            TextField("歌单名称", text: $newName)
-            Button("创建") {
-                _ = store.create(name: newName)
-                newName = ""
+        .sheet(isPresented: $showCreate) {
+            NavigationStack {
+                NewLocalPlaylistSheet(create: { name, artwork in
+                    store.create(name: name, coverImageData: artwork)
+                })
             }
-            Button("取消", role: .cancel) { newName = "" }
         }
         .confirmationDialog(
             "删除选中的 \(selectedExistingPlaylistIDs.count) 个歌单？",
@@ -271,11 +273,11 @@ struct LocalPlaylistsView: View {
 
     private func playlistListRow(_ playlist: LocalPlaylist) -> some View {
         HStack(spacing: 12) {
-            CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(160), animated: false)
+            LocalPlaylistArtwork(playlist: playlist)
                 .frame(width: 56, height: 56)
                 .background(.quaternary.opacity(0.6))
                 .overlay {
-                    if playlist.coverURL == nil {
+                    if playlist.coverImageData == nil && playlist.coverURL == nil {
                         Image(systemName: "music.note.list")
                             .font(.title3)
                             .foregroundStyle(.secondary)
@@ -384,11 +386,11 @@ struct LocalPlaylistsView: View {
 
     private func playlistRow(_ playlist: LocalPlaylist, showsChevron: Bool = true) -> some View {
         HStack(spacing: 12) {
-            CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(160), animated: false)
+            LocalPlaylistArtwork(playlist: playlist)
                 .frame(width: 68, height: 68)
                 .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay {
-                    if playlist.coverURL == nil {
+                    if playlist.coverImageData == nil && playlist.coverURL == nil {
                         Image(systemName: "music.note.list")
                             .font(.title2)
                             .foregroundStyle(Theme.accent)
@@ -608,7 +610,7 @@ struct ImportPlaylistSheet: View {
                         .font(.body)
                         .overlay(alignment: .topLeading) {
                             if input.isEmpty {
-                                Text("粘贴任意支持平台的歌单链接，或粘贴包含链接的整段文字。也支持其他音乐软件导出的歌单 JSON；网易云、QQ、酷狗、酷我和咪咕歌曲会保留原平台标识，并由已选 LX 音源负责播放。")
+                                Text("粘贴公开歌单链接、包含链接的分享文字，或其他音乐软件导出的歌单 JSON。")
                                     .foregroundStyle(.tertiary)
                                     .padding(.top, 8)
                                     .padding(.trailing, 8)
@@ -616,13 +618,6 @@ struct ImportPlaylistSheet: View {
                                     .allowsHitTesting(false)
                             }
                         }
-                }
-
-                Section("汽水音乐") {
-                    Text("仅支持导入汽水音乐公开歌单。导入会读取完整曲目列表；播放、歌词和音质统一交给你已启用的 LX 音源，不再调用内置汽水播放接口。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Section {
@@ -646,7 +641,7 @@ struct ImportPlaylistSheet: View {
                 }
 
                 Section("说明") {
-                    Text("歌单只保存到本机，不会修改原音乐软件。支持网易云、QQ、酷狗、酷我和咪咕的公开歌单链接，也支持从分享文本中自动识别链接及导入 JSON。在线目录只读取公开信息，实际播放仍使用你自己添加的 LX 音源。")
+                    Text("支持网易云、QQ 音乐、酷狗和酷我的公开歌单链接。导入的歌单保存为本地副本，播放使用你已启用的 LX 音源。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -716,6 +711,120 @@ struct ImportPlaylistSheet: View {
     }
 }
 
+struct NewLocalPlaylistSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var artworkData: Data?
+    @State private var isLoadingPhoto = false
+    #if os(iOS)
+    @State private var photo: PhotosPickerItem?
+    #endif
+    let create: (String, Data?) -> UUID?
+    var onCreated: (String, UUID) -> Void = { _, _ in }
+
+    var body: some View {
+        Form {
+            Section("播放列表") {
+                TextField("名称", text: $name)
+                    .accessibilityIdentifier("newLocalPlaylistName")
+            }
+            Section("封面图片") {
+                #if os(iOS)
+                PhotosPicker(selection: $photo, matching: .images) {
+                    HStack(spacing: 14) {
+                        if let artworkData, let image = UIImage(data: artworkData) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 64, height: 64)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                        } else {
+                            Image(systemName: "photo.badge.plus")
+                                .font(.title2)
+                                .foregroundStyle(Theme.accent)
+                                .frame(width: 64, height: 64)
+                                .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+                        }
+                        Text(isLoadingPhoto ? "正在载入…" : artworkData == nil ? "选择照片（可选）" : "更换照片")
+                        Spacer()
+                        if artworkData != nil {
+                            Button("移除") { artworkData = nil; photo = nil }
+                                .buttonStyle(.borderless)
+                        }
+                    }
+                }
+                .task(id: photo) {
+                    guard let photo else { return }
+                    isLoadingPhoto = true
+                    defer { isLoadingPhoto = false }
+                    guard let rawData = try? await photo.loadTransferable(type: Data.self),
+                          let image = UIImage(data: rawData),
+                          let normalized = image.resizedPlaylistArtworkData() else { return }
+                    artworkData = normalized
+                }
+                Text("未选择时，使用播放列表中第一首歌曲的专辑封面。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                #endif
+            }
+        }
+        .navigationTitle("新建本地歌单")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("取消") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("创建") {
+                    guard let id = create(name, artworkData) else { return }
+                    onCreated(name.trimmingCharacters(in: .whitespacesAndNewlines), id)
+                    dismiss()
+                }
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                          || isLoadingPhoto)
+                .accessibilityIdentifier("createLocalPlaylist")
+            }
+        }
+    }
+}
+
+#if os(iOS)
+private extension UIImage {
+    /// Keep persisted custom covers compact and independent of the source photo's
+    /// original resolution/metadata.
+    func resizedPlaylistArtworkData() -> Data? {
+        let maxDimension: CGFloat = 768
+        let scale = min(1, maxDimension / max(size.width, size.height))
+        let target = CGSize(width: max(1, (size.width * scale).rounded()),
+                            height: max(1, (size.height * scale).rounded()))
+        let renderer = UIGraphicsImageRenderer(size: target)
+        return renderer.jpegData(withCompressionQuality: 0.82) { _ in
+            draw(in: CGRect(origin: .zero, size: target))
+        }
+    }
+}
+#endif
+
+private struct LocalPlaylistArtwork: View {
+    let playlist: LocalPlaylist
+
+    var body: some View {
+        Group {
+            #if os(iOS)
+            if let data = playlist.coverImageData, let image = UIImage(data: data) {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(160), animated: false)
+            }
+            #else
+            CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(160), animated: false)
+            #endif
+        }
+        .clipped()
+        .accessibilityHidden(true)
+    }
+}
+
 struct LocalPlaylistDetailView: View {
     let playlistID: UUID
 
@@ -742,9 +851,9 @@ struct LocalPlaylistDetailView: View {
                         onPlay: { player.play(tracks: playlist.tracks, source: .none) },
                         onShuffle: { player.playShuffled(tracks: playlist.tracks, source: .none) }
                     ) {
-                        CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(600))
+                        LocalPlaylistArtwork(playlist: playlist)
                             .overlay {
-                                if playlist.coverURL == nil {
+                                if playlist.coverImageData == nil && playlist.coverURL == nil {
                                     Image(systemName: "music.note.list")
                                         .font(.system(size: 56, weight: .light))
                                         .foregroundStyle(.secondary)

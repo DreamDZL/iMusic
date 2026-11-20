@@ -149,7 +149,7 @@ globalThis.lx_setup = (key, id, name, description, version, author, homepage, ra
   const events = {
     request: null,
   }
-  const allSources = ['kw', 'kg', 'tx', 'wy', 'mg', 'sd', 'local']
+  const allSources = ['kw', 'kg', 'tx', 'wy']
   // Forward special tiers only when the imported source declares them.
   const extendedQualitys = ['128k', '320k', 'flac', 'flac24bit', 'master', 'jymaster', 'dolby', 'atmos', 'surround']
   const supportQualitys = {
@@ -157,29 +157,40 @@ globalThis.lx_setup = (key, id, name, description, version, author, homepage, ra
     kg: extendedQualitys,
     tx: extendedQualitys,
     wy: extendedQualitys,
-    mg: extendedQualitys,
-    sd: extendedQualitys,
-    local: [],
   }
   const supportActions = {
-    kw: ['musicUrl'],
-    kg: ['musicUrl'],
-    tx: ['musicUrl'],
-    wy: ['musicUrl'],
-    mg: ['musicUrl'],
-    sd: ['musicUrl', 'lyric', 'pic'],
-    xm: ['musicUrl'],
-    local: ['musicUrl', 'lyric', 'pic'],
+    kw: ['musicUrl', 'lyric', 'pic'],
+    kg: ['musicUrl', 'lyric', 'pic'],
+    tx: ['musicUrl', 'lyric', 'pic'],
+    wy: ['musicUrl', 'lyric', 'pic'],
   }
 
   const verifyLyricInfo = (info) => {
-    if (typeof info != 'object' || typeof info.lyric != 'string') throw new Error('failed')
-    if (info.lyric.length > 51200) throw new Error('failed')
+    if (typeof info === 'string') info = { lyric: info }
+    if (!info || typeof info !== 'object') throw new Error('Invalid LX lyric response')
+    const text = keys => {
+      for (const key of keys) {
+        const value = typeof info[key] === 'string' ? info[key] : info[key]?.lyric
+        if (typeof value === 'string' && value.trim()) {
+          checkLength(value, 262144)
+          return value
+        }
+      }
+      return null
+    }
+    const lyric = text(['lyric', 'lrc', 'lyricText', 'content', 'text'])
+    const yrc = text(['yrc', 'verbatim', 'wordLyric'])
+    const lxlyric = text(['lxlyric'])
+    const url = text(['lrcUrl', 'lyricUrl', 'url'])
+    if (!lyric && !yrc && !lxlyric && !url) throw new Error('Empty LX lyric response')
+    if (url && (url.length > 2048 || !/^https?:\/\/[^\s/@]+(?:[/:?#]|$)/.test(url))) throw new Error('Invalid LX lyric URL')
     return {
-      lyric: info.lyric,
-      tlyric: (typeof info.tlyric == 'string' && info.tlyric.length < 5120) ? info.tlyric : null,
-      rlyric: (typeof info.rlyric == 'string' && info.rlyric.length < 5120) ? info.rlyric : null,
-      lxlyric: (typeof info.lxlyric == 'string' && info.lxlyric.length < 8192) ? info.lxlyric : null,
+      lyric: lyric || yrc || lxlyric,
+      tlyric: text(['tlyric', 'translation', 'translatedLyric']),
+      rlyric: text(['rlyric', 'romalrc', 'romaji']),
+      lxlyric,
+      yrc,
+      url,
     }
   }
 
@@ -187,6 +198,7 @@ globalThis.lx_setup = (key, id, name, description, version, author, homepage, ra
   const sourceRequestKeysByParent = new Map()
   const cancelledSourceRequestKeys = new Set()
   let activeSourceRequestKey = null
+  let sourceCapabilities = {}
   let isInitedApi = false
   let isShowedUpdateAlert = false
 
@@ -268,6 +280,9 @@ globalThis.lx_setup = (key, id, name, description, version, author, homepage, ra
 
   const handleRequest = ({ requestKey, data }) => {
     // console.log(data)
+    if (!sourceCapabilities[data.source]?.actions.includes(data.action)) {
+      return nativeCall(NATIVE_EVENTS_NAMES.response, { requestKey, status: false, errorMessage: 'LX source does not declare ' + data.source + '/' + data.action })
+    }
     if (!events.request) return nativeCall(NATIVE_EVENTS_NAMES.response, { requestKey, status: false, errorMessage: 'Request event is not defined' })
     const previousRequestKey = activeSourceRequestKey
     activeSourceRequestKey = requestKey
@@ -302,6 +317,7 @@ globalThis.lx_setup = (key, id, name, description, version, author, homepage, ra
             }
             break
         }
+        if (!result) throw new Error('Unsupported LX action')
         if (!cancelledSourceRequestKeys.has(requestKey)) {
           nativeCall(NATIVE_EVENTS_NAMES.response, { requestKey, status: true, result })
         }
@@ -373,11 +389,10 @@ globalThis.lx_setup = (key, id, name, description, version, author, homepage, ra
       // sendMessage(NATIVE_EVENTS_NAMES.init, false, null, typeof info.message === 'string' ? info.message.substring(0, 100) : '')
       return
     }
-    // if (!info.status) {
-    //   nativeCall(NATIVE_EVENTS_NAMES.init, { info: null, status: false, errorMessage: 'Init failed' })
-    //   // sendMessage(NATIVE_EVENTS_NAMES.init, false, null, typeof info.message === 'string' ? info.message.substring(0, 100) : '')
-    //   return
-    // }
+    if (info.status === false) {
+      nativeCall(NATIVE_EVENTS_NAMES.init, { info: null, status: false, errorMessage: 'LX source initialization failed' })
+      return
+    }
     const sourceInfo = {
       sources: {},
     }
@@ -398,6 +413,7 @@ globalThis.lx_setup = (key, id, name, description, version, author, homepage, ra
       nativeCall(NATIVE_EVENTS_NAMES.init, { info: null, status: false, errorMessage: error.message })
       return
     }
+    sourceCapabilities = sourceInfo.sources
     nativeCall(NATIVE_EVENTS_NAMES.init, { info: sourceInfo, status: true })
   }
   const handleShowUpdateAlert = (data, resolve, reject) => {
@@ -543,7 +559,7 @@ globalThis.lx_setup = (key, id, name, description, version, author, homepage, ra
       })
 
       return () => {
-        if (!request.aborted) request.abort()
+        if (request && !request.aborted) request.abort()
         request = null
       }
     },

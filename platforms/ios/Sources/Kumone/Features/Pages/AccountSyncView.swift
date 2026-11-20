@@ -13,7 +13,9 @@ struct AccountSyncView: View {
 
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var qqMusic: QQMusicSessionStore
+#if os(iOS)
     @StateObject private var syncStore = ListeningSyncStore.shared
+#endif
     @StateObject private var qqPlaylists = QQMusicPlaylistSyncStore.shared
 
     @State private var selectedChannel: Channel = .netease
@@ -51,10 +53,15 @@ struct AccountSyncView: View {
                     if account.isLoggedIn, let profile = account.profile {
                         profileCard(profile)
                         cloudPlaylistsCard
+#if os(iOS)
                         syncCard
+#endif
                         recentRecords
                     } else {
                         accountLoginCard(channel: .netease)
+#if os(iOS)
+                        if account.listeningSession != nil { syncCard }
+#endif
                     }
                 case .qq:
                     if qqMusic.isLoggedIn {
@@ -140,10 +147,10 @@ struct AccountSyncView: View {
 
     private var sourceOnlyNotice: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("账号资料与歌单同步", systemImage: "lock.shield.fill")
+            Label("账号与播放来源", systemImage: "lock.shield.fill")
                 .font(.headline)
                 .foregroundStyle(Theme.accent)
-            Text("登录仅用于读取账号资料、歌单和播放记录；歌曲播放始终使用你启用的第三方音源。两个渠道分别管理，切换后只显示当前平台的数据。")
+            Text("登录后可同步账号资料和歌单。网易云账号还可同步符合条件的听歌记录。歌曲播放使用你启用的音源。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -168,7 +175,9 @@ struct AccountSyncView: View {
                 .foregroundStyle(Theme.accent)
             Text("登录\(providerName)以开启同步")
                 .font(.title3.weight(.semibold))
-            Text("登录只用于同步账号信息和歌单，不会改变播放音源。")
+            Text(channel == .netease
+                 ? "登录后，符合条件的听歌记录会同步到网易云。"
+                 : "登录后可读取账号资料并同步歌单。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             if validating {
@@ -253,32 +262,59 @@ struct AccountSyncView: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
+#if os(iOS)
     private var syncCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let summary = syncStore.summary
+        let duration = Duration.seconds(summary.acceptedSeconds)
+            .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated))
+        return VStack(alignment: .leading, spacing: 14) {
             Label("听歌同步", systemImage: "chart.bar.xaxis")
                 .font(.headline)
             HStack(spacing: 10) {
-                syncMetric(title: "本机已同步", value: syncStore.formattedDuration)
-                syncMetric(title: "歌曲数", value: "\(syncStore.syncedTrackCount)")
-                syncMetric(title: "状态", value: "已开启")
+                syncMetric(title: "本机已同步", value: duration)
+                syncMetric(title: "已确认次数", value: "\(summary.acceptedCount)")
+                syncMetric(title: "待同步", value: "\(summary.pending.count)")
             }
-            Text("播放歌曲达到有效时长后，iMusic 会把匹配到的歌曲播放记录和时长同步到账号。播放音频由已启用的第三方音源提供。")
+            Text("播放结束或切歌时，iMusic 会同步匹配歌曲的实际收听时长。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if let date = syncStore.lastSyncedAt {
-                Text("最近上报 " + RelativeDateTimeFormatter().localizedString(for: date, relativeTo: .now))
+            if let recent = summary.lastSuccess {
+                let relativeDate = recent.date.formatted(.relative(presentation: .named))
+                Text("最近成功：\(recent.title) · \(recent.seconds) 秒 · \(relativeDate)")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             } else {
-                Text("播放达到有效时长后会自动上报")
+                Text("暂无已确认的同步记录")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+            }
+            if summary.unmatchedCount > 0 || summary.uncertainCount > 0 {
+                Text("未匹配 \(summary.unmatchedCount) · 结果未确认 \(summary.uncertainCount)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if summary.uncertainCount > 0 {
+                Text("为避免重复计时，仅重试确认尚未写入的记录。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if syncStore.storageFailed {
+                Text("无法读取或保存听歌队列，请重新打开应用。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if syncStore.isSyncing {
+                ProgressView("正在同步")
+                    .controlSize(.small)
+            } else if !summary.pending.isEmpty {
+                Button("重试待同步记录") { syncStore.retryPending() }
+                    .font(.caption)
             }
         }
         .padding(16)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
+#endif
 
     private var cloudPlaylistsCard: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -423,12 +459,8 @@ struct AccountSyncView: View {
     }
 
     private func syncMetric(title: String, value: String) -> some View {
-        // The status metric is the short third label in this compact card.
-        // Resolve its value from the server result instead of displaying a
-        // permanent “enabled” state after a failed weblog request.
-        let shownValue = title == "状态" ? syncStore.statusText : value
-        return VStack(alignment: .leading, spacing: 5) {
-            Text(shownValue)
+        VStack(alignment: .leading, spacing: 5) {
+            Text(value)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)

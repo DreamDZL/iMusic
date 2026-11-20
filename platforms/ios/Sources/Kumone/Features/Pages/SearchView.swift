@@ -85,9 +85,25 @@ final class SearchViewModel: ObservableObject {
     @Published private(set) var hotKeywords: [String] = []
     private var artistAvatarCache: [String: String] = [:]
     private var requestGeneration = 0
+    private enum CatalogueRequest: Hashable, Sendable {
+        case songs(LXCatalogPlatform), playlists(LXCatalogPlatform)
+    }
+    private enum CatalogueResult: Sendable {
+        case songs([Track]), playlists([LXPlaylistSummary]), failed
+    }
+    private var recordingGroups = SearchRecordingGroups()
+    private var failedRequests = Set<CatalogueRequest>()
+    private var completedRequests = Set<CatalogueRequest>()
+    private let searchSongs: @Sendable (String, LXCatalogPlatform, Int) async throws -> [Track]
+    @Published private(set) var failedProviderCount = 0
+    var songAlternatives: [String: [Track]] { recordingGroups.alternatives }
 
-    init(query: String) {
+    init(query: String,
+         searchSongs: @escaping @Sendable (String, LXCatalogPlatform, Int) async throws -> [Track] = {
+             try await LXCatalogService.search($0, platform: $1, limit: $2)
+         }) {
         self.query = query
+        self.searchSongs = searchSongs
     }
 
     func setQuery(_ newQuery: String) {
@@ -105,7 +121,7 @@ final class SearchViewModel: ObservableObject {
     func loadHotKeywords() async {
         let requestedPlatform = platform
         var keywords = (try? await LXCatalogService.hotKeywords(platform: requestedPlatform)) ?? []
-        guard requestedPlatform == platform else { return }
+        guard !Task.isCancelled, requestedPlatform == platform else { return }
 
         // Hot-word endpoints are not equally reliable across platforms. Keep
         // the page useful with live catalogue names instead of leaving the
@@ -122,6 +138,7 @@ final class SearchViewModel: ObservableObject {
             keywords.append(contentsOf: fallback)
         }
 
+        guard !Task.isCancelled, requestedPlatform == platform else { return }
         var seen = Set<String>()
         hotKeywords = keywords
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -132,6 +149,10 @@ final class SearchViewModel: ObservableObject {
 
     private func invalidatePendingResults() {
         requestGeneration += 1
+        recordingGroups = SearchRecordingGroups()
+        failedRequests.removeAll()
+        completedRequests.removeAll()
+        failedProviderCount = 0
         loadedTabs.removeAll()
         songs = []
         artists = []
@@ -145,7 +166,7 @@ final class SearchViewModel: ObservableObject {
 
     func load(tab: Tab, force: Bool = false) async {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, force || !loadedTabs.contains(tab) else { return }
+        guard !trimmed.isEmpty, !isLoading, force || !loadedTabs.contains(tab) else { return }
 
         let generation = requestGeneration
         hasAttemptedSearch = true
@@ -156,7 +177,12 @@ final class SearchViewModel: ObservableObject {
         }
 
         func isCurrentRequest() -> Bool {
-            generation == requestGeneration
+            !Task.isCancelled && generation == requestGeneration
+        }
+
+        if platform == .aggregate {
+            await loadAggregate(trimmed, tab: tab, generation: generation)
+            return
         }
 
         var didLoad = false
@@ -169,7 +195,8 @@ final class SearchViewModel: ObservableObject {
             async let playlistsTask: [LXPlaylistSummary]? = try? await LXCatalogService.searchSonglists(
                 trimmed, platform: platform, limit: 12
             )
-            if let result = await songsTask {
+            let songResults = await songsTask
+            if let result = songResults {
                 guard isCurrentRequest() else { return }
                 songs = result
                 rebuildMetadata(from: result)
@@ -179,7 +206,8 @@ final class SearchViewModel: ObservableObject {
             } else {
                 didFail = true
             }
-            if let result = await playlistsTask {
+            let playlistResults = await playlistsTask
+            if let result = playlistResults {
                 guard isCurrentRequest() else { return }
                 playlists = result
                 didLoad = true
@@ -251,6 +279,65 @@ final class SearchViewModel: ObservableObject {
         if didFail, isCurrentRequest(), !hasResults(for: tab) {
             errorMessage = String(localized: "搜索服务暂时不可用，请稍后重试")
         }
+    }
+
+    private func loadAggregate(_ keyword: String, tab: Tab, generation: Int) async {
+        let limit = tab == .all ? 12 : 100
+        let providers = LXCatalogPlatform.providerCases
+        var requests = Set<CatalogueRequest>()
+        if tab != .playlists { requests.formUnion(providers.map(CatalogueRequest.songs)) }
+        if tab == .all || tab == .playlists { requests.formUnion(providers.map(CatalogueRequest.playlists)) }
+        requests.subtract(completedRequests)
+        let searchSongs = self.searchSongs
+        await withTaskGroup(of: (CatalogueRequest, CatalogueResult).self) { group in
+            for request in requests {
+                group.addTask {
+                    do {
+                        switch request {
+                        case .songs(let provider):
+                            return (request, .songs(try await searchSongs(keyword, provider, limit)))
+                        case .playlists(let provider):
+                            return (request, .playlists(try await LXCatalogService.searchSonglists(keyword, platform: provider, limit: limit)))
+                        }
+                    } catch {
+                        return (request, .failed)
+                    }
+                }
+            }
+            for await (request, result) in group {
+                guard !Task.isCancelled, generation == requestGeneration else {
+                    group.cancelAll()
+                    return
+                }
+                switch result {
+                case .songs(let tracks):
+                    completedRequests.insert(request)
+                    failedRequests.remove(request)
+                    recordingGroups.append(tracks)
+                    songs = recordingGroups.tracks
+                    rebuildMetadata(from: recordingGroups.catalogueTracks)
+                case .playlists(let results):
+                    completedRequests.insert(request)
+                    failedRequests.remove(request)
+                    var seen = Set(playlists.map(\.catalogueKey))
+                    playlists.append(contentsOf: results.filter { seen.insert($0.catalogueKey).inserted })
+                case .failed:
+                    failedRequests.insert(request)
+                }
+            }
+        }
+        guard !Task.isCancelled, generation == requestGeneration else { return }
+        failedProviderCount = Set(failedRequests.map { request in
+            switch request {
+            case .songs(let provider), .playlists(let provider): return provider
+            }
+        }).count
+        if !hasResults(for: tab), failedProviderCount > 0 {
+            errorMessage = String(localized: "搜索服务暂时不可用，请稍后重试")
+        } else {
+            loadedTabs.insert(tab)
+        }
+        if tab == .all || tab == .artists { await enrichArtistAvatars(generation: generation) }
     }
 
     private func hasResults(for tab: Tab) -> Bool {
@@ -362,7 +449,7 @@ final class SearchViewModel: ObservableObject {
             return values
         }
 
-        guard generation == requestGeneration else { return }
+        guard !Task.isCancelled, generation == requestGeneration else { return }
         for (key, avatarURL) in responses {
             if let avatarURL, !avatarURL.isEmpty {
                 artistAvatarCache[key] = avatarURL
@@ -402,15 +489,51 @@ private struct SearchSuggestionLabelStyle: LabelStyle {
 struct SearchView: View {
     @StateObject private var model: SearchViewModel
     @StateObject private var history = SearchHistoryStore.shared
-    @State private var searchText: String = ""
+    @State private var localSearchText: String
     @State private var searchDebounceTask: Task<Void, Never>?
+    @FocusState private var isSearchFocused: Bool
+    @State private var isSearchPresented = false
+    private let focusRequest: UInt
+    private let nativeSearchText: Binding<String>?
+    private let nativeSearchSubmit: UInt
+    private let resignNativeSearch: () -> Void
 
-    init(query: String) {
+    private var searchBinding: Binding<String> { nativeSearchText ?? $localSearchText }
+    private var searchText: String {
+        get { searchBinding.wrappedValue }
+        nonmutating set { searchBinding.wrappedValue = newValue }
+    }
+
+    init(query: String, focusRequest: UInt = 0, nativeSearchText: Binding<String>? = nil,
+         nativeSearchSubmit: UInt = 0, resignNativeSearch: @escaping () -> Void = {}) {
         _model = StateObject(wrappedValue: SearchViewModel(query: query))
-        _searchText = State(initialValue: query)
+        _localSearchText = State(initialValue: query)
+        self.focusRequest = focusRequest
+        self.nativeSearchText = nativeSearchText
+        self.nativeSearchSubmit = nativeSearchSubmit
+        self.resignNativeSearch = resignNativeSearch
     }
 
     var body: some View {
+        #if os(iOS)
+        if nativeSearchText != nil {
+            searchContent.onChange(of: nativeSearchSubmit) { _, _ in submitSearchAfterInputMethodCommits() }
+        } else {
+            searchContent
+                .searchable(text: searchBinding, isPresented: $isSearchPresented, prompt: "搜索艺人、歌曲、专辑和歌单")
+                .searchFocused($isSearchFocused)
+                .onSubmit(of: .search) { submitSearchAfterInputMethodCommits() }
+                .task(id: focusRequest) {
+                    guard focusRequest > 0 else { return }
+                    beginNewSearch()
+                }
+        }
+        #else
+        searchContent
+        #endif
+    }
+
+    private var searchContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -424,6 +547,12 @@ struct SearchView: View {
                         searchErrorState(errorMessage)
                     } else {
                         tabContent
+                        if model.failedProviderCount > 0, !model.isLoading {
+                            Button("重试 \(model.failedProviderCount) 个未响应的平台") {
+                                startSearchLoad(force: true)
+                            }
+                            .padding(.horizontal, Theme.Layout.contentInset)
+                        }
                     }
                 } else {
                     emptySearchPrompt
@@ -432,16 +561,8 @@ struct SearchView: View {
             }
             .padding(.top, 8)
         }
-        // iOS owns the search-tab accessory and its Liquid Glass placement.
-        // A second safe-area field here was being composited over the tab bar
-        // until the first scroll gesture caused a layout pass.
-        #if os(iOS)
-        .searchable(text: $searchText, prompt: "搜索歌曲、歌手、专辑、歌单")
-        .onSubmit(of: .search) {
-            submitSearchAfterInputMethodCommits()
-        }
-        #endif
         .onChange(of: searchText) { newValue in
+            guard model.query != newValue else { return }
             model.setQuery(newValue)
             searchDebounceTask?.cancel()
             guard !IOSUITestMode.isEnabled else { return }
@@ -464,6 +585,9 @@ struct SearchView: View {
             #endif
         }
         .navigationTitle(searchText.isEmpty ? "搜索" : searchText)
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(searchText.isEmpty ? .large : .inline)
+        #endif
         .task(id: searchContextTaskID) {
             searchDebounceTask?.cancel()
             guard !IOSUITestMode.isEnabled else { return }
@@ -476,7 +600,6 @@ struct SearchView: View {
         .onDisappear {
             searchDebounceTask?.cancel()
             searchDebounceTask = nil
-            resignSearchInput()
         }
     }
 
@@ -484,11 +607,39 @@ struct SearchView: View {
         let query = (submittedText ?? searchText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
         searchText = query
-        resignSearchInput()
+        isSearchFocused = false
+        if nativeSearchText != nil {
+            resignNativeSearch()
+        } else {
+            isSearchPresented = false
+            resignSearchInput()
+        }
         history.add(query)
         model.setQuery(query)
+        startSearchLoad()
+    }
+
+    private func startSearchLoad(force: Bool = false) {
         guard !IOSUITestMode.isEnabled else { return }
-        Task { await model.load(tab: model.tab, force: true) }
+        guard !model.isLoading else { return }
+        searchDebounceTask?.cancel()
+        let query = model.query
+        let tab = model.tab
+        let platform = model.platform
+        searchDebounceTask = Task { @MainActor in
+            guard !Task.isCancelled, model.query == query, model.tab == tab, model.platform == platform else { return }
+            await model.load(tab: tab, force: force)
+        }
+    }
+
+    private func beginNewSearch() {
+        isSearchPresented = true
+        isSearchFocused = false
+        Task { @MainActor in
+            // Re-arm focus after the searchable presentation is visible.
+            await Task.yield()
+            isSearchFocused = true
+        }
     }
 
     private var searchContextTaskID: String {
@@ -566,7 +717,7 @@ struct SearchView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             Button("重新搜索") {
-                Task { await model.load(tab: model.tab, force: true) }
+                startSearchLoad(force: true)
             }
             .buttonStyle(.borderedProminent)
         }
@@ -574,8 +725,7 @@ struct SearchView: View {
         .padding(.horizontal, Theme.Layout.contentInset)
     }
 
-    /// Search landing page: recent searches as a plain list, then trending
-    /// searches. No category tiles; section titles use one bold style.
+    /// Search landing page: recent and trending searches, without browse categories.
     private var emptySearchPrompt: some View {
         VStack(alignment: .leading, spacing: 28) {
             if !history.entries.isEmpty {
@@ -686,13 +836,18 @@ struct SearchView: View {
 
     @ViewBuilder
     private var tabContent: some View {
+        if currentEmpty, !model.isLoading {
+            EmptyStateView(icon: "magnifyingglass", title: "没有找到相关结果")
+                .frame(minHeight: 300)
+        } else {
         switch model.tab {
         case .all:
             if !model.songs.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
                     SectionHeader(title: "单曲") { model.tab = .songs }
                         .padding(.horizontal, Theme.Layout.contentInset)
-                    TrackListView(tracks: Array(model.songs.prefix(6)), showsSummary: false)
+                    TrackListView(tracks: Array(model.songs.prefix(6)), showsSummary: false,
+                                  sourceAlternatives: model.songAlternatives)
                         .padding(.horizontal, Theme.Layout.contentInset - 10)
                 }
             }
@@ -711,12 +866,8 @@ struct SearchView: View {
                     playlistCards(model.playlists.prefix(8))
                 }
             }
-            if currentEmpty, !model.isLoading {
-                EmptyStateView(icon: "magnifyingglass", title: "没有找到相关结果")
-                    .frame(minHeight: 300)
-            }
         case .songs:
-            TrackListView(tracks: model.songs)
+            TrackListView(tracks: model.songs, sourceAlternatives: model.songAlternatives)
                 .padding(.horizontal, Theme.Layout.contentInset - 10)
         case .artists:
             CardGrid(minWidth: 140) {
@@ -733,6 +884,7 @@ struct SearchView: View {
                 playlistCards(model.playlists)
             }
             .padding(.horizontal, Theme.Layout.contentInset)
+        }
         }
     }
 
@@ -835,7 +987,7 @@ struct SearchView: View {
     }
 
     private func playlistCards(_ items: some Collection<LXPlaylistSummary>) -> some View {
-        ForEach(Array(items)) { playlist in
+        ForEach(Array(items), id: \.catalogueKey) { playlist in
             NavigationLink(value: Destination.lxPlaylist(source: playlist.source, id: playlist.id)) {
                 CoverCardBody(
                     coverURL: playlist.coverURL?.resizedImageURL(384),

@@ -1,4 +1,7 @@
 import Foundation
+#if os(iOS)
+import OSLog
+#endif
 
 /// Account state used for optional metadata synchronisation.
 ///
@@ -10,7 +13,13 @@ import Foundation
 final class AccountStore: ObservableObject {
     static let shared = AccountStore()
 
-    @Published var profile: UserProfile?
+    @Published var profile: UserProfile? {
+        didSet {
+#if os(iOS)
+            ListeningSyncStore.shared.activate(listeningSession)
+#endif
+        }
+    }
     @Published var likedTrackIDs: Set<Int> = []
     @Published var userPlaylists: [PlaylistSummary] = []
     @Published var likedAlbums: [AlbumSummary] = []
@@ -53,19 +62,81 @@ final class AccountStore: ObservableObject {
     private var importedPlaylistSyncTask: Task<Void, Never>?
     private var loginSessionRevision = 0
 
+#if os(iOS)
+    private static let listeningBindingKey = "com.moumusic.netease.listening-owner.v1"
+    private static let listeningLog = Logger(subsystem: "im.missuo.kumone", category: "listening-account")
+    private lazy var listeningBinding: (accountID: Int, cookies: NeteaseClient.ScopedCookies)? = {
+        guard let cookies = NeteaseClient.shared.scopedCookies(),
+              let saved = ProviderSessionSupport.readCookie(service: Self.listeningBindingKey),
+              let accountID = Self.boundListeningAccountID(saved, tokenDigest: cookies.tokenDigest) else { return nil }
+        return (accountID, cookies)
+    }()
+
+    var listeningSession: ListeningSyncSession? {
+        guard let cookies = NeteaseClient.shared.scopedCookies() else { return nil }
+        if let id = profile?.userId, id > 0 {
+            return ListeningSyncSession(accountID: id, revision: loginSessionRevision)
+        }
+        guard let binding = listeningBinding, binding.cookies.hasSameToken(as: cookies) else { return nil }
+        return ListeningSyncSession(accountID: binding.accountID, revision: loginSessionRevision)
+    }
+
+    nonisolated static func boundListeningAccountID(_ value: String, tokenDigest: String) -> Int? {
+        let parts = value.split(separator: ":", maxSplits: 1)
+        guard parts.count == 2, parts[1] == tokenDigest, let id = Int(parts[0]), id > 0 else { return nil }
+        return id
+    }
+
+    func rememberListeningAccount(_ id: Int, using cookies: NeteaseClient.ScopedCookies) {
+        guard id > 0, let current = NeteaseClient.shared.scopedCookies(),
+              current.hasSameToken(as: cookies) else { return }
+        if let binding = listeningBinding, binding.accountID == id, binding.cookies.hasSameToken(as: cookies) { return }
+        listeningBinding = (id, cookies)
+        do {
+            try ProviderSessionSupport.writeCookie("\(id):\(cookies.tokenDigest)", service: Self.listeningBindingKey)
+        } catch {
+            Self.listeningLog.error("Unable to save account binding")
+        }
+    }
+
+    private func forgetListeningAccount() {
+        listeningBinding = nil
+        if !ProviderSessionSupport.deleteCookie(service: Self.listeningBindingKey) {
+            Self.listeningLog.error("Unable to delete account binding")
+        }
+    }
+#endif
+
+    private func loadVerifiedProfile(revision: Int) async throws -> UserProfile? {
+#if os(iOS)
+        guard let cookies = NeteaseClient.shared.scopedCookies() else { throw NeteaseAPIError.needLogin }
+        let loaded = try await NeteaseAPI.userAccount(using: cookies)
+        guard revision == loginSessionRevision,
+              let current = NeteaseClient.shared.scopedCookies(),
+              current.hasSameToken(as: cookies) else { throw NeteaseAPIError.needLogin }
+        if let loaded { rememberListeningAccount(loaded.userId, using: cookies) }
+        return loaded
+#else
+        return try await NeteaseAPI.userAccount()
+#endif
+    }
+
     /// Called at launch and after login succeeds.
     func bootstrap() async {
         defer { isBootstrapped = true }
         guard hasAuthCookie else { return }
+#if os(iOS)
+        ListeningSyncStore.shared.activate(listeningSession)
+#endif
         let revision = loginSessionRevision
-        refreshCookieIfNeeded()
         do {
-            let loadedProfile = try await NeteaseAPI.userAccount()
+            let loadedProfile = try await loadVerifiedProfile(revision: revision)
             guard revision == loginSessionRevision, hasAuthCookie else { return }
             profile = loadedProfile
         } catch {
             return
         }
+        refreshCookieIfNeeded()
         await refreshLibrary()
     }
 
@@ -80,6 +151,9 @@ final class AccountStore: ObservableObject {
         lastPlaylistSyncAt = nil
         lastPlaylistSyncError = nil
         NeteaseClient.shared.clearAuthCookies()
+#if os(iOS)
+        forgetListeningAccount()
+#endif
         profile = nil
         likedTrackIDs = []
         userPlaylists = []
@@ -89,7 +163,7 @@ final class AccountStore: ObservableObject {
         do {
             try NeteaseClient.shared.ingestCookieString(cookieHeader)
             guard hasAuthCookie else { throw NeteaseAPIError.needLogin }
-            guard let verifiedProfile = try await NeteaseAPI.userAccount() else {
+            guard let verifiedProfile = try await loadVerifiedProfile(revision: revision) else {
                 throw NeteaseAPIError.missingProfile
             }
             guard revision == loginSessionRevision else { throw NeteaseAPIError.needLogin }
@@ -103,6 +177,9 @@ final class AccountStore: ObservableObject {
         } catch {
             if revision == loginSessionRevision {
                 NeteaseClient.shared.clearAuthCookies()
+#if os(iOS)
+                forgetListeningAccount()
+#endif
                 profile = nil
                 likedTrackIDs = []
                 userPlaylists = []
@@ -151,6 +228,9 @@ final class AccountStore: ObservableObject {
     /// their locally edited contents stay protected from a cloud overwrite.
     func refreshForOpen(force: Bool = false) async {
         guard hasAuthCookie else { return }
+#if os(iOS)
+        ListeningSyncStore.shared.activate(listeningSession)
+#endif
         let now = Date()
         if !force,
            let last = lastPlaylistSyncAt,
@@ -200,9 +280,11 @@ final class AccountStore: ObservableObject {
         if let profileUserID = profile?.userId {
             userID = profileUserID
         } else {
-            guard let remoteProfile = try await NeteaseAPI.userAccount() else {
+            let revision = loginSessionRevision
+            guard let remoteProfile = try await loadVerifiedProfile(revision: revision) else {
                 throw NeteaseAPIError.missingProfile
             }
+            guard revision == loginSessionRevision, hasAuthCookie else { throw NeteaseAPIError.needLogin }
             profile = remoteProfile
             userID = remoteProfile.userId
         }
@@ -257,6 +339,9 @@ final class AccountStore: ObservableObject {
         isSyncingPlaylists = false
         lastPlaylistSyncAt = nil
         lastPlaylistSyncError = nil
+#if os(iOS)
+        forgetListeningAccount()
+#endif
         profile = nil
         likedTrackIDs = []
         userPlaylists = []
@@ -408,64 +493,18 @@ final class AccountStore: ObservableObject {
         let today = Calendar.current.startOfDay(for: .now).timeIntervalSince1970
         guard UserDefaults.standard.double(forKey: key) < today else { return }
         UserDefaults.standard.set(today, forKey: key)
-        Task { await NeteaseAPI.refreshLogin() }
-    }
-}
-
-/// Local, credential-free mirror of the listening sync state shown on the
-/// account page.
-@MainActor
-final class ListeningSyncStore: ObservableObject {
-    static let shared = ListeningSyncStore()
-
-    @Published private(set) var syncedSeconds: Int
-    @Published private(set) var syncedTrackCount: Int
-    @Published private(set) var lastSyncedAt: Date?
-    @Published private(set) var lastSyncSucceeded: Bool?
-
-    private init() {
-        let defaults = UserDefaults.standard
-        syncedSeconds = defaults.integer(forKey: "account.sync.syncedSeconds")
-        syncedTrackCount = defaults.integer(forKey: "account.sync.syncedTrackCount")
-        lastSyncedAt = defaults.object(forKey: "account.sync.lastSyncedAt") as? Date
-        lastSyncSucceeded = defaults.object(forKey: "account.sync.lastSyncSucceeded") as? Bool
-    }
-
-    func record(seconds: Int) {
-        guard seconds > 0 else { return }
-        syncedSeconds += seconds
-        syncedTrackCount += 1
-        lastSyncedAt = .now
-        lastSyncSucceeded = true
-        let defaults = UserDefaults.standard
-        defaults.set(syncedSeconds, forKey: "account.sync.syncedSeconds")
-        defaults.set(syncedTrackCount, forKey: "account.sync.syncedTrackCount")
-        defaults.set(lastSyncedAt, forKey: "account.sync.lastSyncedAt")
-        defaults.set(true, forKey: "account.sync.lastSyncSucceeded")
-    }
-
-    /// Keeps a failed server submission out of the local aggregate. This is
-    /// intentionally separate from `record`: the UI must not claim that a
-    /// listening interval was synced when NetEase rejected or never received
-    /// the weblog request.
-    func recordFailure() {
-        lastSyncSucceeded = false
-        UserDefaults.standard.set(false, forKey: "account.sync.lastSyncSucceeded")
-    }
-
-    var statusText: String {
-        switch lastSyncSucceeded {
-        case true: return "已同步"
-        case false: return "同步失败"
-        case nil: return "待同步"
+        let revision = loginSessionRevision
+        Task { [weak self] in
+#if os(iOS)
+            let before = NeteaseClient.shared.scopedCookies()
+#endif
+            await NeteaseAPI.refreshLogin()
+#if os(iOS)
+            guard let self, let before, revision == self.loginSessionRevision,
+                  let after = NeteaseClient.shared.scopedCookies(), !after.hasSameToken(as: before) else { return }
+            _ = try? await self.loadVerifiedProfile(revision: revision)
+#endif
         }
-    }
-
-    var formattedDuration: String {
-        let hours = syncedSeconds / 3600
-        let minutes = (syncedSeconds % 3600) / 60
-        if hours > 0 { return "\(hours)小时 \(minutes)分钟" }
-        return "\(max(minutes, 1))分钟"
     }
 }
 

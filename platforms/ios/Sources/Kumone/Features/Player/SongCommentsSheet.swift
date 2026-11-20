@@ -110,7 +110,7 @@ struct SongCommentsSheet: View {
 
             // Comments are intentionally normalised through Netease first.
             // This makes the same song show one stable comment source even
-            // when its playable URL came from QQ, KuGou, Kuwo, Migu or LX.
+            // when its playable URL came from another provider or LX.
             do {
                 let neteaseID: Int?
                 if let explicit = track.sourceMetadata["neteaseId"]
@@ -141,9 +141,6 @@ struct SongCommentsSheet: View {
             }
 
             // Provider-specific public comments remain a best-effort fallback.
-            // Qishui (sd) deliberately has no comment client; it falls through
-            // to the clear matching error instead of pretending its comments
-            // belong to another song.
             if !sourceIsNetease, let response = try? await LXCommentsService.comments(for: track) {
                 hotComments = uniqueComments(response.hot.map(DisplayComment.init))
                 latestComments = uniqueComments(response.latest.map(DisplayComment.init))

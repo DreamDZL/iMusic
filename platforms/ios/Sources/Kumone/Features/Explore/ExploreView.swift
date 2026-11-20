@@ -9,6 +9,19 @@ final class ExploreViewModel: ObservableObject {
         "轻音乐", "说唱", "古典", "影视原声", "ACG", "古风", "怀旧", "治愈",
     ]
 
+    static func categoryColor(at index: Int) -> Color {
+        return switch index % 8 {
+        case 0: Color(red: 0.55, green: 0.20, blue: 0.38)
+        case 1: Color(red: 0.29, green: 0.34, blue: 0.63)
+        case 2: Color(red: 0.13, green: 0.47, blue: 0.50)
+        case 3: Color(red: 0.62, green: 0.34, blue: 0.17)
+        case 4: Color(red: 0.40, green: 0.28, blue: 0.59)
+        case 5: Color(red: 0.20, green: 0.45, blue: 0.34)
+        case 6: Color(red: 0.61, green: 0.25, blue: 0.24)
+        default: Color(red: 0.29, green: 0.39, blue: 0.51)
+        }
+    }
+
     @Published var platform: LXCatalogPlatform = .kw
     @Published var selectedCategory = "推荐"
     @Published var playlists: [LXPlaylistSummary] = []
@@ -301,7 +314,7 @@ struct ExploreView: View {
     private var discoveryMenu: some View {
         Menu {
             Section("音乐平台") {
-                ForEach(LXCatalogPlatform.catalogueCases.filter { $0 != .aggregate }) { platform in
+                ForEach(LXCatalogPlatform.discoveryCases) { platform in
                     Button {
                         model.selectPlatform(platform)
                     } label: {
@@ -446,7 +459,7 @@ struct ExploreView: View {
                         model.select(category)
                     } label: {
                         ZStack(alignment: .bottomLeading) {
-                            genreColor(index)
+                            ExploreViewModel.categoryColor(at: index)
                             Text(category)
                                 .font(.headline.weight(.bold))
                                 .foregroundStyle(.white)
@@ -459,7 +472,7 @@ struct ExploreView: View {
                                 Image(systemName: "checkmark.circle.fill")
                                     .font(.title3)
                                     .symbolRenderingMode(.palette)
-                                    .foregroundStyle(genreColor(index), .white)
+                                    .foregroundStyle(ExploreViewModel.categoryColor(at: index), .white)
                                     .padding(10)
                             }
                         }
@@ -473,18 +486,6 @@ struct ExploreView: View {
         }
     }
 
-    private func genreColor(_ index: Int) -> Color {
-        return switch index % 8 {
-        case 0: Color(red: 0.55, green: 0.20, blue: 0.38)
-        case 1: Color(red: 0.29, green: 0.34, blue: 0.63)
-        case 2: Color(red: 0.13, green: 0.47, blue: 0.50)
-        case 3: Color(red: 0.62, green: 0.34, blue: 0.17)
-        case 4: Color(red: 0.40, green: 0.28, blue: 0.59)
-        case 5: Color(red: 0.20, green: 0.45, blue: 0.34)
-        case 6: Color(red: 0.61, green: 0.25, blue: 0.24)
-        default: Color(red: 0.29, green: 0.39, blue: 0.51)
-        }
-    }
 }
 
 // MARK: - NetEase ranking page kept for the account/sidebar entry point.

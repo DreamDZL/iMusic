@@ -1,5 +1,8 @@
 import Foundation
 import os.log
+#if os(iOS)
+import CryptoKit
+#endif
 
 enum NeteaseAPIError: LocalizedError {
     case http(Int)
@@ -37,8 +40,49 @@ final class NeteaseClient: @unchecked Sendable {
     private static let legacySessionInvalidatedKey = "com.moumusic.netease.legacy-session-invalidated.v1"
 
     private let session: URLSession
+    private let scopedSession = NeteaseClient.makeScopedSession()
     private let cookieLock = NSLock()
     private var cookies: [String: String] = [:]
+    private var cookieRevision = 0
+
+    struct ScopedCookies: Equatable, Sendable {
+        fileprivate let values: [String: String]
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.hasSameToken(as: rhs) && lhs.values["__csrf"] == rhs.values["__csrf"]
+        }
+
+        func hasSameToken(as other: Self) -> Bool { values["MUSIC_U"] == other.values["MUSIC_U"] }
+
+#if os(iOS)
+        var tokenDigest: String {
+            Data(SHA256.hash(data: Data((values["MUSIC_U"] ?? "").utf8))).base64EncodedString()
+        }
+#endif
+    }
+
+    func scopedCookies() -> ScopedCookies? {
+        cookieLock.lock(); defer { cookieLock.unlock() }
+        return cookies["MUSIC_U"] == nil ? nil : ScopedCookies(values: cookies)
+    }
+
+    private final class RejectRedirects: NSObject, URLSessionTaskDelegate, Sendable {
+        func urlSession(_ session: URLSession, task: URLSessionTask,
+                        willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest,
+                        completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+            completionHandler(nil)
+        }
+    }
+
+    private static func makeScopedSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForResource = 25
+        return URLSession(configuration: configuration, delegate: RejectRedirects(), delegateQueue: nil)
+    }
 
     private init() {
         let config = URLSessionConfiguration.default
@@ -80,22 +124,23 @@ final class NeteaseClient: @unchecked Sendable {
         return cookies[name]
     }
 
-    func setCookies(_ new: [String: String]) {
+    func setCookies(_ new: [String: String], expectedRevision: Int? = nil) {
         cookieLock.lock()
+        defer { cookieLock.unlock() }
+        if let expectedRevision, expectedRevision != cookieRevision { return }
         for (k, v) in new { cookies[k] = v }
-        let snapshot = cookies
-        cookieLock.unlock()
-        persist(snapshot)
+        persist(cookies)
     }
 
     /// Ingests a `;;`-joined raw cookie string as returned by the QR login check.
     func ingestCookieString(_ raw: String) throws {
         let parsed = Self.parseCookieString(raw)
         cookieLock.lock()
-        for (key, value) in parsed { cookies[key] = value }
-        let snapshot = cookies
-        cookieLock.unlock()
+        defer { cookieLock.unlock() }
+        let snapshot = cookies.merging(parsed) { _, new in new }
         try Self.persistToKeychain(snapshot)
+        cookieRevision &+= 1
+        cookies = snapshot
         Self.markLegacySessionInvalidated()
     }
 
@@ -104,11 +149,11 @@ final class NeteaseClient: @unchecked Sendable {
         // file fails, a later launch must not migrate those credentials again.
         Self.markLegacySessionInvalidated()
         cookieLock.lock()
+        cookieRevision &+= 1
         cookies.removeValue(forKey: "MUSIC_U")
         cookies.removeValue(forKey: "__csrf")
-        let snapshot = cookies
+        persist(cookies)
         cookieLock.unlock()
-        persist(snapshot)
         removeLegacyCookieFile()
     }
 
@@ -162,16 +207,21 @@ final class NeteaseClient: @unchecked Sendable {
         }
     }
 
-    private func cookieHeader(extra: [String: String], overrides: [String: String] = [:]) -> String {
-        cookieLock.lock()
-        var all = cookies
-        cookieLock.unlock()
+    private func requestCookies(_ scoped: ScopedCookies?) -> (values: [String: String], revision: Int?) {
+        if let scoped { return (scoped.values, nil) }
+        cookieLock.lock(); defer { cookieLock.unlock() }
+        return (cookies, cookieRevision)
+    }
+
+    private func cookieHeader(_ values: [String: String], extra: [String: String],
+                              overrides: [String: String]) -> String {
+        var all = values
         for (k, v) in extra where all[k] == nil { all[k] = v }
         for (k, v) in overrides { all[k] = v }
         return all.map { "\($0.key)=\($0.value)" }.joined(separator: "; ")
     }
 
-    private func absorbSetCookies(from response: HTTPURLResponse, url: URL) {
+    private func absorbSetCookies(from response: HTTPURLResponse, url: URL, expectedRevision: Int) {
         guard let fields = response.allHeaderFields as? [String: String] else { return }
         let parsed = HTTPCookie.cookies(withResponseHeaderFields: fields, for: url)
         guard !parsed.isEmpty else { return }
@@ -179,21 +229,23 @@ final class NeteaseClient: @unchecked Sendable {
         for c in parsed where !c.value.isEmpty && c.value != "\"\"" {
             new[c.name] = c.value
         }
-        if !new.isEmpty { setCookies(new) }
+        if !new.isEmpty { setCookies(new, expectedRevision: expectedRevision) }
     }
 
     // MARK: - Requests
 
     /// POST to `https://music.163.com/weapi<path>` with weapi encryption.
     func weapi(_ path: String, _ payload: [String: Any] = [:],
-               cookieOverrides: [String: String] = [:]) async throws -> Data {
+               cookieOverrides: [String: String] = [:], scoped: ScopedCookies? = nil) async throws -> Data {
+        let (values, revision) = requestCookies(scoped)
+        let csrf = values["__csrf"]
         var body = payload
-        body["csrf_token"] = cookie(named: "__csrf") ?? ""
+        body["csrf_token"] = csrf ?? ""
         let json = try JSONSerialization.data(withJSONObject: body)
         let form = NeteaseCrypto.weapi(payload: json)
 
         var fullPath = path
-        if let csrf = cookie(named: "__csrf"), !csrf.isEmpty {
+        if let csrf, !csrf.isEmpty {
             fullPath += (fullPath.contains("?") ? "&" : "?") + "csrf_token=\(csrf)"
         }
         let url = URL(string: "https://music.163.com/weapi\(fullPath)")!
@@ -202,16 +254,17 @@ final class NeteaseClient: @unchecked Sendable {
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue(cookieHeader(extra: ["os": "pc", "appver": "3.1.17"], overrides: cookieOverrides),
+        request.setValue(cookieHeader(values, extra: ["os": "pc", "appver": "3.1.17"], overrides: cookieOverrides),
                          forHTTPHeaderField: "Cookie")
         request.httpBody = Self.encodeForm(form)
-        return try await perform(request)
+        return try await perform(request, cookieRevision: revision)
     }
 
     /// POST to `https://interface.music.163.com/eapi<path>` with eapi encryption.
     /// The digest is computed over the corresponding `/api<path>` path.
     func eapi(_ path: String, _ payload: [String: Any] = [:],
-              cookieOverrides: [String: String] = [:]) async throws -> Data {
+              cookieOverrides: [String: String] = [:], scoped: ScopedCookies? = nil) async throws -> Data {
+        let (values, revision) = requestCookies(scoped)
         let apiPath = "/api" + path
         var body = payload
         var header: [String: String] = [
@@ -226,8 +279,8 @@ final class NeteaseClient: @unchecked Sendable {
             "resolution": "1920x1080",
             "channel": "",
         ]
-        if let musicU = cookie(named: "MUSIC_U") { header["MUSIC_U"] = musicU }
-        if let csrf = cookie(named: "__csrf") { header["__csrf"] = csrf }
+        header["MUSIC_U"] = values["MUSIC_U"]
+        header["__csrf"] = values["__csrf"]
         body["header"] = header
         let json = try JSONSerialization.data(withJSONObject: body)
         let form = NeteaseCrypto.eapi(apiPath: apiPath, payload: json)
@@ -238,10 +291,10 @@ final class NeteaseClient: @unchecked Sendable {
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue(cookieHeader(extra: ["os": "pc", "appver": "3.1.17"], overrides: cookieOverrides),
+        request.setValue(cookieHeader(values, extra: ["os": "pc", "appver": "3.1.17"], overrides: cookieOverrides),
                          forHTTPHeaderField: "Cookie")
         request.httpBody = Self.encodeForm(form)
-        return try await perform(request)
+        return try await perform(request, cookieRevision: revision)
     }
 
     /// Unencrypted public API request used only for read-only metadata. Some
@@ -253,13 +306,15 @@ final class NeteaseClient: @unchecked Sendable {
         request.httpMethod = "GET"
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
-        return try await perform(request)
+        return try await perform(request, cookieRevision: requestCookies(nil).revision)
     }
 
-    private func perform(_ request: URLRequest) async throws -> Data {
-        let (data, response) = try await session.data(for: request)
+    private func perform(_ request: URLRequest, cookieRevision: Int?) async throws -> Data {
+        let (data, response) = try await (cookieRevision == nil ? scopedSession : session).data(for: request)
         guard let http = response as? HTTPURLResponse else { throw NeteaseAPIError.http(-1) }
-        absorbSetCookies(from: http, url: request.url!)
+        if let cookieRevision, let url = request.url {
+            absorbSetCookies(from: http, url: url, expectedRevision: cookieRevision)
+        }
         guard (200..<300).contains(http.statusCode) else {
             Self.log.error("HTTP \(http.statusCode) for \(request.url?.path ?? "?")")
             throw NeteaseAPIError.http(http.statusCode)
