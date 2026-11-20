@@ -873,7 +873,7 @@ final class LXUserAPIService: ObservableObject {
 
     private func sourceCandidates(primary: String?, action: String, fallbackEnabled: Bool) -> [String] {
         var platforms = primary.map { [$0] } ?? []
-        if fallbackEnabled { platforms += Self.providerIDs.filter { $0 != primary } }
+        if fallbackEnabled { platforms += ["wy", "kw", "kg", "tx"].filter { $0 != primary } }
         return platforms.filter { supports($0, action: action) }
     }
 
