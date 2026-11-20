@@ -41,6 +41,7 @@ jobs:
       - name: Run feature and UI navigation tests, then launch on the latest simulator
         working-directory: platforms/ios/ios
         run: |
+          set -euo pipefail
           xcodebuild -list -project KumoneIOS.xcodeproj
           SIMULATOR_ID=$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ { print $2; exit }')
           if [ -z "$SIMULATOR_ID" ]; then
@@ -54,7 +55,17 @@ jobs:
           xcrun simctl shutdown "$SIMULATOR_ID" || true
           xcrun simctl boot "$SIMULATOR_ID"
           xcrun simctl bootstatus "$SIMULATOR_ID" -b
+          xcrun simctl io "$SIMULATOR_ID" recordVideo --codec=h264 smoke-ui.mp4 &
+          video_pid=$!
+          stop_recording() {
+            kill -INT "$video_pid" 2>/dev/null || true
+            wait "$video_pid" || true
+          }
+          trap stop_recording EXIT
           xcodebuild test \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testSelectingSearchTabFocusesSearchField \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testCancellingSearchReturnsToPreviousTab \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testTabSearchInputIsOnlyOnSearchTab \
             -project KumoneIOS.xcodeproj \
             -scheme KumoneIOS \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
@@ -87,4 +98,5 @@ jobs:
           path: |
             platforms/ios/ios/smoke-tests.xcresult
             platforms/ios/ios/smoke-attachments
+            platforms/ios/ios/smoke-ui.mp4
           if-no-files-found: warn
