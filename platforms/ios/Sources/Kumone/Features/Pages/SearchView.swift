@@ -551,11 +551,11 @@ struct SearchView: View {
         .background(.bar)
         .task(id: focusRequest) {
             guard focusRequest != handledFocusRequest else { return }
-            isSearchFocused = true
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            searchSelection = TextSelection(range: searchText.startIndex..<searchText.endIndex)
             handledFocusRequest = focusRequest
+            if !searchText.isEmpty {
+                searchSelection = TextSelection(range: searchText.startIndex..<searchText.endIndex)
+            }
+            isSearchFocused = true
         }
     }
     #endif

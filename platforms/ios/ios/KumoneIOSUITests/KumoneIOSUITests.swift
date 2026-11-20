@@ -216,8 +216,9 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5),
                       "Selecting the search tab should focus its search field")
         field.typeText("test")
-        XCTAssertEqual(field.value as? String, "test",
-                       "The focused search field should accept input immediately")
+        let initialQuery = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "test"), object: field)
+        XCTAssertEqual(XCTWaiter.wait(for: [initialQuery], timeout: 5), .completed,
+                       "The focused search field should accept the complete query")
         field.typeText("\n")
         let hiddenKeyboard = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
                                                        object: app.keyboards.firstMatch)
@@ -228,7 +229,9 @@ final class KumoneIOSUITests: XCTestCase {
         searchTab.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         field.typeText("next")
-        XCTAssertEqual(field.value as? String, "next", "Reselecting Search should select the existing query for replacement")
+        let replacement = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "next"), object: field)
+        XCTAssertEqual(XCTWaiter.wait(for: [replacement], timeout: 5), .completed,
+                       "Reselecting Search should select the existing query for replacement")
     }
 
     @MainActor
