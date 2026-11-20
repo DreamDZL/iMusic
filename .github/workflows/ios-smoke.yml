@@ -54,7 +54,23 @@ jobs:
           xcrun simctl shutdown "$SIMULATOR_ID" || true
           xcrun simctl boot "$SIMULATOR_ID"
           xcrun simctl bootstatus "$SIMULATOR_ID" -b
+          xcrun simctl io "$SIMULATOR_ID" recordVideo --codec=h264 smoke-ui.mp4 &
+          video_pid=$!
+          stop_recording() {
+            kill -INT "$video_pid" 2>/dev/null || true
+            wait "$video_pid" || true
+          }
+          trap stop_recording EXIT
           xcodebuild test \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testSelectingSearchTabFocusesSearchField \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testCancellingSearchReturnsToPreviousTab \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testTabSearchInputIsOnlyOnSearchTab \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testRecommendedPlaylistBadgesDoNotChangeCoverLayout \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testSongPageGrabberDismissesWithoutLyricsScroll \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testSongPageArtworkDismissesIndependently \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testSongPageSubthresholdPullKeepsPlayerOpenThenFullPullDismisses \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testSongPageBackgroundPullCollapsesWithoutTouchingGrabberOrArtwork \
+            -only-testing:KumoneIOSUITests/KumoneIOSUITests/testRepeatedPlayerPageTransitionsAndCollapse \
             -project KumoneIOS.xcodeproj \
             -scheme KumoneIOS \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
@@ -87,4 +103,5 @@ jobs:
           path: |
             platforms/ios/ios/smoke-tests.xcresult
             platforms/ios/ios/smoke-attachments
+            platforms/ios/ios/smoke-ui.mp4
           if-no-files-found: warn
