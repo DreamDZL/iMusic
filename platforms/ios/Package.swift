@@ -20,7 +20,7 @@ let package = Package(
             ],
             path: "Sources/Kumone",
             exclude: ["Resources"],
-            resources: [.copy("LXUserAPIPreload.js"), .copy("QishuiThirdPartyLicense.txt")],
+            resources: [.copy("LXUserAPIPreload.js")],
             swiftSettings: [
                 .swiftLanguageMode(.v5),
             ]

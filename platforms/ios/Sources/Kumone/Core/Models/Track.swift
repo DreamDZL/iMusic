@@ -158,24 +158,6 @@ struct Track: Codable, Hashable, Identifiable, Sendable {
         return copy
     }
 
-    /// Old saved Qishui items can have a bare CDN URL or no album. Enrich only
-    /// display fields: title/artists/source IDs are part of playback identity,
-    /// and replacing them would invalidate queues, favourites and async guards.
-    func mergingQishuiMetadata(_ catalogue: Track) -> Track? {
-        let original = normalizedForLXPlayback()
-        let updated = catalogue.normalizedForLXPlayback()
-        guard original.source == "sd", updated.source == "sd",
-              original.sourceMetadata["songmid"] == updated.sourceMetadata["songmid"] else { return nil }
-        var copy = self
-        copy.album = AlbumRef(
-            id: catalogue.album.id > 0 ? catalogue.album.id : album.id,
-            name: catalogue.album.name.isEmpty ? album.name : catalogue.album.name,
-            picUrl: catalogue.album.picUrl ?? album.picUrl
-        )
-        if catalogue.durationMS > 0 { copy.durationMS = catalogue.durationMS }
-        return copy
-    }
-
     /// Native NetEase catalogue endpoints return tracks without a source
     /// marker. Mark those results as WY before they enter the queue so iOS
     /// always asks the selected LX User API for the actual audio URL.

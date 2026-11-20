@@ -12,17 +12,10 @@ enum LXCatalogPlatform: String, CaseIterable, Identifiable {
     case kg
     case tx
     case wy
-    case mg
-    case sd
 
-    /// User-visible search platforms. Other catalogue operations must check
-    /// their own capabilities rather than assuming every source supports them.
-    static var catalogueCases: [LXCatalogPlatform] {
-        allCases.filter { $0 != .mg }
-    }
-
-    /// Qishui currently supplies track search, not discovery feeds or songlists.
-    static var discoveryCases: [LXCatalogPlatform] { [.kw, .kg, .tx, .wy] }
+    static var catalogueCases: [LXCatalogPlatform] { allCases }
+    static var providerCases: [LXCatalogPlatform] { allCases.filter { $0 != .aggregate } }
+    static var discoveryCases: [LXCatalogPlatform] { providerCases }
 
     var id: String { rawValue }
     var displayName: String {
@@ -32,8 +25,6 @@ enum LXCatalogPlatform: String, CaseIterable, Identifiable {
         case .kg: return "酷狗"
         case .tx: return "QQ 音乐"
         case .wy: return "网易云"
-        case .mg: return "咪咕"
-        case .sd: return "汽水音乐"
         }
     }
     var sourceID: String? {
@@ -43,8 +34,6 @@ enum LXCatalogPlatform: String, CaseIterable, Identifiable {
         case .kg: return "kg"
         case .tx: return "tx"
         case .wy: return "wy"
-        case .mg: return "mg"
-        case .sd: return "sd"
         }
     }
 
@@ -102,7 +91,7 @@ enum LXCatalogService {
 
         if platform == .aggregate {
             let results = await withTaskGroup(of: [Track]?.self, returning: ([[Track]], Int).self) { group in
-                for item in LXCatalogPlatform.catalogueCases where item != .aggregate {
+                for item in LXCatalogPlatform.providerCases {
                     group.addTask {
                         try? await search(keyword, platform: item, page: page, limit: limit)
                     }
@@ -165,8 +154,6 @@ enum LXCatalogService {
         case .kg: return try await searchKugou(keyword, page: page, limit: limit)
         case .tx: return try await searchQQ(keyword, page: page, limit: limit)
         case .wy: return try await searchNetease(keyword, page: page, limit: limit)
-        case .mg: return try await searchMigu(keyword, page: page, limit: limit)
-        case .sd: return try await QishuiSearch.shared.search(keyword, page: page, limit: limit)
         case .aggregate: throw LXCatalogError.unsupported
         }
     }
@@ -242,10 +229,10 @@ enum LXCatalogService {
         switch source {
         case .tx:
             return firstText(track.sourceMetadata["albumMid"], track.sourceMetadata["albumId"])
-        case .kw, .kg, .mg:
+        case .kw, .kg:
             return firstText(track.sourceMetadata["albumId"],
                              track.album.id > 0 ? String(track.album.id) : nil)
-        case .wy, .aggregate, .sd:
+        case .wy, .aggregate:
             return track.album.id > 0 ? String(track.album.id) : nil
         }
     }
@@ -392,46 +379,6 @@ enum LXCatalogService {
         }
 
         throw LXCatalogError.invalidResponse
-    }
-
-    private static func searchMigu(_ keyword: String, page: Int, limit: Int) async throws -> [Track] {
-        let timestamp = String(Int(Date().timeIntervalSince1970 * 1000))
-        let deviceID = "963B7AA0D21511ED807EE5846EC87D20"
-        let signature = md5("\(keyword)6cdc72a439cef99a3418d2a78aa28c73yyapp2d16148780a1dcc7408e06336b98cfd50\(deviceID)\(timestamp)")
-        var components = URLComponents(string: "https://jadeite.migu.cn/music_search/v3/search/searchAll")!
-        components.queryItems = [
-            URLQueryItem(name: "isCorrect", value: "0"),
-            URLQueryItem(name: "isCopyright", value: "1"),
-            URLQueryItem(name: "searchSwitch", value: "{\"song\":1,\"album\":0,\"singer\":0,\"tagSong\":1,\"mvSong\":0,\"bestShow\":1,\"songlist\":0}"),
-            URLQueryItem(name: "pageSize", value: String(limit)),
-            URLQueryItem(name: "text", value: keyword),
-            URLQueryItem(name: "pageNo", value: String(page)),
-            URLQueryItem(name: "sort", value: "0"),
-            URLQueryItem(name: "sid", value: "USS"),
-        ]
-        let object = try await fetchObject(components.url!, headers: [
-            "uiVersion": "A_music_3.6.1", "deviceId": deviceID,
-            "timestamp": timestamp, "sign": signature, "channel": "0146921",
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
-        ]) as? [String: Any]
-        let songResult = object?["songResultData"] as? [String: Any]
-        let pages = songResult?["resultList"] as? [[Any]] ?? []
-        return pages.flatMap { $0 }.compactMap { value in
-            guard let item = value as? [String: Any],
-                  let rawID = text(item["songId"]), let id = Int(rawID), id > 0 else { return nil }
-            let image = text(item["img3"]) ?? text(item["img2"]) ?? text(item["img1"])
-            let imageURL = miguImageURL(image)
-            var metadata = ["songmid": rawID,
-                            "copyrightId": text(item["copyrightId"]) ?? ""]
-            addQualityMetadata(&metadata, from: item, source: .mg)
-            return Track(id: id, name: text(item["name"]) ?? "",
-                         artists: artists(from: text(item["singerList"])),
-                         album: AlbumRef(id: int(item["albumId"]) ?? 0,
-                                        name: text(item["album"]) ?? "", picUrl: imageURL),
-                         durationMS: seconds(item["duration"]) * 1000,
-                         source: "mg",
-                         sourceMetadata: metadata)
-        }
     }
 
     private static func searchQQ(_ keyword: String, page: Int, limit: Int) async throws -> [Track] {
@@ -690,18 +637,7 @@ enum LXCatalogService {
             set("320k", file?["size_320mp3"] ?? file?["size_320"] ?? item["size_320mp3"])
             set("flac", file?["size_flac"] ?? file?["size_lossless"] ?? item["size_flac"])
             set("flac24bit", file?["size_hires"] ?? file?["size_flac24"] ?? item["size_hires"])
-        case .mg:
-            guard let formats = item["newRateFormats"] as? [[String: Any]] else { return }
-            for format in formats {
-                switch text(format["formatType"]) {
-                case "PQ": set("128k", format["size"] ?? format["androidSize"])
-                case "HQ": set("320k", format["size"] ?? format["androidSize"])
-                case "SQ": set("flac", format["size"] ?? format["androidSize"])
-                case "ZQ": set("flac24bit", format["size"] ?? format["androidSize"])
-                default: break
-                }
-            }
-        case .wy, .aggregate, .sd: break
+        case .wy, .aggregate: break
         }
     }
 
@@ -735,12 +671,6 @@ enum LXCatalogService {
                 ?? text(transParam?["union_cover"]),
             size: size
         )
-    }
-
-    private static func miguImageURL(_ value: String?, size: Int = 500) -> String? {
-        guard var value else { return nil }
-        if value.hasPrefix("/") { value = "https://d.musicapp.migu.cn\(value)" }
-        return normalizedImageURL(value, size: size)
     }
 
     private static func text(_ value: Any?) -> String? {
@@ -953,9 +883,6 @@ enum LXCatalogService {
         case "kg", "kugou": return try await nativeKugouLyrics(for: track)
         case "tx", "qq", "qqmusic": return try await nativeQQLyrics(for: track)
         case "wy", "netease", "163": return try await nativeNeteaseLyrics(for: track)
-        case "mg", "migu": return try await nativeMiguLyrics(for: track)
-        case "sd", "qs", "soda", "sodamusic", "soda-music", "qishui", "qishui-music":
-            return try await QishuiSearch.shared.nativeLyrics(for: track)
         default: throw LXCatalogError.unsupported
         }
     }
@@ -1092,25 +1019,6 @@ enum LXCatalogService {
         return NativeLyrics(lyric: lyric, tlyric: translation, rlyric: nil, lxlyric: lyric)
     }
 
-    private static func nativeMiguLyrics(for track: Track) async throws -> NativeLyrics {
-        let resourceID = track.sourceMetadata["copyrightId"]
-            ?? track.sourceMetadata["songmid"]
-            ?? String(track.id)
-        let url = URL(string: "https://c.musicapp.migu.cn/MIGUM2.0/v1.0/content/resourceinfo.do?resourceType=2")!
-        let encodedID = resourceID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? resourceID
-        let root = try await fetchObject(url, method: "POST",
-                                         body: Data("resourceId=\(encodedID)".utf8),
-                                         headers: ["Content-Type": "application/x-www-form-urlencoded",
-                                                   "Referer": "https://app.c.nf.migu.cn/"]) as? [String: Any]
-        let data = root?["data"] as? [String: Any]
-        let resource = (data?["resource"] as? [[String: Any]])?.first
-        if let lrcURL = text(resource?["lrcUrl"]), !lrcURL.isEmpty {
-            let lyric = try await fetchText(URL(string: lrcURL)!)
-            if !lyric.isEmpty { return NativeLyrics(lyric: lyric, tlyric: nil, rlyric: nil, lxlyric: nil) }
-        }
-        throw LXCatalogError.invalidResponse
-    }
-
     // MARK: - Songlists
 
     /// Returns source-native recommended song lists.  This mirrors the
@@ -1135,10 +1043,6 @@ enum LXCatalogService {
                                   description: $0.copywriter, author: $0.creator?.nickname,
                                   source: .wy)
             }
-        case .mg:
-            return (try? await recommendedMiguSonglists(limit: limit)) ?? []
-        case .sd:
-            throw LXCatalogError.unsupported
         case .aggregate:
             throw LXCatalogError.unsupported
         }
@@ -1172,17 +1076,6 @@ enum LXCatalogService {
                 : result
         case .wy:
             return try await searchSonglists(category, platform: platform, page: page, limit: limit)
-        case .mg:
-            // LX's current Migu adapter exposes a recommendation feed but no
-            // independent hot/new sort endpoint. Keep both tabs on that real
-            // feed instead of sending “最新” as a search keyword, which is
-            // what produced malformed empty cards in the old implementation.
-            let result = try await recommendedMiguSonglists(limit: limit, page: page)
-            return result.isEmpty
-                ? try await searchSonglists(category, platform: platform, page: page, limit: limit)
-                : result
-        case .sd:
-            throw LXCatalogError.unsupported
         case .aggregate:
             throw LXCatalogError.unsupported
         }
@@ -1295,30 +1188,6 @@ enum LXCatalogService {
         }
     }
 
-    private static func recommendedMiguSonglists(limit: Int, page: Int = 1) async throws -> [LXPlaylistSummary] {
-        let url = URL(string: "https://app.c.nf.migu.cn/pc/bmw/page-data/playlist-square-recommend/v1.0?templateVersion=2&pageNo=\(page)")!
-        let root = try await fetchObject(url, headers: ["Referer": "https://m.music.migu.cn/"]) as? [String: Any]
-        let contents = dictionaryArray(root, keys: ["contents", "content", "list", "result", "data"])
-        var output: [LXPlaylistSummary] = []
-        var seen = Set<String>()
-
-        func visit(_ item: [String: Any]) {
-            let nested = dictionaryArray(item, keys: ["contents", "content", "items", "children"])
-            if !nested.isEmpty {
-                nested.forEach(visit)
-            } else if text(item["resType"]) == "2021",
-                      let id = firstText(item["resId"], item["contentId"]), seen.insert(id).inserted {
-                output.append(LXPlaylistSummary(id: id,
-                                                 name: firstText(item["txt"], item["name"], item["title"]) ?? "",
-                                                 coverURL: firstText(item["img"], item["image"], item["cover"]), playCount: 0,
-                                                 trackCount: int(item["contentCount"]) ?? 0,
-                                                 description: firstText(item["txt2"], item["description"]), author: firstText(item["userName"], item["nickname"]), source: .mg))
-            }
-        }
-        contents.forEach(visit)
-        return Array(output.prefix(limit))
-    }
-
     /// LX Search has two catalogue types: music and songlists. Songlists are
     /// intentionally not delegated to NetEase except for the WY adapter.
     static func searchSonglists(_ keyword: String, platform: LXCatalogPlatform,
@@ -1347,8 +1216,6 @@ enum LXCatalogService {
         case .kg: return try await searchKugouSonglists(keyword, page: page, limit: limit)
         case .tx: return try await searchQQSonglists(keyword, page: page, limit: limit)
         case .wy: return try await searchNeteaseSonglists(keyword, page: page, limit: limit)
-        case .mg: return try await searchMiguSonglists(keyword, page: page, limit: limit)
-        case .sd: throw LXCatalogError.unsupported
         case .aggregate: throw LXCatalogError.unsupported
         }
     }
@@ -1438,38 +1305,6 @@ enum LXCatalogService {
         }
     }
 
-    private static func searchMiguSonglists(_ keyword: String, page: Int, limit: Int) async throws -> [LXPlaylistSummary] {
-        let timestamp = String(Int(Date().timeIntervalSince1970 * 1000))
-        let deviceID = "963B7AA0D21511ED807EE5846EC87D20"
-        let signature = md5("\(keyword)6cdc72a439cef99a3418d2a78aa28c73yyapp2d16148780a1dcc7408e06336b98cfd50\(deviceID)\(timestamp)")
-        var components = URLComponents(string: "https://jadeite.migu.cn/music_search/v3/search/searchAll")!
-        components.queryItems = [
-            URLQueryItem(name: "isCorrect", value: "1"),
-            URLQueryItem(name: "isCopyright", value: "1"),
-            URLQueryItem(name: "searchSwitch", value: "{\"song\":0,\"album\":0,\"singer\":0,\"tagSong\":0,\"mvSong\":0,\"bestShow\":0,\"songlist\":1,\"lyricSong\":0}"),
-            URLQueryItem(name: "pageSize", value: String(limit)),
-            URLQueryItem(name: "text", value: keyword),
-            URLQueryItem(name: "pageNo", value: String(page)),
-            URLQueryItem(name: "sort", value: "0"),
-            URLQueryItem(name: "sid", value: "USS"),
-        ]
-        let root = try await fetchObject(components.url!, headers: [
-            "uiVersion": "A_music_3.6.1", "deviceId": deviceID,
-            "timestamp": timestamp, "sign": signature, "channel": "0146921",
-        ]) as? [String: Any]
-        let items = dictionaryArray(root, keys: ["result", "songListResultData", "songlist", "list", "data"])
-        return items.compactMap { item in
-            guard let id = text(item["id"]) else { return nil }
-            return LXPlaylistSummary(id: id,
-                                      name: firstText(item["name"], item["title"], item["listName"]) ?? "",
-                                      coverURL: miguImageURL(firstText(item["musicListPicUrl"], item["img"], item["cover"])),
-                                     playCount: int(item["playNum"]) ?? int(item["playCount"]) ?? 0,
-                                     trackCount: int(item["musicNum"]) ?? int(item["songCount"]) ?? 0,
-                                     description: firstText(item["description"], item["summary"]),
-                                     author: firstText(item["userName"], item["nickname"]), source: .mg)
-        }
-    }
-
     // MARK: - Hot search
 
     static func hotKeywords(platform: LXCatalogPlatform) async throws -> [String] {
@@ -1507,13 +1342,6 @@ enum LXCatalogService {
         case .wy:
             let result = try await NeteaseAPI.searchDefaultKeyword()
             return result.map { [$0] } ?? []
-        case .mg:
-            let root = try await fetchObject(URL(string: "http://jadeite.migu.cn:7090/music_search/v3/search/hotword")!) as? [String: Any]
-            let groups = (((root?["data"] as? [String: Any])?["hotwords"] as? [[String: Any]]) ?? [])
-            return groups.flatMap { ($0["hotwordList"] as? [[String: Any]]) ?? [] }
-                .filter { text($0["resourceType"]) == "song" }.compactMap { text($0["word"]) }
-        case .sd:
-            return []
         case .aggregate: throw LXCatalogError.unsupported
         }
     }
@@ -1631,37 +1459,6 @@ enum LXCatalogService {
                                     isTrackListComplete: LXPlaylistTrackCompleteness.isComplete(
                                         declaredCount: declaredCount, rawCount: rawTracks.count, parsedCount: tracks.count
                                     ))
-        case .mg:
-            let url = URL(string: "https://app.c.nf.migu.cn/MIGUM3.0/resource/playlist/song/v2.0?pageNo=1&pageSize=1000&playlistId=\(id)")!
-            let root = try await fetchObject(url, headers: ["Referer": "https://m.music.migu.cn/"]) as? [String: Any]
-            let rawTracks = dictionaryArray(root, keys: ["songList", "songlist", "tracks", "list", "data"])
-            guard !rawTracks.isEmpty else { throw LXCatalogError.invalidResponse }
-            let tracks = rawTracks.compactMap { track(from: $0, source: .mg) }
-            guard !tracks.isEmpty else { throw LXCatalogError.invalidResponse }
-            let infoObject = try? await fetchObject(URL(string: "https://c.musicapp.migu.cn/MIGUM3.0/resource/playlist/v2.0?playlistId=\(id)")!, headers: ["Referer": "https://m.music.migu.cn/"])
-            let info = (infoObject as? [String: Any])?["data"] as? [String: Any]
-            let rootCountKeys = ["totalCount", "total", "songCount", "musicNum"]
-            let rootDictionary = root as? [String: Any]
-            let declaredCount: Int?
-            if let rootDictionary,
-               rootCountKeys.contains(where: { rootDictionary.keys.contains($0) }) {
-                declaredCount = LXPlaylistTrackCompleteness.declaredCount(
-                    in: rootDictionary, keys: rootCountKeys
-                )
-            } else {
-                declaredCount = LXPlaylistTrackCompleteness.declaredCount(
-                    in: info, keys: ["totalCount", "total", "songCount", "musicNum", "contentCount"]
-                )
-            }
-            return LXPlaylistDetail(id: id, name: text(info?["title"]) ?? "咪咕歌单",
-                                    coverURL: normalizedImageURL(text((info?["imgItem"] as? [String: Any])?["img"])),
-                                    description: text(info?["summary"]), author: text(info?["ownerName"]),
-                                    playCount: int((info?["opNumItem"] as? [String: Any])?["playNum"]) ?? 0,
-                                    tracks: tracks, source: .mg,
-                                    declaredTrackCount: declaredCount,
-                                    isTrackListComplete: LXPlaylistTrackCompleteness.isComplete(
-                                        declaredCount: declaredCount, rawCount: rawTracks.count, parsedCount: tracks.count
-                                    ))
         case .kg:
             let cleanID = id.replacingOccurrences(of: "id_", with: "")
             // This is the endpoint used by LX Mobile's Kugou adapter. The
@@ -1691,21 +1488,6 @@ enum LXCatalogService {
             return LXPlaylistDetail(id: id, name: name, coverURL: cover, description: nil,
                                     author: nil, playCount: 0,
                                     tracks: tracks, source: .kg)
-        case .sd:
-            let resolution = try await QishuiAPI.shared.resolvePlaylist(id: id)
-            let tracks = resolution.tracks.map { item in
-                Track(id: Int(item.id) ?? stableNumericID(item.id),
-                      name: item.name,
-                      artists: [ArtistRef(id: 0, name: item.artistName)],
-                      album: AlbumRef(id: 0, name: item.albumName ?? "", picUrl: item.coverURL),
-                      durationMS: item.durationMS,
-                      source: "sd",
-                      sourceMetadata: ["songmid": item.id, "source": "sd"])
-            }
-            return LXPlaylistDetail(id: resolution.id, name: resolution.name,
-                                    coverURL: resolution.coverURL, description: nil,
-                                    author: "汽水音乐", playCount: 0,
-                                    tracks: tracks, source: .sd)
         case .aggregate: throw LXCatalogError.unsupported
         }
     }
@@ -1806,23 +1588,7 @@ enum LXCatalogService {
             metadata["albumId"] = albumMid
             addQualityMetadata(&metadata, from: item, source: source)
             if let albumImageURL { metadata["coverURL"] = albumImageURL }
-        case .mg:
-            rawID = text(item["songId"]) ?? text(item["copyrightId"]) ?? text(item["contentId"])
-            name = text(item["songName"]) ?? text(item["name"]) ?? ""
-            artistText = text(item["singerName"]) ?? text(item["singerList"])
-            albumID = int(item["albumId"]) ?? 0
-            albumName = text(item["albumName"]) ?? text(item["album"]) ?? ""
-            durationValue = item["duration"] ?? item["length"]
-            albumImageURL = miguImageURL(text(item["img3"]) ?? text(item["img2"]) ?? text(item["img1"])
-                                         ?? text(item["albumPicUrl"]) ?? text(item["cover"]))
-            if let rawID { metadata["songmid"] = rawID }
-            metadata["copyrightId"] = text(item["copyrightId"]) ?? ""
-            for key in ["lrcUrl", "mrcUrl", "trcUrl"] {
-                if let value = text(item[key]), !value.isEmpty { metadata[key] = value }
-            }
-            addQualityMetadata(&metadata, from: item, source: source)
-            if let albumImageURL { metadata["coverURL"] = albumImageURL }
-        case .aggregate, .wy, .sd:
+        case .aggregate, .wy:
             return nil
         }
 

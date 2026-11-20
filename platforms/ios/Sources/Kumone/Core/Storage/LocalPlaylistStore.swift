@@ -136,6 +136,7 @@ enum LocalPlaylistSyncPolicy {
             return "kg"
         case "qq", "qqmusic", "qq-music":
             return "tx"
+        // Retired providers can still identify playlists in stored and synced data.
         case "migu":
             return "mg"
         case "soda", "sodamusic", "soda-music", "qishui", "qishui-music":
@@ -297,7 +298,7 @@ enum PlaylistImportError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .emptyInput: return "请输入歌单链接、文字或 JSON 文件内容"
-        case .unsupportedLink: return "无法识别歌单链接；支持网易云、QQ、酷狗、酷我、咪咕和汽水公开歌单"
+        case .unsupportedLink: return "无法识别歌单链接。支持网易云、QQ 音乐、酷狗和酷我的公开歌单。"
         case .invalidFormat: return "无法识别歌单格式"
         case .noTracks: return "歌单中没有可导入的歌曲"
         }
@@ -715,6 +716,7 @@ final class LocalPlaylistStore: ObservableObject {
 
     func importPlaylist(from input: String) async throws -> UUID {
         let imported = try await PlaylistImportService.importPlaylist(from: input)
+        try Task.checkCancellation()
         if let remoteSource = imported.remoteSource,
            let remotePlaylistID = imported.remotePlaylistID,
            let existing = playlists.first(where: {
@@ -851,54 +853,39 @@ private enum PlaylistImportService {
         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { throw PlaylistImportError.emptyInput }
 
-        // A share sheet often gives us a sentence rather than a bare URL,
-        // for example: “这是我收藏的歌单 https://y.qq.com/...”。Extract
-        // every URL first and try recognized playlist links in order.
-        let candidates = extractURLs(from: value)
-        if !candidates.isEmpty {
-            var lastError: Error?
-            var foundSupportedLink = false
-            for url in candidates {
-                var reference = playlistReference(from: url)
-                if reference == nil {
-                    reference = try? await resolvedPlaylistReference(from: url)
-                }
-                guard reference != nil else {
-                    continue
-                }
-                foundSupportedLink = true
-                do {
-                    return try await importRemotePlaylist(from: url)
-                } catch {
-                    lastError = error
-                }
-            }
-            if foundSupportedLink {
-                throw lastError ?? PlaylistImportError.invalidFormat
-            }
-            throw PlaylistImportError.unsupportedLink
-        }
-
         if let data = value.data(using: .utf8),
            let object = try? JSONSerialization.jsonObject(with: data) {
             return try importJSON(object)
         }
 
-        throw PlaylistImportError.invalidFormat
+        // A share sheet often gives us a sentence rather than a bare URL,
+        // for example: “这是我收藏的歌单 https://y.qq.com/...”。Extract
+        // every URL first and try recognized playlist links in order.
+        let candidates = extractURLs(from: value)
+        guard !candidates.isEmpty else { throw PlaylistImportError.invalidFormat }
+        var lastError: Error?
+        for url in candidates {
+            guard let host = url.host?.lowercased(), !isRetiredShareHost(host) else { continue }
+            let resolvedURL = try? await resolveRedirect(from: url)
+            try Task.checkCancellation()
+            guard let reference = resolvedURL.flatMap({ playlistReference(from: $0) })
+                    ?? playlistReference(from: url) else { continue }
+            do {
+                let imported = try await importRemotePlaylist(reference)
+                try Task.checkCancellation()
+                return imported
+            } catch {
+                try Task.checkCancellation()
+                lastError = error
+            }
+        }
+
+        throw lastError ?? PlaylistImportError.unsupportedLink
     }
 
     private enum RemotePlaylistPlatform {
         case netease
         case catalog(LXCatalogPlatform)
-        case qishuiPlaylist
-
-        var displayName: String {
-            switch self {
-            case .netease: return LXCatalogPlatform.wy.displayName
-            case .catalog(let platform): return platform.displayName
-            case .qishuiPlaylist: return "汽水音乐"
-            }
-        }
     }
 
     private struct RemotePlaylistReference {
@@ -906,13 +893,7 @@ private enum PlaylistImportService {
         let id: String
     }
 
-    private static func importRemotePlaylist(from url: URL) async throws -> ImportedPlaylist {
-        let resolvedURL = (try? await resolveRedirect(from: url)) ?? url
-        guard let reference = playlistReference(from: resolvedURL)
-                ?? playlistReference(from: url) else {
-            throw PlaylistImportError.unsupportedLink
-        }
-
+    private static func importRemotePlaylist(_ reference: RemotePlaylistReference) async throws -> ImportedPlaylist {
         switch reference.platform {
         case .netease:
             return try await importNeteasePlaylist(id: reference.id)
@@ -936,50 +917,7 @@ private enum PlaylistImportService {
             } catch {
                 throw PlaylistImportError.invalidFormat
             }
-        case .qishuiPlaylist:
-            guard let shareURL = URL(string: reference.id) else {
-                throw PlaylistImportError.unsupportedLink
-            }
-            return try await importQishuiPlaylist(url: shareURL)
         }
-    }
-
-    private static func importQishuiPlaylist(url: URL) async throws -> ImportedPlaylist {
-        let resolved = try await QishuiAPI.shared.resolvePlaylist(sharedURL: url)
-        let tracks = resolved.tracks.enumerated().map { index, item in
-            let artistName = item.artistName.trimmingCharacters(in: .whitespacesAndNewlines)
-            let artist = artistName.isEmpty ? "汽水音乐" : artistName
-            let trackID = Int(item.id) ?? stableID("qishui|\(item.id)|\(item.name)|\(index)")
-            let artistID = stableID("qishui-artist|\(artist)")
-            var metadata = [
-                "songmid": item.id,
-                "qishuiTrackID": item.id,
-                "qishuiURL": item.shareURL.absoluteString,
-            ]
-            if let albumName = item.albumName, !albumName.isEmpty {
-                metadata["qishui.album"] = albumName
-            }
-            return Track(
-                id: trackID,
-                name: item.name,
-                artists: [ArtistRef(id: artistID, name: artist)],
-                album: AlbumRef(id: 0, name: item.albumName ?? "汽水音乐", picUrl: item.coverURL),
-                durationMS: item.durationMS,
-                source: "sd",
-                sourceMetadata: metadata
-            )
-        }
-        guard !tracks.isEmpty else { throw PlaylistImportError.noTracks }
-        return ImportedPlaylist(
-            name: resolved.name,
-            coverURL: resolved.coverURL,
-            sourceName: "汽水音乐",
-            tracks: tracks,
-            remoteSource: "sd",
-            remotePlaylistID: resolved.id,
-            remoteRevision: resolved.revision,
-            isLocalCopy: true
-        )
     }
 
     private static func importNeteasePlaylist(id: String) async throws -> ImportedPlaylist {
@@ -1058,19 +996,18 @@ private enum PlaylistImportService {
                                 isLocalCopy: true)
     }
 
-    private static func resolvedPlaylistReference(from url: URL) async throws -> RemotePlaylistReference {
-        let resolvedURL = try await resolveRedirect(from: url)
-        guard let reference = playlistReference(from: resolvedURL) else {
-            throw PlaylistImportError.unsupportedLink
+    private static func isRetiredShareHost(_ host: String) -> Bool {
+        let host = host.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        return ["migu.cn", "douyin.com", "qishui.com"].contains { domain in
+            host == domain || host.hasSuffix("." + domain)
         }
-        return reference
     }
 
     /// Finds the public playlist identifier in a platform share URL. The
     /// patterns intentionally stay provider-specific so a song or artist URL
     /// cannot accidentally be imported as a playlist.
     private static func playlistReference(from url: URL) -> RemotePlaylistReference? {
-        guard let host = url.host?.lowercased() else { return nil }
+        guard let host = url.host?.lowercased(), !isRetiredShareHost(host) else { return nil }
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let query = PlaylistImportQuery.firstNonEmptyValues(from: components?.queryItems ?? [])
         let parts = url.path.split(separator: "/").map(String.init)
@@ -1097,7 +1034,7 @@ private enum PlaylistImportService {
             return nil
         }
 
-        if host == "y.qq.com" || host.hasSuffix(".y.qq.com") || host == "c.y.qq.com" {
+        if host == "y.qq.com" || host.hasSuffix(".y.qq.com") {
             let id = query["disstid"] ?? query["playlistid"] ?? query["playlist_id"]
                 ?? firstID(after: ["playlist", "playsquare"])
             guard let id, !id.isEmpty else { return nil }
@@ -1126,24 +1063,6 @@ private enum PlaylistImportService {
                 ?? firstID(after: ["playlist_detail", "playlist", "songlist"])
             guard let id, !id.isEmpty else { return nil }
             return RemotePlaylistReference(platform: .catalog(.kw), id: id)
-        }
-
-        if host.contains("migu.cn") {
-            let id = query["playlistid"] ?? query["playlist_id"]
-                ?? firstID(after: ["collection", "playlist"])
-            guard let id, !id.isEmpty else { return nil }
-            return RemotePlaylistReference(platform: .catalog(.mg), id: id)
-        }
-
-        if QishuiAPI.isPlaylistURL(url) {
-            return RemotePlaylistReference(platform: .qishuiPlaylist, id: url.absoluteString)
-        }
-
-        // A short `/s/...` URL is ambiguous until its redirect target is
-        // known. Returning nil here makes importPlaylist resolve it first;
-        // otherwise it would be sent to the single-track endpoint.
-        if QishuiAPI.isShortShareURL(url) {
-            return nil
         }
 
         return nil

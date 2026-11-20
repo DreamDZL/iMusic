@@ -363,7 +363,7 @@ struct NowPlayingView: View {
         }
 #endif
         var urlString = track.album.picUrl
-        if urlString == nil, track.normalizedForLXPlayback().source != "sd" {
+        if urlString == nil {
             let query = [track.name, track.artistNames].filter { !$0.isEmpty }.joined(separator: " ")
             let result = try? await NeteaseAPI.search(query, type: .songs, limit: 6)
             guard !Task.isCancelled, player.currentTrack?.playbackKey == playbackKey else { return }

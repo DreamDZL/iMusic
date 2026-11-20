@@ -1737,36 +1737,6 @@ final class PlayerService: ObservableObject {
     private func loadLyrics(for track: Track, generation: Int) async {
 #if os(iOS)
         let sourceKey = (track.source ?? track.sourceMetadata["source"] ?? "").lowercased()
-        let isQishui = track.normalizedForLXPlayback().source == "sd"
-        if isQishui {
-            // Metadata/lyrics must remain usable even when the selected source
-            // has no Qishui audio capability. One detail fetch populates both.
-            if let catalogue = try? await QishuiSearch.shared.metadata(for: track) {
-                guard !Task.isCancelled, generation == resolveGeneration,
-                      let current = currentTrack, current.playbackKey == track.playbackKey else { return }
-                if let enriched = current.mergingQishuiMetadata(catalogue) {
-                    currentTrack = enriched
-                    queue = queue.map { $0.playbackKey == track.playbackKey ? ($0.mergingQishuiMetadata(catalogue) ?? $0) : $0 }
-                    shuffledQueue = shuffledQueue.map { $0.playbackKey == track.playbackKey ? ($0.mergingQishuiMetadata(catalogue) ?? $0) : $0 }
-                    playNextList = playNextList.map { $0.playbackKey == track.playbackKey ? ($0.mergingQishuiMetadata(catalogue) ?? $0) : $0 }
-                    if duration <= 0 { duration = enriched.duration }
-                    NowPlayingManager.shared.updateMetadata(for: enriched, duration: duration)
-                    NowPlayingManager.shared.updateElapsed(progress, rate: isPlaying && !isResolvingSource ? Double(playbackRate) : 0)
-                    persistState()
-                }
-            }
-            guard !Task.isCancelled, generation == resolveGeneration else { return }
-            if let native = try? await LXCatalogService.nativeLyrics(for: track) {
-                guard !Task.isCancelled, generation == resolveGeneration else { return }
-                let parsed = LyricsParser.parseLX(lyric: native.lyric, tlyric: native.tlyric,
-                                                  rlyric: native.rlyric, lxlyric: native.lxlyric)
-                if !parsed.isEmpty {
-                    publishLyrics(parsed, for: track, generation: generation)
-                    return
-                }
-            }
-        }
-
         guard !Task.isCancelled, generation == resolveGeneration else { return }
         if ["wy", "netease", "163"].contains(sourceKey),
            let response = try? await NeteaseAPI.lyric(id: track.id) {
@@ -1795,7 +1765,7 @@ final class PlayerService: ObservableObject {
 
         // Catalogue lyrics are metadata only. Playback is still resolved by
         // the selected LX User API source in resolveAndLoad(_:generation:).
-        if !isQishui, !sourceKey.isEmpty,
+        if !sourceKey.isEmpty,
            let native = try? await LXCatalogService.nativeLyrics(for: track) {
             guard generation == resolveGeneration else { return }
             let parsed = LyricsParser.parseLX(lyric: native.lyric, tlyric: native.tlyric,
@@ -1809,7 +1779,7 @@ final class PlayerService: ObservableObject {
         // If this platform has no lyric endpoint or no result, search every
         // supported catalogue platform by metadata. IDs are never reused
         // across platforms, so a matched track is required before fetching.
-        let fallbackPlatforms = ["tx", "wy", "kw", "kg", "mg"]
+        let fallbackPlatforms = ["tx", "wy", "kw", "kg"]
         for platform in fallbackPlatforms where platform != sourceKey {
             guard !Task.isCancelled, generation == resolveGeneration else { return }
             guard let matched = await LXCatalogService.matchingTrack(track, on: platform),
@@ -1872,7 +1842,7 @@ final class PlayerService: ObservableObject {
 #if os(iOS)
         // LX Mobile's built-in catalogue adapters own online lyrics. The
         // imported User API normally exposes only `musicUrl`, so asking it
-        // for `lyric` cannot work for kw/kg/tx/mg sources.
+        // for `lyric` cannot work for kw/kg/tx sources.
         if track.source != nil,
            let native = try? await LXCatalogService.nativeLyrics(for: track) {
             let parsed = LyricsParser.parseLX(lyric: native.lyric,

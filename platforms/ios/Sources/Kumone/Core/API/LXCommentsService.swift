@@ -35,8 +35,6 @@ enum LXCommentsService {
             return try await kugouComments(for: track, limit: limit)
         case "tx", "qq", "qqmusic":
             return try await qqComments(for: track, limit: limit)
-        case "mg", "migu":
-            return try await miguComments(for: track, limit: limit)
         default:
             throw LXCommentsError.unsupported
         }
@@ -217,45 +215,6 @@ enum LXCommentsService {
                              avatarURL: firstText(item["Avatar"], item["avatarurl"]),
                              likedCount: int(item["PraiseNum"]) ?? int(item["praisenum"]) ?? 0,
                              date: date(item["PubTime"] ?? item["time"], unit: .auto))
-        }
-    }
-
-    private static func miguComments(for track: Track, limit: Int) async throws -> LXCommentsResult {
-        let songID = firstText(track.sourceMetadata["copyrightId"], track.sourceMetadata["songmid"], String(track.id))!
-        var latestURL = URLComponents(string: "https://app.c.nf.migu.cn/MIGUM3.0/user/comment/stack/v1.0")!
-        latestURL.queryItems = [URLQueryItem(name: "pageSize", value: String(limit)), URLQueryItem(name: "queryType", value: "1"),
-                                URLQueryItem(name: "resourceId", value: songID), URLQueryItem(name: "resourceType", value: "2"),
-                                URLQueryItem(name: "commentId", value: "")]
-        var hotURL = URLComponents(string: "https://app.c.nf.migu.cn/MIGUM3.0/user/comment/stack/v1.0")!
-        hotURL.queryItems = [URLQueryItem(name: "pageSize", value: String(limit)), URLQueryItem(name: "queryType", value: "2"),
-                             URLQueryItem(name: "resourceId", value: songID), URLQueryItem(name: "resourceType", value: "2"),
-                             URLQueryItem(name: "hotCommentStart", value: "0")]
-        async let latest = miguList(url: latestURL.url!, key: "comments")
-        async let hot = miguList(url: hotURL.url!, key: "hotComments")
-        let latestResult = try? await latest
-        let hotResult = try? await hot
-        guard latestResult != nil || hotResult != nil else {
-            throw LXCommentsError.requestFailed
-        }
-        return LXCommentsResult(hot: hotResult ?? [], latest: latestResult ?? [])
-    }
-
-    private static func miguList(url: URL, key: String) async throws -> [LXComment] {
-        let root = try await fetchObject(url)
-        guard text(root["code"]) == "000000", let data = root["data"] as? [String: Any] else {
-            throw LXCommentsError.requestFailed
-        }
-        let items = (data[key] as? [[String: Any]]) ?? []
-        return items.compactMap { item in
-            guard let content = firstText(item["commentInfo"], item["content"]), !content.isEmpty else { return nil }
-            let user = item["user"] as? [String: Any]
-            let operations = item["opNumItem"] as? [String: Any]
-            return LXComment(id: text(item["commentId"]) ?? UUID().uuidString,
-                             content: content,
-                             author: firstText(user?["nickName"], user?["nickname"]),
-                             avatarURL: firstText(user?["middleIcon"], user?["bigIcon"], user?["smallIcon"]),
-                             likedCount: int(operations?["thumbNum"]) ?? 0,
-                             date: date(item["commentTime"], unit: .auto))
         }
     }
 

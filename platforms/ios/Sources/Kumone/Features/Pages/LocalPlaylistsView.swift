@@ -610,7 +610,7 @@ struct ImportPlaylistSheet: View {
                         .font(.body)
                         .overlay(alignment: .topLeading) {
                             if input.isEmpty {
-                                Text("粘贴任意支持平台的歌单链接，或粘贴包含链接的整段文字。也支持其他音乐软件导出的歌单 JSON；网易云、QQ、酷狗、酷我和咪咕歌曲会保留原平台标识，并由已选 LX 音源负责播放。")
+                                Text("粘贴公开歌单链接、包含链接的分享文字，或其他音乐软件导出的歌单 JSON。")
                                     .foregroundStyle(.tertiary)
                                     .padding(.top, 8)
                                     .padding(.trailing, 8)
@@ -618,13 +618,6 @@ struct ImportPlaylistSheet: View {
                                     .allowsHitTesting(false)
                             }
                         }
-                }
-
-                Section("汽水音乐") {
-                    Text("仅支持导入汽水音乐公开歌单。导入会读取完整曲目列表；播放、歌词和音质统一交给你已启用的 LX 音源，不再调用内置汽水播放接口。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Section {
@@ -648,7 +641,7 @@ struct ImportPlaylistSheet: View {
                 }
 
                 Section("说明") {
-                    Text("歌单只保存到本机，不会修改原音乐软件。支持网易云、QQ、酷狗、酷我和咪咕的公开歌单链接，也支持从分享文本中自动识别链接及导入 JSON。在线目录只读取公开信息，实际播放仍使用你自己添加的 LX 音源。")
+                    Text("支持网易云、QQ 音乐、酷狗和酷我的公开歌单链接。导入的歌单保存为本地副本，播放使用你已启用的 LX 音源。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

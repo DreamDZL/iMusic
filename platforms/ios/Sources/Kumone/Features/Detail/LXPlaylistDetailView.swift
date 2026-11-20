@@ -221,14 +221,10 @@ struct LXPlaylistDetailView: View {
         switch detail.source {
         case .kw:
             providerNote = "酷我当前详情请求最多取 1000 首。"
-        case .mg:
-            providerNote = "咪咕当前详情请求最多取 1000 首。"
         case .kg:
             providerNote = "酷狗公开详情没有可核对的权威总数。"
         case .tx:
             providerNote = "QQ 音乐本次接口返回数无法独立核实是否完整。"
-        case .sd:
-            providerNote = "汽水音乐没有提供可核对的权威总数。"
         case .wy, .aggregate:
             providerNote = ""
         }

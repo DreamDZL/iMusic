@@ -1,4 +1,4 @@
-// Run on Windows or macOS: node --test platforms/ios/Tests/LXQishuiBridge.test.cjs
+// Run on Windows or macOS: node --test platforms/ios/Tests/LXSourceBridge.test.cjs
 // Sanitized source only. No personal scripts, credentials, or live audio.
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
@@ -8,7 +8,7 @@ const vm = require('node:vm')
 
 const preload = fs.readFileSync(path.join(__dirname, '../Sources/Kumone/LXUserAPIPreload.js'), 'utf8')
 const flush = () => new Promise(resolve => setImmediate(resolve))
-const id = '7409001029981636620'
+const id = '003fixtureSongId'
 
 function bridge(script) {
   const calls = []
@@ -31,20 +31,20 @@ function bridge(script) {
   return {
     calls,
     dispatch(action, data) { context.__lx_native__('fixture-key', action, JSON.stringify(data)) },
-    request(key, action = 'musicUrl', source = 'qs') {
+    request(key, action = 'musicUrl', source = 'tx') {
       context.__lx_native__('fixture-key', 'request', JSON.stringify({ requestKey: key, data: {
-        source, action, info: { type: '128k', musicInfo: { id, songmid: id, songId: id, track_id: id } },
+        source, action, info: { type: '128k', musicInfo: { id, songmid: id } },
       } }))
     },
   }
 }
 
-const init = `lx.send(lx.EVENT_NAMES.inited, {sources:{qs:{type:'music',actions:['musicUrl','lyric'],qualitys:['128k']}}})`
+const init = `lx.send(lx.EVENT_NAMES.inited, {sources:{tx:{type:'music',actions:['musicUrl','lyric'],qualitys:['128k']}}})`
 
 test('full source Promise -> lx.request -> native HTTP response -> musicUrl result', async () => {
   const host = bridge(`
     lx.on(lx.EVENT_NAMES.request, async ({source, info}) => {
-      if (source !== 'qs' || info.musicInfo.songmid !== '${id}' || info.musicInfo.id !== '${id}') throw new Error('wrong identity')
+      if (source !== 'tx' || info.musicInfo.songmid !== '${id}' || info.musicInfo.id !== '${id}') throw new Error('wrong identity')
       return await new Promise((resolve, reject) => {
         lx.request('https://fixture.invalid/resolve', {method:'POST',body:JSON.stringify({id:info.musicInfo.id})}, (error, response, body) => {
           if (error) return reject(error)
@@ -65,20 +65,33 @@ test('full source Promise -> lx.request -> native HTTP response -> musicUrl resu
   await flush()
   const response = host.calls.find(call => call.action === 'response').data
   assert.equal(response.status, true)
-  assert.equal(response.result.source, 'qs')
+  assert.equal(response.result.source, 'tx')
   assert.equal(response.result.data.url, 'https://fixture.invalid/audio.mp3')
 })
 
-test('missing Qishui capability rejects without calling a mismatched source', async () => {
+test('keep all four supported providers and ignore retired declarations', async () => {
+  const supported = ['kw', 'kg', 'tx', 'wy']
+  const retired = ['mg', 'sd', 'qs', 'git', 'local']
+  const sources = Object.fromEntries([...supported, ...retired].map(source => [source, {
+    type: 'music', actions: ['musicUrl'], qualitys: ['128k'],
+  }]))
   const host = bridge(`
-    lx.on(lx.EVENT_NAMES.request, () => { throw new Error('must not call') })
-    lx.send(lx.EVENT_NAMES.inited, {sources:{wy:{type:'music',actions:['musicUrl'],qualitys:['128k']}}})
+    lx.on(lx.EVENT_NAMES.request, ({source}) => 'https://fixture.invalid/' + source + '.mp3')
+    lx.send(lx.EVENT_NAMES.inited, {sources:${JSON.stringify(sources)}})
   `)
-  host.request('unsupported')
+  const initialization = host.calls.find(call => call.action === 'init').data
+  assert.deepEqual(Object.keys(initialization.info.sources), supported)
+  for (const source of [...supported, ...retired]) host.request(source, 'musicUrl', source)
   await flush()
-  const response = host.calls.find(call => call.action === 'response').data
-  assert.equal(response.status, false)
-  assert.match(response.errorMessage, /does not declare qs\/musicUrl/)
+  const responses = new Map(host.calls.filter(call => call.action === 'response')
+    .map(call => [call.data.requestKey, call.data]))
+  for (const source of supported) {
+    assert.equal(responses.get(source).result.data.url, `https://fixture.invalid/${source}.mp3`)
+  }
+  for (const source of retired) {
+    assert.equal(responses.get(source).status, false)
+    assert.match(responses.get(source).errorMessage, /does not declare/)
+  }
   assert.equal(host.calls.filter(call => call.action === 'request').length, 0)
 })
 
@@ -134,7 +147,7 @@ test('malformed lyric payload returns an error, not an empty success', async () 
 test('failed source initialization cannot expose working-looking capabilities', async () => {
   const host = bridge(`
     lx.on(lx.EVENT_NAMES.request, () => 'https://fixture.invalid/audio.mp3')
-    lx.send(lx.EVENT_NAMES.inited, {status:false,sources:{qs:{type:'music',actions:['musicUrl'],qualitys:['128k']}}})
+    lx.send(lx.EVENT_NAMES.inited, {status:false,sources:{tx:{type:'music',actions:['musicUrl'],qualitys:['128k']}}})
   `)
   const initialization = host.calls.find(call => call.action === 'init').data
   assert.equal(initialization.status, false)

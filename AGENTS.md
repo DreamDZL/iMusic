@@ -3,6 +3,7 @@
 ## Product scope
 - This repository's active product target is the native iOS IPA in `platforms/ios/`.
 - Do not implement or expand desktop or Android features unless the maintainer explicitly reopens that scope.
+- The iOS catalogue and LX playback support QQ Music, NetEase Cloud Music, Kuwo, and Kugou. Aggregate search queries these four providers. Preserve source identifiers on existing library entries even when their provider is no longer supported.
 - Treat this as a long-lived product: preserve user data, backward compatibility, clear ownership, and reproducible releases.
 
 ## Product and interface standard

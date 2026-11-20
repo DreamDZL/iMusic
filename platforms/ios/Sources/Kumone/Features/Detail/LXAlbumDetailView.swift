@@ -32,7 +32,7 @@ private final class LXAlbumDetailViewModel: ObservableObject {
     }
 }
 
-/// Source-native album detail for Kuwo, KuGou, QQ and Migu. The source ID is
+/// Source-native album detail for Kuwo, KuGou and QQ Music. The source ID is
 /// kept separate from NetEase's album integer so clicking an aggregate result
 /// never sends a provider-specific ID to the wrong API.
 struct LXAlbumDetailView: View {
