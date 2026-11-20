@@ -234,8 +234,9 @@ final class KumoneIOSUITests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         field.typeText("next")
         let replacement = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "next"), object: field)
-        XCTAssertEqual(XCTWaiter.wait(for: [replacement], timeout: 5), .completed,
-                       "Reselecting Search should select the existing query for replacement")
+        let replacementResult = XCTWaiter.wait(for: [replacement], timeout: 5)
+        XCTAssertEqual(replacementResult, .completed,
+                       "Reselecting Search should replace the query. Actual value: \(field.value ?? "nil")")
     }
 
     @MainActor
