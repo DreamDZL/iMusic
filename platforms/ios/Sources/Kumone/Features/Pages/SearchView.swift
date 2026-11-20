@@ -542,6 +542,7 @@ struct SearchView: View {
                     onCancel()
                 }
                 .frame(minHeight: 44)
+                .accessibilityIdentifier("cancelTabSearch")
             }
         }
         .padding(.horizontal, Theme.Layout.contentInset)
@@ -1025,6 +1026,7 @@ private struct TabSearchTextField: UIViewRepresentable {
         field.adjustsFontForContentSizeCategory = true
         field.returnKeyType = .search
         field.autocapitalizationType = .none
+        field.autocorrectionType = .no
         field.clearButtonMode = .whileEditing
         field.accessibilityIdentifier = "tabSearchInput"
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -1090,7 +1092,9 @@ private struct TabSearchTextField: UIViewRepresentable {
         }
 
         func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-            guard textField.markedTextRange == nil else { return true }
+            // Search is an explicit submit. Keep the currently displayed IME
+            // candidate, including input that is still marked by the keyboard.
+            textField.unmarkText()
             let query = textField.text ?? ""
             textField.resignFirstResponder()
             input.onSubmit(query)

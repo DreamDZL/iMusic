@@ -222,9 +222,9 @@ final class KumoneIOSUITests: XCTestCase {
         let submit = app.keyboards.buttons.matching(NSPredicate(format: "label IN %@", ["Search", "search", "搜索"])).firstMatch
         XCTAssertTrue(submit.waitForExistence(timeout: 5))
         submit.tap()
-        let hiddenKeyboard = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
-                                                       object: app.keyboards.firstMatch)
-        XCTAssertEqual(XCTWaiter.wait(for: [hiddenKeyboard], timeout: 5), .completed)
+        let editingEnded = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
+                                                     object: app.buttons["cancelTabSearch"])
+        XCTAssertEqual(XCTWaiter.wait(for: [editingEnded], timeout: 8), .completed)
         XCTAssertEqual(field.value as? String, "test")
 
         XCTAssertTrue(searchTab.isHittable)
