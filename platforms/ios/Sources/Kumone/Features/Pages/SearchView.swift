@@ -492,7 +492,7 @@ struct SearchView: View {
     @State private var searchText: String
     @State private var searchDebounceTask: Task<Void, Never>?
     @FocusState private var isSearchFocused: Bool
-    @State private var searchSelection: TextSelection?
+    @State private var tabInputFocused = false
     @State private var handledFocusRequest: UInt = 0
     private let focusRequest: UInt
     private let onCancel: (() -> Void)?
@@ -528,19 +528,17 @@ struct SearchView: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
-                TextField("搜索艺人、歌曲、专辑和歌单", text: $searchText, selection: $searchSelection)
-                    .focused($isSearchFocused)
-                    .submitLabel(.search)
-                    .textInputAutocapitalization(.never)
-                    .accessibilityIdentifier("tabSearchInput")
-                    .onSubmit { submitSearchAfterInputMethodCommits() }
+                TabSearchTextField(text: $searchText, isFocused: $tabInputFocused,
+                                   handledFocusRequest: $handledFocusRequest, focusRequest: focusRequest) { query in
+                    performSearch(query)
+                }
             }
             .padding(.horizontal, 12)
             .frame(minHeight: 44)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: Theme.Radius.standard))
-            if isSearchFocused {
+            if tabInputFocused {
                 Button("取消") {
-                    isSearchFocused = false
+                    tabInputFocused = false
                     onCancel()
                 }
                 .frame(minHeight: 44)
@@ -549,14 +547,6 @@ struct SearchView: View {
         .padding(.horizontal, Theme.Layout.contentInset)
         .padding(.vertical, 6)
         .background(.bar)
-        .task(id: focusRequest) {
-            guard focusRequest != handledFocusRequest else { return }
-            handledFocusRequest = focusRequest
-            if !searchText.isEmpty {
-                searchSelection = TextSelection(range: searchText.startIndex..<searchText.endIndex)
-            }
-            isSearchFocused = true
-        }
     }
     #endif
 
@@ -951,8 +941,11 @@ struct SearchView: View {
 
     private func resignSearchInput() {
         #if os(iOS)
+        if onCancel != nil {
+            tabInputFocused = false
+            return
+        }
         isSearchFocused = false
-        guard onCancel == nil else { return }
         UIApplication.shared.sendAction(
             #selector(UIResponder.resignFirstResponder),
             to: nil,
@@ -1014,6 +1007,98 @@ struct SearchView: View {
         }
     }
 }
+
+#if os(iOS)
+private struct TabSearchTextField: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+    @Binding var handledFocusRequest: UInt
+    let focusRequest: UInt
+    let onSubmit: (String) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> Field {
+        let field = Field()
+        field.placeholder = "搜索艺人、歌曲、专辑和歌单"
+        field.font = .preferredFont(forTextStyle: .body)
+        field.adjustsFontForContentSizeCategory = true
+        field.returnKeyType = .search
+        field.autocapitalizationType = .none
+        field.clearButtonMode = .whileEditing
+        field.accessibilityIdentifier = "tabSearchInput"
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        field.delegate = context.coordinator
+        field.addTarget(context.coordinator, action: #selector(Coordinator.editingChanged(_:)), for: .editingChanged)
+        field.onWindowChange = { [weak coordinator = context.coordinator] field in
+            coordinator?.applyFocusRequest(to: field)
+        }
+        return field
+    }
+
+    func updateUIView(_ field: Field, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.input = self
+        if field.text != text, field.markedTextRange == nil { field.text = text }
+        coordinator.applyFocusRequest(to: field)
+        if !isFocused, focusRequest == handledFocusRequest, field.isFirstResponder {
+            DispatchQueue.main.async { [weak field, weak coordinator] in
+                guard let coordinator, !coordinator.input.isFocused else { return }
+                field?.resignFirstResponder()
+            }
+        }
+    }
+
+    final class Field: UITextField {
+        var onWindowChange: ((Field) -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            onWindowChange?(self)
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var input: TabSearchTextField
+
+        init(_ input: TabSearchTextField) { self.input = input }
+
+        func applyFocusRequest(to field: Field) {
+            guard field.window != nil, input.focusRequest != input.handledFocusRequest else { return }
+            DispatchQueue.main.async { [weak self, weak field] in
+                guard let self, let field, field.window != nil,
+                      self.input.focusRequest != self.input.handledFocusRequest,
+                      field.becomeFirstResponder() else { return }
+                self.input.handledFocusRequest = self.input.focusRequest
+                if field.markedTextRange == nil, let text = field.text, !text.isEmpty {
+                    field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+                }
+            }
+        }
+
+        @objc func editingChanged(_ field: UITextField) {
+            if field.markedTextRange == nil { input.text = field.text ?? "" }
+        }
+
+        func textFieldDidBeginEditing(_ textField: UITextField) { input.isFocused = true }
+
+        func textFieldDidEndEditing(_ textField: UITextField) {
+            editingChanged(textField)
+            input.isFocused = false
+        }
+
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            guard textField.markedTextRange == nil else { return true }
+            let query = textField.text ?? ""
+            textField.resignFirstResponder()
+            input.onSubmit(query)
+            return false
+        }
+    }
+}
+#endif
 
 private struct SearchSkeletonRow: View {
     var body: some View {
