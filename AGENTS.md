@@ -24,6 +24,7 @@
 ## Validation and delivery
 - Before changes: inspect `git status`; never overwrite unrelated user work.
 - Use GitHub Actions in `DreamDZL/iMusic` for iOS compilation, simulator tests, and Release IPA builds. The build and packaging entry point is `.github/workflows/ios-release.yml`.
+- On a fresh simulator, the QuickPath tutorial can cover the software keyboard while its keys remain discoverable by XCTest. Dismiss the tutorial before testing keyboard submission and use the simulator recording to diagnose a missing submit event.
 - For pre-release validation, dispatch the workflow on an isolated CI branch and download the unsigned IPA from its Actions artifacts. Use the version-tag workflow for the formal GitHub Release.
 - Validate release version, bundle identifier, signing configuration, IPA contents, and update/download links before release.
 - Do not claim a build or test passed unless it was actually run and its result observed.

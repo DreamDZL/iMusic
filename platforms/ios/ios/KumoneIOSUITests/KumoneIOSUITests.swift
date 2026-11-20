@@ -215,10 +215,12 @@ final class KumoneIOSUITests: XCTestCase {
                       "Selecting the search tab should expose its search field")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5),
                       "Selecting the search tab should focus its search field")
+        dismissKeyboardTutorial(in: app)
         field.typeText("test")
         let initialQuery = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "test"), object: field)
         XCTAssertEqual(XCTWaiter.wait(for: [initialQuery], timeout: 5), .completed,
                        "The focused search field should accept the complete query")
+        dismissKeyboardTutorial(in: app)
         let submit = app.keyboards.buttons.matching(NSPredicate(format: "label IN %@", ["Search", "search", "搜索"])).firstMatch
         XCTAssertTrue(submit.waitForExistence(timeout: 5))
         submit.tap()
@@ -249,11 +251,20 @@ final class KumoneIOSUITests: XCTestCase {
 
         app.tabBars.buttons["搜索"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        let labels = ["取消", "Cancel", "关闭", "Close"]
-        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", argumentArray: [labels])).firstMatch
+        dismissKeyboardTutorial(in: app)
+        let cancel = app.buttons["cancelTabSearch"]
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
         cancel.tap()
         XCTAssertTrue(app.navigationBars["资料库"].waitForExistence(timeout: 10))
+    }
+
+    @MainActor
+    private func dismissKeyboardTutorial(in app: XCUIApplication) {
+        // A freshly booted simulator can show QuickPath onboarding over the keyboard.
+        let tutorial = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Speed up your typing")).firstMatch
+        if tutorial.waitForExistence(timeout: 2) {
+            app.buttons["Continue"].firstMatch.tap()
+        }
     }
 
     @MainActor
