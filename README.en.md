@@ -6,7 +6,7 @@
 
 # iMusic
 
-**A native iOS 27 music client with an Apple Music-inspired interface**
+**Discover, collect and listen in one place.**
 
 SwiftUI · System Liquid Glass · LX User API · LX Sync Server
 
@@ -17,21 +17,25 @@ SwiftUI · System Liquid Glass · LX User API · LX Sync Server
 
 </div>
 
-iMusic continues the native iOS project from [Moumusic](https://github.com/jiajia2222/Moumusic). Its main destinations are Home, New Discovery, Radio and Library, with Search as a separate navigation entry. The interface uses native SwiftUI navigation and follows the system Liquid Glass appearance. Imported LX User API sources provide third-party playback and fallback; automatic mode may first use an eligible signed-in provider account.
+iMusic is a native iOS music client built on [Moumusic](https://github.com/jiajia2222/Moumusic). Home, Discovery, Radio, Library and Search share a familiar tab bar, with SwiftUI navigation and system Liquid Glass.
+
+Search across QQ Music, NetEase Cloud Music, Kuwo and Kugou, and use imported LX User API sources for playback. Availability depends on the source and provider; automatic mode may also use an eligible signed-in account.
 
 QQ Music and NetEase public playlists are imported as editable local copies. Edits to those copies stay in iMusic and are not written to the originating provider playlist. Local favorites and compatible playlists can sync across devices through a self-hosted [LX Sync Server](https://github.com/lyswhut/lx-music-sync-server). Source scripts are managed locally on each device.
 
 ## Screenshots
 
-| Library | Home | Home with collapsed navigation |
-|:---:|:---:|:---:|
-| <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/library.png" width="200" alt="iMusic Library"> | <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/home.png" width="200" alt="iMusic Home"> | <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/home-collapsed-navigation.png" width="200" alt="iMusic Home with collapsed navigation"> |
-| Lyrics | Now Playing |  |
-| <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/lyrics.png" width="200" alt="iMusic lyrics screen"> | <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/now-playing.png" width="200" alt="iMusic Now Playing screen"> |  |
+<div align="center">
+<img src="platforms/ios/docs/promo/01-home.png" width="19%" alt="Home">
+<img src="platforms/ios/docs/promo/02-radio.png" width="19%" alt="Radio">
+<img src="platforms/ios/docs/promo/03-search.png" width="19%" alt="Aggregate search">
+<img src="platforms/ios/docs/promo/04-player.png" width="19%" alt="Now Playing">
+<img src="platforms/ios/docs/promo/05-lyrics.png" width="19%" alt="Synchronized lyrics">
+</div>
 
 ## Features
 
-- Apple Music-inspired Home, New Discovery, Radio and Library destinations, with a separate Search entry
+- Native Home, Discovery, Radio, Library and Search tabs, with light and dark appearances
 - Artist, album and playlist details, mini-player, full-screen player, queue and synchronized lyrics
 - Native Lock Screen and Control Center playback controls
 - User-managed LX source import, availability check, enable/disable, switching, export and deletion

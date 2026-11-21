@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.1 - 2026-11-21
+
+### Improved / 改进
+
+- iOS: aggregate search covers QQ Music, NetEase, Kuwo and Kugou, groups matching recordings and allows choosing a source; search focus, text selection and keyboard submission are refined.
+- iOS: improve interactive player dismissal, artwork motion and track-swipe handling, and request a higher refresh rate during player interaction on supported devices.
+- iOS: improve recommendation artwork, playback errors and NetEase listening history synchronization; add coverage for source handling and library behavior.
+- iOS：聚合搜索覆盖 QQ 音乐、网易云、酷我和酷狗，合并匹配录音并支持选择来源；改进搜索聚焦、文字选中和键盘提交。
+- iOS：改进播放页交互式收起、封面动画和滑动切歌，并在受支持设备的播放器交互期间请求更高刷新率。
+- iOS：改进推荐封面、播放错误提示和网易云听歌记录同步，并增加音源及资料库行为的测试覆盖。
+
+### Changed / 变更
+
+- iOS: catalogue and LX playback support QQ Music, NetEase, Kuwo and Kugou; existing library entries retain their original provider identifiers.
+- iOS：目录与 LX 播放支持 QQ 音乐、网易云、酷我和酷狗；现有资料库条目保留原平台标识。
+
 ## Unreleased
 
 - 搜索歌单详情增加保存到资料库及打开已保存播放列表的入口；重复收藏按平台与歌单身份去重，不覆盖本地编辑。来源不能确认曲目完整性时，明确区分已加载歌曲快照与完整歌单。

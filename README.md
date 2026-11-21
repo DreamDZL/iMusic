@@ -6,7 +6,7 @@
 
 # iMusic
 
-**原生 iOS 27 音乐客户端，采用 Apple Music 风格界面**
+**让发现、收藏与聆听，自然流动。**
 
 SwiftUI · 系统 Liquid Glass · LX User API 音源 · LX Sync Server
 
@@ -16,7 +16,9 @@ SwiftUI · 系统 Liquid Glass · LX User API 音源 · LX Sync Server
 
 </div>
 
-iMusic 基于 [Moumusic](https://github.com/jiajia2222/Moumusic) 的原生 iOS 工程继续开发。主页面为“主页、新发现、广播、资料库”，搜索作为独立导航入口；使用 SwiftUI 原生导航并跟随系统 Liquid Glass 外观。LX User API 音源负责第三方播放和回退；自动模式可能先使用符合条件的已登录平台账号。
+iMusic 是基于 [Moumusic](https://github.com/jiajia2222/Moumusic) 开发的原生 iOS 音乐客户端。主页、新发现、电台、资料库和搜索汇聚在熟悉的底部导航中；SwiftUI 和系统 Liquid Glass 让浏览与播放融为一体。
+
+聚合搜索支持 QQ 音乐、网易云音乐、酷我音乐和酷狗音乐。导入 LX User API 音源后，可使用音源解析播放；可用性取决于音源和服务状态。自动模式也可能使用符合条件的已登录平台账号。
 
 QQ 音乐和网易云公开歌单会导入为可编辑的本地副本。对这些副本的编辑只作用于 iMusic 中的副本，不会写回来源平台歌单。本地收藏和兼容歌单可通过自托管的 [LX Sync Server](https://github.com/lyswhut/lx-music-sync-server) 在设备间同步。音源脚本由每台设备分别管理。
 
@@ -24,19 +26,21 @@ QQ 音乐和网易云公开歌单会导入为可编辑的本地副本。对这�
 
 ## 界面预览
 
-| 资料库 | 主页 | 主页（导航栏收起） |
-|:---:|:---:|:---:|
-| <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/library.png" width="200" alt="iMusic 资料库"> | <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/home.png" width="200" alt="iMusic 主页"> | <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/home-collapsed-navigation.png" width="200" alt="iMusic 主页滚动时收起导航栏"> |
-| 歌词页面 | 播放页面 |  |
-| <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/lyrics.png" width="200" alt="iMusic 歌词页面"> | <img src="https://raw.githubusercontent.com/DreamDZL/iMusic/main/platforms/ios/docs/screenshots/now-playing.png" width="200" alt="iMusic 播放页面"> |  |
+<div align="center">
+<img src="platforms/ios/docs/promo/01-home.png" width="19%" alt="主页推荐">
+<img src="platforms/ios/docs/promo/02-radio.png" width="19%" alt="iMusic 电台">
+<img src="platforms/ios/docs/promo/03-search.png" width="19%" alt="聚合搜索">
+<img src="platforms/ios/docs/promo/04-player.png" width="19%" alt="全屏播放器">
+<img src="platforms/ios/docs/promo/05-lyrics.png" width="19%" alt="同步歌词">
+</div>
 
 ## 功能
 
-- Apple Music 风格的主页、新发现、广播和资料库页面，搜索作为独立导航入口
+- 原生主页、新发现、电台、资料库和搜索，适配浅色与深色外观
 - 歌手、专辑与歌单详情，迷你播放器、全屏播放器、队列和同步歌词
 - 原生锁屏与控制中心播放控制
 - LX 音源文件/链接导入、检测、启停、切换、导出和删除
-- 多平台目录搜索与音源解析播放
+- 四平台聚合搜索，同一录音合并来源并支持选择播放来源
 - 本地收藏、最近播放和可编辑歌单
 - QQ 音乐与网易云公开歌单导入为本地副本
 - 可选 LX Sync，支持兼容的收藏和歌单
