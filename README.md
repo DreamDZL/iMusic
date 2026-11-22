@@ -10,6 +10,8 @@
 
 SwiftUI · 系统 Liquid Glass · LX User API 音源 · LX Sync Server
 
+QQ群：**827131879** · 欢迎加入交流、讨论和反馈 Bug
+
 [![Platform](https://img.shields.io/badge/platform-iOS%2027%2B-blue?logo=apple)](#构建)
 [![LGPL-3.0](https://img.shields.io/badge/license-LGPL--3.0-orange)](LICENSE)
 [![GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-orange)](COPYING)

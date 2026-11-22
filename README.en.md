@@ -10,6 +10,8 @@
 
 SwiftUI · System Liquid Glass · LX User API · LX Sync Server
 
+QQ group: **827131879** · Join us to discuss iMusic and report bugs.
+
 [![Platform](https://img.shields.io/badge/platform-iOS%2027%2B-blue?logo=apple)](#build)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&logoColor=white)](platforms/ios/Package.swift)
 [![LGPL-3.0](https://img.shields.io/badge/license-LGPL--3.0-orange)](LICENSE)
